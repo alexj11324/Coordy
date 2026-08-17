@@ -26,3 +26,4 @@
 - Replace the retired `codex exec` grader with a direct Responses API adapter that fixes and verifies instructions, tools, storage, parallel calls, model, and exact schema; load credentials only from an ignored private env file or runtime environment.
 - Run the approved v26 direct-API smoke serially: three controls and one post-plan result validated, then a fifth response failed the required earlier-to-post evidence comparison; abort without retry or full-population authorization and record 161,380 total tokens across five dispatches.
 - Partition State Diff comparison evidence into schema-constrained earlier-state and post-plan IDs, and require a fresh exact judge-configuration hash approval before a revised smoke can transmit anything.
+- Record the approved v5 smoke abort after 4 dispatches and remove its redundant diff-level pre-evidence list; v6 binds each diff to one phase-validated pre-state item plus post-plan evidence.

@@ -1161,7 +1161,6 @@ class CoordyTests(unittest.TestCase):
                 "pre_state_index": 0,
                 "status": "preserved",
                 "downstream_relevance": "NONE",
-                "pre_state_evidence_ids": ["e1"],
                 "post_evidence_ids": ["e2"],
                 "rationale": "The constraint is present before and after compaction.",
             }],
@@ -1188,7 +1187,7 @@ class CoordyTests(unittest.TestCase):
             validate_state_diff_result(packet, invalid)
 
         duplicate = json.loads(json.dumps(valid))
-        duplicate["diffs"][0]["pre_state_evidence_ids"] = ["e1", "e1"]
+        duplicate["states"]["constraint"][0]["evidence_ids"] = ["e1", "e1"]
         with self.assertRaisesRegex(ValueError, "duplicates"):
             validate_state_diff_result(packet, duplicate)
 
@@ -1206,8 +1205,12 @@ class CoordyTests(unittest.TestCase):
         summary_only_packet["allowed_evidence_ids"].append("summary")
         summary_only_packet["compaction_summary_events"] = [{"evidence_id": "summary"}]
         summary_only = json.loads(json.dumps(valid))
-        summary_only["diffs"][0]["pre_state_evidence_ids"] = ["summary"]
-        with self.assertRaisesRegex(ValueError, "unknown evidence"):
+        summary_only["states"]["constraint"][0] = {
+            "phase": "compaction_summary",
+            "statement": "The summary mentions the constraint.",
+            "evidence_ids": ["summary"],
+        }
+        with self.assertRaisesRegex(ValueError, "bound pre-state entry"):
             validate_state_diff_result(summary_only_packet, summary_only)
 
         no_post_packet = json.loads(json.dumps(packet))
@@ -1281,7 +1284,6 @@ class CoordyTests(unittest.TestCase):
                                 "pre_state_index": 0,
                                 "status": "missing" if self.disagree else "preserved",
                                 "downstream_relevance": "DIRECT" if self.disagree else "NONE",
-                                "pre_state_evidence_ids": [earlier],
                                 "post_evidence_ids": [post],
                                 "rationale": "Independent semantic assessment.",
                             }],
@@ -1457,7 +1459,6 @@ class CoordyTests(unittest.TestCase):
                             "pre_state_index": 0,
                             "status": "missing",
                             "downstream_relevance": "DIRECT",
-                            "pre_state_evidence_ids": [earlier],
                             "post_evidence_ids": [post],
                             "rationale": "The constraint is absent after compaction.",
                         }],
@@ -1638,9 +1639,7 @@ class CoordyTests(unittest.TestCase):
         diff_schema = item["properties"]["diffs"]
         self.assertEqual(diff_schema["minItems"], 1)
         diff_properties = diff_schema["items"]["properties"]
-        self.assertEqual(
-            diff_properties["pre_state_evidence_ids"]["items"]["enum"], ["event-1"]
-        )
+        self.assertNotIn("pre_state_evidence_ids", diff_properties)
         self.assertEqual(
             diff_properties["post_evidence_ids"]["items"]["enum"], ["event-2"]
         )
@@ -1679,7 +1678,6 @@ class CoordyTests(unittest.TestCase):
                 "status": "preserved",
                 "downstream_relevance": "NONE",
                 "rationale": "The goal remains active.",
-                "pre_state_evidence_ids": ["earlier"],
                 "post_evidence_ids": ["post"],
             }],
             "assessment_status": "NO_MATERIAL_CHANGE",
@@ -1794,7 +1792,7 @@ class CoordyTests(unittest.TestCase):
             base_url="https://example.invalid",
             dispatch_log_dir=Path(semantic_tmp.name),
         )
-        result["diffs"][0]["pre_state_evidence_ids"] = []
+        result["diffs"][0]["pre_state_index"] = 1
         response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
         with patch("coordy.semantic.urllib.request.build_opener", return_value=FakeOpener()):
             with self.assertRaisesRegex(NonRetryableJudgeError, "semantic validation"):
@@ -1802,10 +1800,10 @@ class CoordyTests(unittest.TestCase):
         semantic_record = json.loads(next(Path(semantic_tmp.name).glob("*.json")).read_text())
         self.assertEqual(semantic_record["status"], "SEMANTIC_VALIDATION_FAILED_NO_RETRY")
         self.assertEqual(
-            semantic_record["rejected_result"][0]["diffs"][0]["pre_state_evidence_ids"],
-            [],
+            semantic_record["rejected_result"][0]["diffs"][0]["pre_state_index"],
+            1,
         )
-        result["diffs"][0]["pre_state_evidence_ids"] = ["earlier"]
+        result["diffs"][0]["pre_state_index"] = 0
         response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1919,7 +1917,6 @@ class CoordyTests(unittest.TestCase):
                         "status": "preserved",
                         "downstream_relevance": "NONE",
                         "rationale": "Bound comparison.",
-                        "pre_state_evidence_ids": [f"earlier-{index}"],
                         "post_evidence_ids": [f"post-{index}"],
                     }],
                     "assessment_status": "NO_MATERIAL_CHANGE",
