@@ -10,10 +10,13 @@ visually unassessed instead of transmitting their bytes. Its targeted repair
 completed all 123 actually affected packets. Five responses lost during a local
 client exit were server-confirmed HTTP 200, unrecoverable because `store=false`,
 and explicitly re-dispatched in a separate recovery ledger. The pragmatic S0
-Screening decision for **Temporal State Consistency is `STOP`**: the corrected
-history review did not produce a confirmed compaction-caused wrong action with
-an observable engineering loss. This is a startup-direction screening result,
-not a prevalence estimate or an academic claim that drift never occurs.
+Screening decisions for **Temporal State Consistency and Cross-Agent
+Consistency are both `STOP`**. The corrected history review did not produce a
+confirmed compaction-caused wrong action with observable engineering loss, and
+the cross-session review found common concurrent edits but no confirmed case
+where an invalidated plan was unknowingly continued into engineering loss.
+These are startup-direction screening results, not prevalence estimates or
+academic claims that either failure mode never occurs.
 
 ## Completed
 
@@ -86,7 +89,10 @@ not a prevalence estimate or an academic claim that drift never occurs.
 - The user-audited current-book-search case is `NO_MATERIAL_CHANGE` at 0.98 confidence under the complete-text contract: its pre-compaction state explicitly rejects cross-book full-library search, and the post-compaction plan preserves current-book-only search. The earlier drift label was caused by the truncated evidence, not by that task's actual conversation.
 - A final consequence-focused audit covered the only two unaffected opportunities that combined a primary `SUSPECT` label with a deterministic outcome signal. In the June case the scanner matched the literal summary `0 failed`; all 22 tests passed. In the August case the failures were ordinary UI-test/flow iteration (an unsupported XCUITest predicate and an incomplete photo-selection path), the no-foreground-focus constraint remained preserved, and the complete real flow subsequently passed. Neither case supports compaction-caused engineering loss.
 - Across the targeted independent review, 11 two-Judge `SUSPECT` agreements had no deterministic observable outcome. The only two primary-suspect cases with an outcome were rejected by the second Judge and by the focused consequence audit above. No confirmed Type A/B/C causal failure with engineering loss remains in the screened Temporal cohort.
-- Current Temporal Screening status is `STOP`; the 123 defect-affected opportunities are fully regraded, while the unaffected 349 retain their original provenance for Screening. Cross-Agent/Type B remains a separate unvalidated technical proposition and is not silently folded into this Temporal result.
+- Current Temporal Screening status is `STOP`; the 123 defect-affected opportunities are fully regraded, while the unaffected 349 retain their original provenance for Screening.
+- Cross-Agent S0a produced 197 structural same-file patch-sandwich opportunities across 20 directed session pairs, 19 file identities, 3 repositories, and all 4 represented Goal-root clusters. These are collision opportunities, not 197 failures.
+- A consequence-ranked focused audit covered the highest-risk pairs in every represented Goal root. DaysCount workers kept explicit file ownership and adapted to concurrent edits; both Reathm cohorts detected shared-workspace or unexpected-code conflicts and stopped writing/committing; ContextFocus changes were reviewer-directed and revalidated. No audited chain satisfied all Type B requirements: once-valid plan, invalidating external change, unaware stale execution, and engineering loss.
+- Current Cross-Agent Screening status is also `STOP`: concurrent-edit pressure is real, but the observed agents' existing ownership, worktree checks, coordination messages, tests, and stop-on-conflict behavior already caught it without a separate persistent-state product.
 - Authoritative corrected ignored runtime workspace: `.coordy/screening-s0-v32-text-evidence/data/screening/`. The v26/v8, v27, v29, v30, and v31 workspaces are retracted historical evidence only.
 
 ## Failures or missing evidence
@@ -111,24 +117,30 @@ not a prevalence estimate or an academic claim that drift never occurs.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
 - Only 8 independently timed multi-hour Goals exist in the v26 snapshot; the other 92 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
 - Repository concentration is no longer a PIVOT proxy; PIVOT requires an explicit scenario repeated across independent Goal roots or a separately recorded high-value rationale.
-- Type B structural opportunity enumeration has run, but semantic invalidation and causal confirmation have not, so S0 cannot produce a terminal decision.
+- The 197 Type B rows remain structural opportunities rather than prevalence data. Their focused audit supports the pragmatic `STOP`; it does not convert unreviewed rows into negatives or claim a paper-grade recall estimate.
 - S1–S3 and confirmatory validation have not run.
 
 ## Next
 
-Stop further Temporal State Consistency calls and implementation under the
-low-cost falsification rule. The remaining machine disagreements and
-no-consequence cases cannot change this Screening direction and are recorded,
-not expanded into paper-level calibration. If work continues, treat Cross-Agent
-plan invalidation as a separate proposition with its own evidence and decision;
-do not reuse this Temporal `STOP` as its conclusion.
+Stop further implementation and model calls for the unified Coordy direction
+under the low-cost falsification rule. The remaining disagreements and
+structural-only opportunities cannot change the current startup-direction
+decision and are recorded rather than expanded into paper-level calibration.
+Any future work should begin only from a newly scoped, independently valuable
+narrow problem rather than continuing this validation pipeline by inertia.
 
 ## Early-stop status
 
-`STOP` for **Temporal State Consistency** — complete-text regrading materially
-changed machine labels, the targeted second Judge showed those labels were
-unstable, and focused inspection found no remaining case where compaction-caused
-state loss led to an observable engineering loss. Further calibration of
-no-consequence disagreements would not change the startup-direction decision.
-Type B/Cross-Agent still has structural opportunity evidence only and remains
-unvalidated rather than being assigned the same result.
+`STOP / STOP`:
+
+- **Temporal State Consistency — `STOP`**: complete-text regrading materially
+  changed machine labels, the targeted second Judge showed those labels were
+  unstable, and focused inspection found no remaining case where
+  compaction-caused state loss led to observable engineering loss.
+- **Cross-Agent Consistency — `STOP`**: 197 structural collision opportunities
+  compressed to 20 session pairs across 4 Goal roots, but focused review found
+  coordination and conflict detection working and no confirmed unaware stale
+  execution with engineering loss.
+
+Further calibration of no-consequence disagreements or ordinary patch
+collisions would not change the pragmatic startup-direction decision.
