@@ -2,10 +2,12 @@
 
 ## Current phase
 
-S0a evidence infrastructure is complete for the current frozen run. S0b
-semantic grading is in progress across the full compaction opportunity
-population. No Screening decision has been emitted: rule/keyword counts do not
-establish drift, causality, Type A/B/C/D/U, or prevalence.
+S0a evidence infrastructure is complete for the current frozen run. The first
+v8 S0b calibration queue is retracted because bounded excerpts allowed Codex
+response-annotation metadata to hide the user's actual request. Corrected v27
+inputs are prepared for selective regrading. No Screening decision has been
+emitted: rule/keyword counts and retracted semantic labels do not establish
+drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Completed
 
@@ -36,6 +38,7 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - Revised the State Diff contract after the v5 smoke exposed a redundant-binding failure: every comparison now identifies one phase-bound pre-compaction state item by index and cites post-plan evidence without repeating a second, potentially inconsistent pre-evidence list. The approved v6 smoke completed all 12 cases and passed the safety/evidence-binding gate.
 - Completed the v8 direct-API State Diff run over all 472 frozen compaction opportunities, then independently rejudged the 45 mandatory suspect/normalized cases plus 3 no-post and 3 healthy controls without resending completed checkpoints.
 - Corrected the calibration sampler after the first real run exposed mislabeled pseudo-controls: only actual no-post or healthy rejudged cases may be counted as deterministic controls.
+- Fixed bounded evidence serialization after a human audit recovered an explicit pre-compaction decision that the Judge never received: `My request for Codex` now takes priority over response-annotation metadata before the 280-character limit.
 
 ## Outputs
 
@@ -63,14 +66,14 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - Cross-session S0a opportunity population: 197 hashed entity-change joins from successful patch events; these are not confirmed invalidations.
 - S0b blinded input population: 472/472 opportunities, SHA-256-bound to the v26 scan. The widened T0 window retains deterministic temporal coverage plus recency (up to 48 evidence events) rather than only the last 12 messages. The 16.7 MB artifact is mode 0600 and passed local path/objective/key/password/email probes.
 - Cost policy is frozen as one full 472-opportunity primary State Diff plus a targeted independent rejudge: every primary suspect and low-confidence result, then Goal-root-stratified healthy and no-post controls to a 30-case target (normally 20–40). The second judge estimates precision, misses, and agreement; it is not a second prevalence scan.
-- v8 primary State Diff completed 472/472 opportunities across all 8 Goal roots: 44 machine suspects, 408 `NO_MATERIAL_CHANGE`, and 20 `UNASSESSABLE`. These are outcome-blinded machine judgments, not ground truth.
+- The retracted v8 primary State Diff completed 472/472 opportunities across all 8 Goal roots: 44 machine suspects, 408 `NO_MATERIAL_CHANGE`, and 20 `UNASSESSABLE`. These labels are retained only as historical provenance and cannot support calibration or prevalence.
 - The targeted v8 secondary Judge completed 51 cases across all 8 Goal roots: 45 mandatory suspect/normalized cases plus 3 no-post and 3 healthy controls. Mandatory cases alone exceeded the nominal 40-case maximum, and that overflow is recorded rather than silently dropping cases.
-- The frozen 30-case human calibration queue contains 24 disagreement/low-confidence cases and 6 true deterministic controls (3 no-post, 3 healthy) across all 8 Goal roots. Consensus currently contains 43 disagreements, 4 normalized disagreements, 4 agreed negatives, and no agreed positive eligible for causal grading.
+- The v8 30-case human calibration queue and its two draft answers are retracted. The corrected serializer changed 123/472 packet hashes; 349 packet hashes are byte-identical and may be reused with their original request/response provenance. The corrected v27 input SHA-256 is `610f60f3f8589c3ada0b602c132bf3f963e20159e594d6eade5d7b8ec113a0c6`.
 - Known v8 State Diff usage is 17,099,724 primary tokens plus 1,774,150 targeted-secondary tokens. The completed results and queue are SHA-256-bound, mode 0600, and passed local path, email, private-key, and secret-value probes.
 - Stratified audit queue: 6 high-signal, 3 no-keyword recall probes, and 1 suspicious-looking no-consequence hard-negative candidate across 6 Goal clusters. The hard-negative stratum reports a two-case shortfall instead of backfilling from another stratum.
 - Conservative machine prelabel: all 10 cases remain `UNCERTAIN`. These are preliminary labels, not completed human review, so no precision, missed-positive, or false-pause metric is claimed.
-- Current status is `PENDING_HUMAN_CALIBRATION`, `decision=null`; machine judgments cannot emit STOP/PIVOT.
-- Authoritative ignored runtime workspace: `.coordy/screening-s0-v26-smoke-v8-retry/data/screening/`.
+- Current status is `PENDING_LLM_STATE_DIFF`, `decision=null`; the corrected inputs have not yet been regraded.
+- Authoritative corrected ignored runtime workspace: `.coordy/screening-s0-v27-request-priority/data/screening/`. The v26/v8 workspace is retracted historical evidence only.
 
 ## Failures or missing evidence
 
@@ -86,6 +89,7 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - The approved v6 smoke completed 12/12 serial dispatches: all 3 controls were `UNASSESSABLE`, all 9 post-plan cases were assessable, and none was marked suspect. It used 365,646 input and 20,806 output tokens (386,452 total, including 2,175 reasoning tokens). Result/config hashes, request/response provenance, 0600 permissions, and privacy probes passed. This validates the safety/evidence-binding seam only; it does not establish Judge accuracy or drift prevalence.
 - The first v6 full-population attempt was stopped after one response used an out-of-range numeric pre-state index. Before interruption it created 83 dispatch records (78 validated, 4 outcome-unknown in flight, 1 semantic failure), checkpointed 72 results, and recorded 2,848,700 known tokens. The fix removes numeric indices in favor of an exact copied pre-state statement and bounds concurrent submission to one worker-sized batch, so a future failure cannot drain the remaining population. No v6 result is reused under v7.
 - The v7 smoke showed that exact long-statement copying is also a brittle duplicate representation: after 3 valid controls, the first post-plan response paraphrased the extracted pre-state and was rejected (4 dispatches, 116,142 tokens). v8 removes the cross-reference entirely; each diff carries one pre-state statement with direct pre-compaction evidence plus direct post-plan evidence. The independent states extraction remains descriptive rather than a second source that must match word-for-word.
+- Human review of the second v8 calibration card found that the original transcript explicitly rejected whole-library search before compaction, while the Judge input showed only the leading response-annotation wrapper. The generic 280-character head excerpt had removed the entire user request. This affected 76 wrapped event instances across 45 opportunities and changed 123 packet hashes because events are reused across later compaction windows. The v8 calibration queue is therefore invalid even though all artifact hashes were internally consistent.
 - The earlier seven-case and four-case `STOP` attempts were invalid. The first capped raw signals before deduplication; the second scanned only 8 MiB prefixes and treated a keyword subset as a global upper bound. Both conclusions are explicitly retracted.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
 - Only 8 independently timed multi-hour Goals exist in the v26 snapshot; the other 92 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
@@ -95,17 +99,15 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-Collect one `YES`/`NO`/`UNCERTAIN` human answer for each of the 30 frozen State
-Diff calibration cards. Measure primary/secondary precision, recall,
-false-pause rate, agreement, and missed-positive control rate against those
-answers. Only if the frozen quality floor passes may agreed state-change
-suspects proceed to outcome-aware causal grading; the current machine consensus
-contains no agreed positive. Do not infer STOP, PIVOT, or prevalence from the
-machine labels alone.
+Regrade the 123 corrected packets while retaining only the 349 byte-identical
+v8 primary results with their original provenance, then rebuild the targeted
+secondary review and human calibration queue. Only after the corrected queue is
+human-reviewed may state-change suspects proceed to outcome-aware causal
+grading. Do not infer STOP, PIVOT, or prevalence from the retracted v8 labels.
 
 ## Early-stop status
 
-`PENDING_HUMAN_CALIBRATION` — both State Diff Judge stages completed, but the
-30 frozen calibration cards have not been human-labeled. Type B still has
+`PENDING_LLM_STATE_DIFF` — corrected v27 evidence is frozen, but 123 changed
+packets require regrading and the v8 human queue is retracted. Type B still has
 structural opportunity evidence only.
 Screening may later emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`.

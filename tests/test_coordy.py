@@ -19,6 +19,7 @@ from coordy.pipeline import run
 from coordy.protocol import initialize
 from coordy.redaction import redact_value
 from coordy.review import adjudicate_s0, prepare_s0_review
+from coordy.review import _excerpt
 from coordy.semantic import (
     STATE_JUDGE_INSTRUCTIONS,
     STATE_TYPES,
@@ -50,6 +51,23 @@ from coordy.state import update_state
 
 
 class CoordyTests(unittest.TestCase):
+    def test_excerpt_prioritizes_user_request_after_response_annotations(self):
+        text = """
+        # Response annotations:
+        <response-annotations>[{"text":"全库搜索"}]</response-annotations>
+
+        ## My request for Codex:
+
+        这个全库搜索如果是在所有书里面搜索，就没有必要了。你应该只在当前打开的这一本书里面搜索。
+        """
+
+        excerpt = _excerpt({"content": [{"type": "input_text", "text": text}]})
+
+        self.assertIn("当前打开的这一本书", excerpt)
+        self.assertIn("没有必要", excerpt)
+        self.assertNotIn("Response annotations", excerpt)
+        self.assertLessEqual(len(excerpt), 280)
+
     def bind_review_artifacts(
         self,
         output: Path,

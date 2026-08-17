@@ -22,6 +22,7 @@ ALLOWED_ANSWERS = {"YES", "NO", "UNCERTAIN"}
 ALLOWED_REVIEWER_TYPES = {"HUMAN_CONFIRMED", "MACHINE_PRELABEL"}
 PIVOT_MAX_CONFIRMED_FAILURES = 4
 MAX_EXCERPT_CHARS = 280
+USER_REQUEST_MARKER = re.compile(r"##\s*My request for Codex:\s*", re.I)
 
 
 def _pending_system_classification(reason: str) -> dict[str, Any]:
@@ -62,6 +63,11 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 def _strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
         clean = GOAL_CONTEXT.sub("[goal context withheld]", value)
+        markers = list(USER_REQUEST_MARKER.finditer(clean))
+        if markers:
+            request = clean[markers[-1].end():].strip()
+            if request:
+                clean = request
         yield INTERNAL_MESSAGE_ENVELOPE.sub("[internal context withheld]", clean)[:4096]
     elif isinstance(value, list):
         for item in value:
