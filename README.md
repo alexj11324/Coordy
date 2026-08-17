@@ -1,13 +1,56 @@
 # Coordy
 
-Coordy is a local research harness for a narrow question: can persistent,
-structured state reduce long-horizon agent drift, and can the same state detect
-when another session has invalidated an active plan?
+**An experimental framework for detecting and mitigating long-horizon task
+drift in AI agents.**
 
-It is deliberately **not** an agent runtime, message bus, desktop client, or
-generic memory platform. Version 0.1.0 separates deterministic evidence
-infrastructure (S0a) from model-assisted semantic grading (S0b); rules never
-stand in for a state-loss or causal judgment.
+Long-running agents can lose an active goal, constraint, decision, or plan after
+context compaction. They can also continue executing a plan after another
+session has invalidated its assumptions. Coordy turns real agent histories into
+evidence-bound drift cases, tests whether the drift can be detected before the
+first harmful action, and compares structured state with simpler baselines.
+
+Coordy is currently a research harness, not a production agent runtime, message
+bus, desktop client, or generic memory platform. The central question is still
+under evaluation: does persistent structured state detect genuine task drift
+earlier and more accurately than native context, goal reinjection, periodic
+checkpoints, or better compaction?
+
+## Research workflow
+
+```text
+complete agent history
+        ↓
+confirm whether forgotten state actually caused a wrong action
+        ↓
+freeze the history after state loss but before the first wrong action
+        ↓
+compare Native / Goal Reinjection / Checkpoint / Better Compaction / Coordy
+        ↓
+report DETECTED / MISSED / LATE / FALSE ALARM / UNCERTAIN
+```
+
+Ground truth is not inferred from keywords or a single model judgment. State
+Diff and causal judges produce machine prelabels; confirmed cases require
+evidence-linked T0–T5 timelines, deterministic Git/test/tool outcomes, and human
+calibration. The detector is evaluated without access to later failures,
+rework, or user corrections.
+
+## Current status
+
+- Deterministic evidence collection and full compaction-opportunity enumeration
+  are implemented.
+- Outcome-blinded State Diff and independent causal-review pipelines are
+  implemented.
+- Full causal confirmation and the five-condition pre-action detector comparison
+  are still in progress.
+- Existing suspect counts are investigation inputs, not proof that drift
+  occurred or that Coordy detected it.
+- Screening may conclude only `STOP`, `PIVOT`, or
+  `PROCEED_TO_CONFIRMATION`; it never emits `GO`.
+
+Version 0.1.0 separates deterministic evidence infrastructure (S0a) from
+model-assisted semantic grading (S0b). Rules may enumerate and rank evidence,
+but they never stand in for a state-loss or causal judgment.
 
 ## What 0.1.0 does
 
@@ -20,7 +63,8 @@ stand in for a state-loss or causal judgment.
 - detects cross-session changes that overlap active dependencies;
 - emits auditable candidates and `INSUFFICIENT_EVIDENCE` reports by default.
 - runs an outcome-blinded LLM State Diff over every compaction opportunity;
-- sends only agreed semantic suspects to stronger, outcome-aware causal judges;
+- sends every final primary semantic suspect to stronger, outcome-aware causal
+  judges;
 - requires independent judging and human calibration before machine prelabels
   can contribute to a research conclusion.
 
@@ -160,7 +204,9 @@ precision, recall, false-pause rate, primary/secondary agreement, and a
 missed-positive control-probe rate; fewer than 20 decided cases or failure of
 the frozen 0.80/0.70/0.10 quality floor remains insufficient evidence.
 
-Only agreed high-confidence suspects proceed to causal grading. The causal
+Every final primary State Diff `SUSPECT` proceeds to causal grading; secondary
+State Diff disagreement is retained as evidence and cannot filter a primary
+suspect out. The causal
 packet carries direct T0 pre-state, T1 compaction summary, T2 post-plan, T3
 actions, T4 program-verified outcomes, and T5 follow-up when available; it does
 not ask the causal judge to reconstruct T0/T1 from the derived State Diff.
@@ -172,6 +218,14 @@ engineering consequence, state-loss causality, the ordinary-reasoning
 alternative, Type A/B/C/D/U, and a distinguishing counterfactual. Their output
 remains a machine prelabel until a hash-bound `HUMAN_CONFIRMED` causal answer
 file is ingested by `calibrate-s0b-causal`.
+The core causal question is whether the agent did something wrong because it
+forgot or distorted still-active important state across compaction. A summary
+omission alone, a normal plan update or phase transition, and ordinary
+reasoning or implementation error are negatives, not drift.
+This detection gate is only the first part of Question A. A successful
+pre-action alert supports continuing to the minimal State Probe, Action Probe,
+and baseline comparison; it does not by itself prove that Structured State
+reduces drift, rework, tokens, elapsed time, or human intervention.
 For a human `YES`, two agreeing evidence-bound causal judges may supply the
 system Type A/B/C classification. The classification is written into the S0
 evidence card, the card set is re-hashed, and any older S0 answer file therefore
