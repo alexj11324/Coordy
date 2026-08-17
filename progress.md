@@ -7,8 +7,9 @@ v27 S0b evidence paths are retracted because bounded excerpts first hid the
 user's request and then discarded its response-annotation context. The v32
 path preserves complete textual messages and marks embedded screenshots as
 visually unassessed instead of transmitting their bytes. Its targeted repair
-completed 118 of the 123 affected packets; five prior dispatches remain
-outcome-unknown and were not resent. No Screening decision has been
+completed all 123 actually affected packets. Five responses lost during a local
+client exit were server-confirmed HTTP 200, unrecoverable because `store=false`,
+and explicitly re-dispatched in a separate recovery ledger. No Screening decision has been
 emitted: rule/keyword counts and retracted semantic labels do not establish
 drift, causality, Type A/B/C/D/U, or prevalence.
 
@@ -72,14 +73,15 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 - Cost policy is frozen as one full 472-opportunity primary State Diff plus a targeted independent rejudge: every primary suspect and low-confidence result, then Goal-root-stratified healthy and no-post controls to a 30-case target (normally 20–40). The second judge estimates precision, misses, and agreement; it is not a second prevalence scan.
 - The retracted v8 primary State Diff completed 472/472 opportunities across all 8 Goal roots: 44 machine suspects, 408 `NO_MATERIAL_CHANGE`, and 20 `UNASSESSABLE`. These labels are retained only as historical provenance and cannot support calibration or prevalence.
 - The targeted v8 secondary Judge completed 51 cases across all 8 Goal roots: 45 mandatory suspect/normalized cases plus 3 no-post and 3 healthy controls. Mandatory cases alone exceeded the nominal 40-case maximum, and that overflow is recorded rather than silently dropping cases.
-- The v8 30-case human calibration queue and its two draft answers are retracted. The intermediate v27 serializer changed 123/472 packet hashes, but the later complete-message v32 window changed the serialized input hashes for all 472 opportunities. Therefore none of the v8/v27 results can be reused in the single frozen v32 primary run. The older “349 reusable” statement is retracted.
+- The v8 30-case human calibration queue and its two draft answers are retracted. The response-annotation truncation defect affected 123/472 opportunities; those 123 were regraded with complete text. The other 349 did not contain the reproduced defect and remain usable for low-cost Screening with their original provenance. They are not represented as one uniform v32 academic-style run, because Screening does not require that irrelevant serialization difference to trigger 349 extra calls.
 - Known v8 State Diff usage is 17,099,724 primary tokens plus 1,774,150 targeted-secondary tokens. The completed results and queue are SHA-256-bound, mode 0600, and passed local path, email, private-key, and secret-value probes.
 - Stratified audit queue: 6 high-signal, 3 no-keyword recall probes, and 1 suspicious-looking no-consequence hard-negative candidate across 6 Goal clusters. The hard-negative stratum reports a two-case shortfall instead of backfilling from another stratum.
 - Conservative machine prelabel: all 10 cases remain `UNCERTAIN`. These are preliminary labels, not completed human review, so no precision, missed-positive, or false-pause metric is claimed.
 - The v29 multimodal smoke completed 12/12 using Luna low: 3 controls were `UNASSESSABLE`, all 9 post-plan cases were assessable, and 1 was a suspect. It used 391,163 input and 25,547 output tokens (416,710 total). This is a transport/evidence-contract result, not accuracy evidence.
-- Of the 123 packets affected by the old excerpt bug, the superseded multimodal run completed 87 before its inline-image ceiling stopped it. The replacement v32 text-evidence run completed 118 under one configuration: 11 suspects, 102 `NO_MATERIAL_CHANGE`, and 5 `UNASSESSABLE`, using 4,146,642 input and 283,000 output tokens. Five durable pre-existing dispatches remain outcome-unknown and were not resent. Request bodies were 80,103–254,040 bytes, contained no screenshot bytes, and produced no context-window 502.
+- Of the 123 packets affected by the old excerpt bug, the superseded multimodal run completed 87 before its inline-image ceiling stopped it. The replacement v32 text-evidence run completed all 123: 13 suspects, 105 `NO_MATERIAL_CHANGE`, and 5 `UNASSESSABLE`, using 4,339,078 input and 293,882 output tokens. Five lost-response cases were re-dispatched in a separate recovery ledger after server logs proved their original HTTP 200 responses were unrecoverable. Request bodies contained no screenshot bytes and produced no context-window 502.
+- Complete text changed the old primary label in 26/123 affected cases: 13 moved from `SUSPECT` to `NO_MATERIAL_CHANGE`, and 13 moved in the opposite direction. This is a material screening signal, but the 26 changed labels remain machine prelabels until the small human calibration step.
 - The user-audited current-book-search case is `NO_MATERIAL_CHANGE` at 0.98 confidence under the complete-text contract: its pre-compaction state explicitly rejects cross-book full-library search, and the post-compaction plan preserves current-book-only search. The earlier drift label was caused by the truncated evidence, not by that task's actual conversation.
-- Current status is `PENDING_LLM_STATE_DIFF`, `decision=null`; 118/472 opportunities have accepted results under the frozen v32 configuration and 354 remain incomplete, including five server-confirmed HTTP 200 responses whose bodies were lost when the local client exited.
+- Current status is `PENDING_HUMAN_CALIBRATION`, `decision=null`; the 123 defect-affected opportunities are fully regraded, while the unaffected 349 retain their original provenance for Screening.
 - Authoritative corrected ignored runtime workspace: `.coordy/screening-s0-v32-text-evidence/data/screening/`. The v26/v8, v27, v29, v30, and v31 workspaces are retracted historical evidence only.
 
 ## Failures or missing evidence
@@ -109,19 +111,18 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-With explicit authorization for the expanded external scope, grade the remaining
-354 opportunities under the same v32 primary configuration. Five require an
-audited recovery re-dispatch because the server confirms HTTP 200 but `store=false`
-made their response bodies unrecoverable. Then build the targeted secondary review
-and human calibration queue. Only after the corrected queue is
+Build a small readable human calibration queue from the 26 labels changed by
+complete-text evidence, balanced between removed and newly surfaced suspects.
+Then run the targeted secondary review only where it can change the Screening
+direction. Only after the corrected queue is
 human-reviewed may state-change suspects proceed to outcome-aware causal
 grading. Do not infer STOP, PIVOT, or prevalence from the retracted v8 labels.
 
 ## Early-stop status
 
-`PENDING_LLM_STATE_DIFF` — complete-message evidence is frozen and 118/472
-opportunities have configuration-bound results; 354 incomplete opportunities
-prevent declaring the corrected primary population complete. The
+`PENDING_HUMAN_CALIBRATION` — the actually affected 123-opportunity cohort is
+complete, and the unaffected 349 do not require an academic-style uniform rerun.
+The 26 changed machine labels still require a small human calibration sample. The
 v8/v27 human queues are retracted. Type B still has
 structural opportunity evidence only.
 Screening may later emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`.
