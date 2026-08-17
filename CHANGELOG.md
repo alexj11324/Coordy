@@ -7,3 +7,4 @@
 - Add incremental structured state with explicit supersession.
 - Add drift candidate mining and cross-session dependency invalidation.
 - Add frozen protocol artifacts, evidence reports, examples, and CI tests.
+- Add bounded Codex source discovery and low-cost S0 screening with fail-closed live-file checks.

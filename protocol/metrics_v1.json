@@ -1,0 +1,49 @@
+{
+  "cross_agent": [
+    "precision",
+    "recall",
+    "f1",
+    "false_positive_rate",
+    "false_interruption_rate",
+    "time_to_detection",
+    "affected_agent_accuracy",
+    "affected_plan_f1",
+    "minimal_impact_set_jaccard",
+    "action_severity_accuracy"
+  ],
+  "engineering": [
+    "rework_time",
+    "wasted_agent_time",
+    "wasted_tokens",
+    "invalid_code_produced",
+    "reverted_code",
+    "human_interventions",
+    "task_completion_time",
+    "constraint_violations",
+    "final_task_correctness",
+    "state_maintenance_cost",
+    "retrieval_token_cost",
+    "alert_burden",
+    "false_pause_cost"
+  ],
+  "reporting": [
+    "effect_size",
+    "95_percent_confidence_interval",
+    "per_case_distribution",
+    "failure_breakdown"
+  ],
+  "temporal": [
+    "goal_fidelity",
+    "goal_contradiction_rate",
+    "constraint_recall",
+    "constraint_contradiction_rate",
+    "decision_retention",
+    "rejected_alternative_resurrection_rate",
+    "plan_lifecycle_macro_f1",
+    "plan_drift_rate",
+    "compaction_loss_rate",
+    "first_drift_time",
+    "drift_detection_lead_time",
+    "correct_next_action_rate"
+  ]
+}

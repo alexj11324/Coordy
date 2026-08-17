@@ -1,0 +1,47 @@
+{
+  "H1": {
+    "goal_contradiction_rate_must_decrease": true,
+    "minimum_goal_fidelity_percentage_point_gain": 0.1
+  },
+  "H10": {
+    "benefit_must_exceed_coordination_cost": true,
+    "minimum_relative_rework_or_waste_reduction": 0.3
+  },
+  "H2": {
+    "minimum_constraint_recall_percentage_point_gain": 0.1,
+    "minimum_relative_violation_reduction": 0.25
+  },
+  "H3": {
+    "minimum_decision_retention_percentage_point_gain": 0.1,
+    "minimum_relative_resurrection_reduction": 0.3
+  },
+  "H4": {
+    "minimum_correct_action_percentage_point_gain": 0.1,
+    "minimum_lifecycle_macro_f1": 0.8
+  },
+  "H5": {
+    "minimum_auroc": 0.7
+  },
+  "H6": {
+    "minimum_correct_action_percentage_point_gain": 0.1,
+    "minimum_relative_drift_reduction": 0.25
+  },
+  "H7": {
+    "minimum_dependency_edge_f1": 0.65,
+    "minimum_entity_binding_f1": 0.75
+  },
+  "H8": {
+    "maximum_false_pause_rate": 0.1,
+    "minimum_precision": 0.8,
+    "minimum_recall": 0.7
+  },
+  "H9": {
+    "maximum_full_transcript_accuracy_gap": 0.05,
+    "minimum_context_token_reduction": 0.7
+  },
+  "default_without_completed_replays": "INSUFFICIENT_EVIDENCE",
+  "maximum_repeats_before_boundary_review": 7,
+  "minimum_locked_cases": 30,
+  "minimum_repeats": 3,
+  "primary_comparison": "structured_state_plus_minimal_retrieval_vs_strongest_simple_baseline"
+}

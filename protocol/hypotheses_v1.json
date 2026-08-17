@@ -1,0 +1,42 @@
+{
+  "H1": {
+    "claim": "Structured state improves operational goal fidelity over the strongest simple baseline.",
+    "name": "Goal Preservation"
+  },
+  "H10": {
+    "claim": "Reduced rework and waste exceed state, retrieval, and interruption costs.",
+    "name": "Engineering Value"
+  },
+  "H2": {
+    "claim": "Structured state preserves hard constraints and reduces violations.",
+    "name": "Constraint Preservation"
+  },
+  "H3": {
+    "claim": "Structured state preserves current decisions, reasons, and rejected alternatives.",
+    "name": "Decision Preservation"
+  },
+  "H4": {
+    "claim": "Structured state distinguishes active, superseded, abandoned, and possible future plans.",
+    "name": "Active Plan Preservation"
+  },
+  "H5": {
+    "claim": "Critical state loss at compaction predicts consequential later drift.",
+    "name": "Compaction-Induced Drift"
+  },
+  "H6": {
+    "claim": "Structured state reduces drift versus Native Codex and the strongest simple baseline.",
+    "name": "Structured State Mitigation"
+  },
+  "H7": {
+    "claim": "Plan-assumption-dependency-entity chains can be recovered with useful accuracy.",
+    "name": "Latent Dependency Recovery"
+  },
+  "H8": {
+    "claim": "External changes can be mapped to truly invalidated plans with low false-pause cost.",
+    "name": "Semantic Invalidation Detection"
+  },
+  "H9": {
+    "claim": "Structured state plus minimal retrieval approaches cutoff-only full transcript quality at lower context cost.",
+    "name": "Coordination State Sufficiency"
+  }
+}

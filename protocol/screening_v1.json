@@ -1,0 +1,46 @@
+{
+  "S0": {
+    "maximum_eligible_sessions": 100,
+    "maximum_user_review_cases": 12,
+    "stop_if_comparable_decision_points_below": 10,
+    "stop_if_confirmed_type_abc_below": 5,
+    "stop_if_no_observable_engineering_consequence": true,
+    "target_candidate_decision_points": {
+      "maximum": 30,
+      "minimum": 20
+    }
+  },
+  "S1": {
+    "conditions": [
+      "native",
+      "goal_reinjection",
+      "simple_checkpoint",
+      "structured_state"
+    ],
+    "minimum_additional_critical_corrections_over_simple_baseline": 2,
+    "pivot_if_simple_baseline_fraction_of_structured": {
+      "maximum": 0.9,
+      "minimum": 0.8
+    },
+    "target_cases": 15,
+    "target_short_calls": 60
+  },
+  "S2": {
+    "hard_negative_cases": 15,
+    "maximum_false_pause_rate": 0.1,
+    "minimum_precision": 0.8,
+    "minimum_recall": 0.7,
+    "positive_cases": 15
+  },
+  "S3": {
+    "maximum_bounded_continuations": 5,
+    "requires_material_action_difference": true
+  },
+  "allowed_decisions": [
+    "STOP",
+    "PIVOT",
+    "PROCEED_TO_CONFIRMATION"
+  ],
+  "forbidden_decision": "GO",
+  "version": "1"
+}
