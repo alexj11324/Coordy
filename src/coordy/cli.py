@@ -104,6 +104,7 @@ def parser() -> argparse.ArgumentParser:
     grade_semantic.add_argument("--workers", type=int, default=1)
     grade_semantic.add_argument("--reasoning-effort", default="low")
     grade_semantic.add_argument("--env-file", type=Path, default=Path(".env.local"))
+    grade_semantic.add_argument("--retry-http-504", action="store_true")
     prepare_causal = commands.add_parser(
         "prepare-s0b-causal", help="bind program-verified outcomes to state-change suspects"
     )
@@ -197,6 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.primary_model,
             reasoning_effort=args.reasoning_effort,
             dispatch_log_dir=args.workspace / "data/screening/api_dispatch",
+            allow_http_504_retry=args.retry_http_504,
         )
         secondary = ResponsesAPIStateJudge(
             judge_id=f"responses-secondary:{args.secondary_model}",
@@ -205,6 +207,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.secondary_model,
             reasoning_effort=args.reasoning_effort,
             dispatch_log_dir=args.workspace / "data/screening/api_dispatch",
+            allow_http_504_retry=args.retry_http_504,
         )
         print(json.dumps(run_s0b_state_diff(
             args.workspace,

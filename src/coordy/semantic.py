@@ -423,7 +423,7 @@ def _api_checkpoint_provenance_is_valid(row: dict[str, Any], judge: Any) -> bool
         and bool(row["api_response_id"])
         and row.get("api_status") == "completed"
         and isinstance(row.get("judge_attempt"), int)
-        and row["judge_attempt"] == 1
+        and 1 <= row["judge_attempt"] <= getattr(judge, "maximum_attempts_per_opportunity", 1)
         and row.get("judge_configuration") == getattr(judge, "configuration", None)
     )
 
@@ -458,6 +458,7 @@ def _claim_api_dispatch(
     judge_id: str,
     configuration_sha256: str,
     packet: dict[str, Any],
+    allow_http_504_retry: bool = False,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
@@ -471,10 +472,38 @@ def _claim_api_dispatch(
         "judge_id": judge_id,
         "judge_configuration_sha256": configuration_sha256,
         "input_packet_sha256": _hash(json.dumps(packet, sort_keys=True)),
+        "judge_attempt": 1,
     }
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as exc:
+        if allow_http_504_retry:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            same_request = all(existing.get(key) == record.get(key) for key in (
+                "scan_run_id",
+                "opportunity_id_hash",
+                "judge_id",
+                "judge_configuration_sha256",
+                "input_packet_sha256",
+            ))
+            retryable = (
+                same_request
+                and existing.get("status") == "HTTP_ERROR_NO_RETRY"
+                and existing.get("http_status") == 504
+                and not existing.get("api_request_id")
+                and not existing.get("api_response_id")
+                and not existing.get("api_usage")
+                and existing.get("judge_attempt", 1) == 1
+            )
+            if retryable:
+                record["judge_attempt"] = 2
+                record["prior_attempt"] = {
+                    "status": existing["status"],
+                    "http_status": existing["http_status"],
+                    "judge_attempt": 1,
+                }
+                _secure_write(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+                return path
         raise NonRetryableJudgeError(
             "an earlier API dispatch has no accepted checkpoint; automatic resend is forbidden"
         ) from exc
@@ -632,6 +661,9 @@ def _run_responses_api_structured(
         "api_request_id": request_id,
         "api_usage": usage,
         "api_status": envelope.get("status"),
+        "judge_attempt": json.loads(
+            dispatch_record_path.read_text(encoding="utf-8")
+        )["judge_attempt"],
     }
     return structured, metadata
 
@@ -653,6 +685,7 @@ class ResponsesAPIStateJudge:
         reasoning_effort: str = "low",
         timeout_seconds: int = 300,
         dispatch_log_dir: Path,
+        allow_http_504_retry: bool = False,
     ) -> None:
         self.judge_id = judge_id
         self.api_key = api_key
@@ -661,6 +694,8 @@ class ResponsesAPIStateJudge:
         self.reasoning_effort = reasoning_effort
         self.timeout_seconds = timeout_seconds
         self.dispatch_log_dir = dispatch_log_dir
+        self.allow_http_504_retry = allow_http_504_retry
+        self.maximum_attempts_per_opportunity = 2 if allow_http_504_retry else 1
         self.configuration = _responses_api_configuration(
             protocol_version=STATE_JUDGE_PROTOCOL_VERSION,
             model=model,
@@ -691,6 +726,7 @@ class ResponsesAPIStateJudge:
             judge_id=self.judge_id,
             configuration_sha256=self.configuration_sha256,
             packet=packet,
+            allow_http_504_retry=self.allow_http_504_retry,
         )
         envelope, metadata = _run_responses_api_structured(
             base_url=self.base_url,
@@ -1442,7 +1478,7 @@ def _run_judge_batches(
         for attempt in range(1, MAX_JUDGE_ATTEMPTS + 1):
             try:
                 rows = grade_validated_batch([packet])
-                rows[0]["judge_attempt"] = attempt
+                rows[0].setdefault("judge_attempt", attempt)
                 return rows
             except NonRetryableJudgeError:
                 raise

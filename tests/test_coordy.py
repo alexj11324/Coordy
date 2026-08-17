@@ -23,6 +23,7 @@ from coordy.semantic import (
     STATE_TYPES,
     NonRetryableJudgeError,
     ResponsesAPIStateJudge,
+    _claim_api_dispatch,
     _evaluate_state_smoke,
     _run_judge_batches,
     _secure_write,
@@ -106,6 +107,39 @@ class CoordyTests(unittest.TestCase):
     def test_timestamp_requires_timezone(self):
         with self.assertRaises(ValueError):
             self.event("e", "s", "2026-01-01T00:00:00", "hello")
+
+    def test_explicit_http_504_retry_is_single_and_audited(self):
+        packet = {"opportunity_id_hash": "op-1", "scan_run_id": "run-1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+            )
+            failed = json.loads(path.read_text())
+            failed.update({"status": "HTTP_ERROR_NO_RETRY", "http_status": 504})
+            _secure_write(path, json.dumps(failed))
+
+            retried = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+                allow_http_504_retry=True,
+            )
+            record = json.loads(retried.read_text())
+            self.assertEqual(record["judge_attempt"], 2)
+            self.assertEqual(record["prior_attempt"]["http_status"], 504)
+            with self.assertRaisesRegex(NonRetryableJudgeError, "automatic resend is forbidden"):
+                _claim_api_dispatch(
+                    directory,
+                    judge_id="judge",
+                    configuration_sha256="config",
+                    packet=packet,
+                    allow_http_504_retry=True,
+                )
 
     def test_redacts_nested_secrets(self):
         clean, count = redact_value({
