@@ -109,7 +109,7 @@ class CoordyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.event("e", "s", "2026-01-01T00:00:00", "hello")
 
-    def test_explicit_http_504_retry_is_single_and_audited(self):
+    def test_explicit_http_504_retries_are_capped_and_audited(self):
         packet = {"opportunity_id_hash": "op-1", "scan_run_id": "run-1"}
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -132,7 +132,21 @@ class CoordyTests(unittest.TestCase):
             )
             record = json.loads(retried.read_text())
             self.assertEqual(record["judge_attempt"], 2)
-            self.assertEqual(record["prior_attempt"]["http_status"], 504)
+            self.assertEqual(record["prior_attempts"][0]["http_status"], 504)
+            record.update({"status": "HTTP_ERROR_NO_RETRY", "http_status": 504})
+            _secure_write(path, json.dumps(record))
+            third = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+                allow_http_504_retry=True,
+            )
+            third_record = json.loads(third.read_text())
+            self.assertEqual(third_record["judge_attempt"], 3)
+            self.assertEqual(len(third_record["prior_attempts"]), 2)
+            third_record.update({"status": "HTTP_ERROR_NO_RETRY", "http_status": 504})
+            _secure_write(path, json.dumps(third_record))
             with self.assertRaisesRegex(NonRetryableJudgeError, "automatic resend is forbidden"):
                 _claim_api_dispatch(
                     directory,

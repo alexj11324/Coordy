@@ -134,7 +134,7 @@ that admits only the exact opportunity and evidence IDs in that packet. The
 client verifies those fields again in the server response before accepting any
 output. Malformed output and unknown transport outcomes fail closed without an
 automatic retry. A concrete HTTP 504 with no request ID, response ID, or usage
-may receive one explicitly authorized, audited retry; valid results are atomically checkpointed
+may receive up to two explicitly authorized, audited retries; valid results are atomically checkpointed
 with input, schema,
 request/response IDs, token usage, and full judge-configuration hashes. API
 smoke dispatch is serial. Every grading path durably records dispatch before

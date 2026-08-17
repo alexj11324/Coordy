@@ -20,6 +20,7 @@
 - Keep human causal confirmation separate from system Type A/B/C classification so unclassified positives cannot trigger terminal S0 gates.
 - Split rule-based S0a evidence infrastructure from S0b semantic grading: run an outcome-blinded State Diff over every compaction opportunity, independently rejudge suspects/low-confidence/audit samples, and checkpoint only evidence-ID-valid outputs.
 - Bound the independent State Diff rejudge to all primary suspects and low-confidence cases plus a reproducible Goal-root-stratified healthy/control sample (target 30, normally 20–40), rather than a second full-population pass.
+- Permit at most two explicit, provenance-preserving retries for repeated bare HTTP 504 gateway responses; all other transport and semantic failures remain non-retryable.
 - Bind stronger causal judging to structured tool exit codes and successful patch facts, keep prose from masquerading as engineering outcomes, and require human review before any machine Type A/B/C/D/U prelabel becomes ground truth.
 - Make S0b resumability fail closed: one semantic writer lock, atomic/fsynced checkpoints, full judge-configuration provenance, frozen-session binding, direct T0/T1 causal evidence, and hash-bound causal answer ingestion; the former subprocess cleanup path is retained only in retracted history.
 - Add the local-report-driven Active Plan State scope as a protocol amendment while keeping the ignored report itself out of Git.

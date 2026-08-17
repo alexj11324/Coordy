@@ -46,8 +46,8 @@
     "state_diff_isolation": "one opportunity per API request; output schema binds the exact opportunity and allowed evidence IDs",
     "judge_transport": "direct OpenAI-compatible Responses API; no codex exec subprocess",
     "judge_tool_policy": "request and response both require tools=[]; store=false and parallel_tool_calls=false",
-    "maximum_judge_attempts_per_opportunity": "1 normally; one explicitly authorized retry only for an HTTP 504 with no request ID, response ID, or usage",
-    "dispatch_recovery": "pre-POST durable tombstone; uncertain transport outcome forbids resend; a concrete HTTP 504 without provenance may receive one audited explicit retry",
+    "maximum_judge_attempts_per_opportunity": "1 normally; up to two explicitly authorized retries only for an HTTP 504 with no request ID, response ID, or usage",
+    "dispatch_recovery": "pre-POST durable tombstone; uncertain transport outcome forbids resend; a concrete HTTP 504 without provenance may receive at most two audited explicit retries",
     "smoke_gate": {
       "scope": "safety_and_evidence_binding_only; no accuracy or recall claim",
       "no_post_plan_controls": "all must be UNASSESSABLE and not suspected",

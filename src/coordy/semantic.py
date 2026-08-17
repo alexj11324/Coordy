@@ -493,15 +493,19 @@ def _claim_api_dispatch(
                 and not existing.get("api_request_id")
                 and not existing.get("api_response_id")
                 and not existing.get("api_usage")
-                and existing.get("judge_attempt", 1) == 1
+                and existing.get("judge_attempt", 1) < 3
             )
             if retryable:
-                record["judge_attempt"] = 2
-                record["prior_attempt"] = {
+                prior_attempts = list(existing.get("prior_attempts") or [])
+                if not prior_attempts and existing.get("prior_attempt"):
+                    prior_attempts.append(existing["prior_attempt"])
+                prior_attempts.append({
                     "status": existing["status"],
                     "http_status": existing["http_status"],
-                    "judge_attempt": 1,
-                }
+                    "judge_attempt": existing.get("judge_attempt", 1),
+                })
+                record["judge_attempt"] = existing.get("judge_attempt", 1) + 1
+                record["prior_attempts"] = prior_attempts
                 _secure_write(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
                 return path
         raise NonRetryableJudgeError(
@@ -695,7 +699,7 @@ class ResponsesAPIStateJudge:
         self.timeout_seconds = timeout_seconds
         self.dispatch_log_dir = dispatch_log_dir
         self.allow_http_504_retry = allow_http_504_retry
-        self.maximum_attempts_per_opportunity = 2 if allow_http_504_retry else 1
+        self.maximum_attempts_per_opportunity = 3 if allow_http_504_retry else 1
         self.configuration = _responses_api_configuration(
             protocol_version=STATE_JUDGE_PROTOCOL_VERSION,
             model=model,
