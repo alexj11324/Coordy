@@ -4,9 +4,12 @@ import re
 from typing import Any
 
 _PATTERNS = (
+    re.compile(r"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----.*?-----END (?:[A-Z0-9 ]+ )?PRIVATE KEY-----", re.DOTALL),
     re.compile(r"(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/=-]+"),
-    re.compile(r"(?i)\b((?:api[_-]?key|access[_-]?token|secret)\s*[:=]\s*)[^\s,;]+"),
+    re.compile(r"(?i)\b((?:api[_-]?key|access[_-]?token|secret|password|passphrase|client[_-]?secret|private[_-]?key|aws[_-]?secret[_-]?access[_-]?key)\s*[:=]\s*)[^\s,;]+"),
     re.compile(r"\b(?:sk|ghp|github_pat)_[A-Za-z0-9_\-]{12,}\b"),
+    re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"),
 )
 
 

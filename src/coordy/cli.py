@@ -8,6 +8,7 @@ from . import __version__
 from .discovery import discover_codex_environment
 from .pipeline import run
 from .protocol import initialize
+from .review import adjudicate_s0, prepare_s0_review
 from .screening import run_s0_screening
 
 
@@ -26,6 +27,12 @@ def parser() -> argparse.ArgumentParser:
     screen.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
     screen.add_argument("--max-sessions", type=int, default=100)
     screen.add_argument("--exclude-session", action="append", default=[])
+    review = commands.add_parser("review-s0", help="prepare privacy-safe S0 evidence cards")
+    review.add_argument("--workspace", type=Path, required=True)
+    review.add_argument("--max-reviews", type=int, default=12)
+    adjudicate = commands.add_parser("adjudicate-s0", help="apply frozen S0 gates to reviewed evidence")
+    adjudicate.add_argument("--workspace", type=Path, required=True)
+    adjudicate.add_argument("--answers", type=Path, required=True)
     execute = commands.add_parser("run", help="ingest and analyze an authorized export")
     execute.add_argument("--input", type=Path, required=True)
     execute.add_argument("--workspace", type=Path, required=True)
@@ -52,6 +59,10 @@ def main(argv: list[str] | None = None) -> int:
             max_sessions=args.max_sessions,
             exclude_session_ids=args.exclude_session,
         ), sort_keys=True))
+    elif args.command == "review-s0":
+        print(json.dumps(prepare_s0_review(args.workspace, max_reviews=args.max_reviews), sort_keys=True))
+    elif args.command == "adjudicate-s0":
+        print(json.dumps(adjudicate_s0(args.workspace, args.answers), sort_keys=True))
     elif args.command == "run":
         print(json.dumps(run(args.input, args.workspace), sort_keys=True))
     else:

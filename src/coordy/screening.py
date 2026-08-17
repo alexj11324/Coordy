@@ -10,7 +10,7 @@ from typing import Any, Iterable
 
 from .redaction import redact_text
 
-SCANNER_VERSION = "s0-v1"
+SCANNER_VERSION = "s0-v3"
 MAX_SCAN_BYTES_PER_SESSION = 8 * 1024 * 1024
 
 SIGNALS = {
@@ -29,6 +29,17 @@ def _hash(value: str | bytes) -> str:
     if isinstance(value, str):
         value = value.encode()
     return hashlib.sha256(value).hexdigest()
+
+
+def _timestamps_are_close(left: str | None, right: str | None, seconds: int = 5) -> bool:
+    if not left or not right:
+        return False
+    try:
+        first = datetime.fromisoformat(left.replace("Z", "+00:00"))
+        second = datetime.fromisoformat(right.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return abs((first - second).total_seconds()) <= seconds
 
 
 def _strings(value: Any) -> Iterable[str]:
@@ -87,6 +98,11 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
     event_count = tool_calls = compactions = summaries = 0
     signals: list[dict[str, Any]] = []
     seen_compaction = False
+    last_compaction_marker_offset: int | None = None
+    last_compaction_marker_timestamp: str | None = None
+    current_compaction_id_hash: str | None = None
+    current_compaction_timestamp: str | None = None
+    exclusion_reason: str | None = None
     bytes_read = 0
     parse_errors = 0
     with path.open("rb") as handle:
@@ -126,14 +142,28 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
                 cwd = payload.get("cwd")
                 if isinstance(cwd, str):
                     cwd_hash = _hash(cwd)
+                source = payload.get("source")
+                if isinstance(source, dict):
+                    subagent = source.get("subagent")
+                    if isinstance(subagent, dict) and subagent.get("other") == "guardian":
+                        exclusion_reason = "approval_reviewer_session"
             if record_type == "response_item" and payload_type in {"function_call", "custom_tool_call"}:
                 tool_calls += 1
-            explicit = "compact" in record_type.lower() or "compact" in payload_type.lower()
-            summary = payload.get("summary")
-            probable = record_type == "turn_context" and bool(summary)
-            if explicit or probable:
-                compactions += int(explicit)
-                summaries += int(probable)
+            explicit = record_type in {"compacted", "context_compacted"} or payload_type == "context_compacted"
+            if explicit:
+                same_boundary = (
+                    last_compaction_marker_offset is not None
+                    and offset - last_compaction_marker_offset <= 5
+                    and _timestamps_are_close(last_compaction_marker_timestamp, timestamp)
+                )
+                if not same_boundary:
+                    compactions += 1
+                    boundary_basis = str(payload.get("id") or row.get("id") or f"{offset}:{timestamp}")
+                    current_compaction_id_hash = _hash(boundary_basis)
+                    current_compaction_timestamp = timestamp if isinstance(timestamp, str) else None
+                last_compaction_marker_offset = offset
+                last_compaction_marker_timestamp = timestamp if isinstance(timestamp, str) else None
+                summaries += int(record_type == "compacted")
                 seen_compaction = True
             matched = _matched_signals(record_type, payload)
             if matched:
@@ -143,6 +173,8 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
                     "timestamp": timestamp,
                     "signals": matched,
                     "after_compaction": seen_compaction,
+                    "compaction_boundary_id_hash": current_compaction_id_hash,
+                    "compaction_timestamp": current_compaction_timestamp,
                     "engineering_consequence_signal": any(name in {"rollback_or_revert", "test_failure"} for name in matched),
                     "score": sum(3 if name == "user_correction" else 2 for name in matched) + int(seen_compaction),
                 })
@@ -176,9 +208,14 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
         "parse_errors": parse_errors,
         "eligible_reasons": eligible_reasons,
         "candidate_signal_count": len(signals),
+        "exclusion_reason": exclusion_reason,
     }
     for signal in signals:
-        signal.update({"session_id": session_id, "repository_identity_hash": cwd_hash})
+        signal.update({
+            "session_id": session_id,
+            "repository_identity_hash": cwd_hash,
+            "source_prefix_sha256": session["scanned_prefix_sha256"],
+        })
     return session, signals
 
 
@@ -195,6 +232,7 @@ def run_s0_screening(
     if not 1 <= max_candidates <= 30:
         raise ValueError("max_candidates must be between 1 and 30")
     excluded = set(exclude_session_ids)
+    scan_run_id = _hash(os.urandom(32))
     files = []
     for root in rollout_roots:
         if root.is_dir():
@@ -203,6 +241,7 @@ def run_s0_screening(
     sessions: list[dict[str, Any]] = []
     signals: list[dict[str, Any]] = []
     inspected = 0
+    auxiliary_excluded = 0
     for path in files:
         if len(sessions) >= max_sessions:
             break
@@ -210,15 +249,54 @@ def run_s0_screening(
         session, found = _scan_rollout(path)
         if session and session["session_id"] in excluded:
             continue
+        if session and session.get("exclusion_reason"):
+            auxiliary_excluded += 1
+            continue
         if session:
             sessions.append(session)
             signals.extend(found)
-    candidates = sorted(signals, key=lambda row: (-row["score"], str(row.get("timestamp"))))[:max_candidates]
+    episodes: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in signals:
+        boundary = row.get("compaction_boundary_id_hash") if row.get("after_compaction") else row["event_id_hash"]
+        key = str(row["session_id"]), str(row["source_prefix_sha256"]), str(boundary)
+        existing = episodes.get(key)
+        if existing is None:
+            episodes[key] = {**row, "supporting_signal_count": 1}
+            continue
+        existing_rank = (
+            int("user_correction" in existing["signals"]),
+            int(existing["engineering_consequence_signal"]),
+            existing["score"],
+        )
+        row_rank = (
+            int("user_correction" in row["signals"]),
+            int(row["engineering_consequence_signal"]),
+            row["score"],
+        )
+        existing["signals"] = sorted(set(existing["signals"]) | set(row["signals"]))
+        existing["engineering_consequence_signal"] = bool(
+            existing["engineering_consequence_signal"] or row["engineering_consequence_signal"]
+        )
+        existing["supporting_signal_count"] += 1
+        if row_rank > existing_rank:
+            for field in ("event_id_hash", "timestamp", "score"):
+                existing[field] = row[field]
+    episode_rows = list(episodes.values())
+    candidates = sorted(
+        episode_rows,
+        key=lambda row: (
+            -int(row["engineering_consequence_signal"]),
+            -row["score"],
+            -row["supporting_signal_count"],
+            str(row.get("timestamp")),
+        ),
+    )[:max_candidates]
     candidate_rows = []
     for index, row in enumerate(candidates, 1):
         candidate_rows.append({
             "candidate_id": f"s0_{index:03d}_{row['event_id_hash'][:12]}",
             **row,
+            "scan_run_id": scan_run_id,
             "classification": "uncertain",
             "note": "Deterministic signals generate a review candidate; they do not establish Type A/B/C ground truth.",
         })
@@ -231,14 +309,26 @@ def run_s0_screening(
         for row in candidate_rows[:12]
     ]
     consequence_count = sum(1 for row in candidate_rows if row["engineering_consequence_signal"])
+    session_rows = [{**row, "scan_run_id": scan_run_id} for row in sessions]
+    sessions_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in session_rows)
+    candidates_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in candidate_rows)
     summary = {
         "screening_version": "1",
         "scanner_version": SCANNER_VERSION,
+        "scan_run_id": scan_run_id,
         "created_at": _now(),
         "files_inspected": inspected,
         "excluded_sessions": len(excluded),
+        "auxiliary_sessions_excluded": auxiliary_excluded,
         "eligible_sessions": len(sessions),
         "candidate_decision_points": len(candidate_rows),
+        "raw_candidate_signals": len(signals),
+        "unique_candidate_episodes_total": len(episode_rows),
+        "candidate_episode_overflow": max(0, len(episode_rows) - len(candidate_rows)),
+        "artifact_hashes": {
+            "eligible_sessions_jsonl": _hash(sessions_content),
+            "candidate_decision_points_jsonl": _hash(candidates_content),
+        },
         "engineering_consequence_candidates": consequence_count,
         "confirmed_type_abc": 0,
         "user_review_queue_size": len(review_queue),
@@ -249,8 +339,8 @@ def run_s0_screening(
     }
     output = workspace / "data/screening"
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _secure_write(output / "eligible_sessions.jsonl", "".join(json.dumps(row, sort_keys=True) + "\n" for row in sessions))
-    _secure_write(output / "candidate_decision_points.jsonl", "".join(json.dumps(row, sort_keys=True) + "\n" for row in candidate_rows))
+    _secure_write(output / "eligible_sessions.jsonl", sessions_content)
+    _secure_write(output / "candidate_decision_points.jsonl", candidates_content)
     _secure_write(output / "user_review_queue.json", json.dumps(review_queue, indent=2, sort_keys=True) + "\n")
     _secure_write(output / "screening_summary.json", json.dumps(summary, indent=2, sort_keys=True) + "\n")
     return summary

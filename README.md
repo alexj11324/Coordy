@@ -28,6 +28,8 @@ python -m pip install -e .
 coordy init --workspace .
 coordy discover --workspace .coordy/discovery
 coordy screen --workspace .coordy/screening-s0 --max-sessions 100
+coordy review-s0 --workspace .coordy/screening-s0 --max-reviews 12
+coordy adjudicate-s0 --workspace .coordy/screening-s0 --answers .coordy/screening-s0/data/screening/user_review_answers.json
 coordy run --input examples/synthetic_sessions.jsonl --workspace .coordy/demo
 coordy summary --workspace .coordy/demo
 python -m unittest discover -s tests -v
@@ -61,6 +63,21 @@ contents. An unknown history schema fails closed with no selected adapter.
 `coordy screen` runs only the low-cost S0 prevalence gate. It scans at most
 100 eligible sessions and at most 8 MiB per rollout. Every generated case stays
 `uncertain` until evidence review, and Screening can never emit `GO`.
+
+`coordy review-s0` verifies each frozen source prefix before writing local
+0600 evidence cards. Cutoff-safe evidence and retrospective outcome evidence
+remain separate, auxiliary approval-reviewer sessions are excluded, and cards
+are deduplicated by session plus compaction episode. These cards are only a
+structural upper bound: they are not called replayable Decision Points until a
+causal case manifest and repository cutoff are reconstructed. Fewer than 10
+unique structural episodes can trigger the frozen S0 `STOP` rule without asking
+the user to label noise only when the full candidate population was retained
+(`candidate_episode_overflow == 0`). Otherwise, only structurally complete cases
+with interpretable outcome evidence may enter the maximum-12 queue; the user
+answers only `YES`, `NO`, or `UNCERTAIN`. S0 leaves the exact A/B/C type
+unclassified until external-change exclusions and the causal chain are built.
+Passing those prevalence gates proceeds to causal case construction, not S1 or
+a premature GO.
 
 ## Privacy and evidence
 

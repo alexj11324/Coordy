@@ -13,12 +13,40 @@ from coordy.models import CanonicalEvent
 from coordy.pipeline import run
 from coordy.protocol import initialize
 from coordy.redaction import redact_value
+from coordy.review import adjudicate_s0, prepare_s0_review
 from coordy.sources import JsonExportSource
 from coordy.screening import run_s0_screening
 from coordy.state import update_state
 
 
 class CoordyTests(unittest.TestCase):
+    def bind_review_artifacts(
+        self,
+        output: Path,
+        *,
+        overflow: int = 0,
+        reviewable_population_size: int | None = None,
+    ) -> None:
+        evidence = output / "evidence_cards.jsonl"
+        queue = output / "user_review_queue.json"
+        summary = {
+            "scan_run_id": "test-run",
+            "candidate_episode_overflow": overflow,
+        }
+        manifest = {
+            "scan_run_id": "test-run",
+            "scanner_version": "s0-v3",
+            "candidate_episode_overflow": overflow,
+            "reviewable_population_size": (
+                len(json.loads(queue.read_text()))
+                if reviewable_population_size is None else reviewable_population_size
+            ),
+            "evidence_cards_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            "user_review_queue_sha256": hashlib.sha256(queue.read_bytes()).hexdigest(),
+        }
+        (output / "screening_summary.json").write_text(json.dumps(summary))
+        (output / "s0_review_manifest.json").write_text(json.dumps(manifest))
+
     def event(self, event_id: str, session: str, timestamp: str, content: str, **kwargs) -> CanonicalEvent:
         return CanonicalEvent(event_id, session, timestamp, 0, "user", kwargs.pop("event_type", "message"), content, **kwargs)
 
@@ -27,10 +55,16 @@ class CoordyTests(unittest.TestCase):
             self.event("e", "s", "2026-01-01T00:00:00", "hello")
 
     def test_redacts_nested_secrets(self):
-        clean, count = redact_value({"token": "abc", "body": "api_key=secret-value"})
+        clean, count = redact_value({
+            "token": "abc",
+            "body": "api_key=secret-value password=hunter2 AKIAABCDEFGHIJKLMNOP -----BEGIN PRIVATE KEY----- private-material -----END PRIVATE KEY-----",
+        })
         self.assertEqual(clean["token"], "[REDACTED]")
         self.assertNotIn("secret-value", clean["body"])
-        self.assertEqual(count, 2)
+        self.assertNotIn("hunter2", clean["body"])
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", clean["body"])
+        self.assertNotIn("private-material", clean["body"])
+        self.assertGreaterEqual(count, 5)
 
     def test_source_is_stable_and_lists_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,6 +265,275 @@ class CoordyTests(unittest.TestCase):
             self.assertIn('"classification": "uncertain"', persisted)
             self.assertEqual((root / "out/data/screening").stat().st_mode & 0o777, 0o700)
             self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in (root / "out/data/screening").iterdir()))
+
+    def test_s0_excludes_guardian_sessions_and_does_not_treat_turn_settings_as_compaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            main_rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "main", "cwd": "/repo", "source": "vscode"}},
+                *[
+                    {"timestamp": f"2026-08-16T00:{index // 60:02d}:{index % 60:02d}Z", "type": "response_item", "payload": {"id": f"m{index}", "type": "message", "role": "assistant", "content": "ordinary work"}}
+                    for index in range(100)
+                ],
+                {"timestamp": "2026-08-16T01:41:00Z", "type": "turn_context", "payload": {"summary": "auto", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T01:42:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "你忘了 the requirement"}},
+            ]
+            (sessions / "main.jsonl").write_text("".join(json.dumps(row) + "\n" for row in main_rows))
+            guardian_rows = [
+                {"timestamp": "2026-08-16T02:00:00Z", "type": "session_meta", "payload": {"id": "guardian", "cwd": "/repo", "source": {"subagent": {"other": "guardian"}}}},
+                {"timestamp": "2026-08-16T02:01:00Z", "type": "compacted", "payload": {"message": "summary"}},
+                {"timestamp": "2026-08-16T02:02:00Z", "type": "response_item", "payload": {"id": "quoted", "type": "message", "role": "user", "content": "quoted transcript says tests failed and git reset"}},
+            ]
+            (sessions / "guardian.jsonl").write_text("".join(json.dumps(row) + "\n" for row in guardian_rows))
+
+            result = run_s0_screening(root / "out", [sessions], max_sessions=1)
+
+            self.assertEqual(result["eligible_sessions"], 1)
+            self.assertEqual(result["auxiliary_sessions_excluded"], 1)
+            eligible = json.loads((root / "out/data/screening/eligible_sessions.jsonl").read_text())
+            self.assertEqual(eligible["session_id"], "main")
+            self.assertEqual(eligible["compaction_count_scanned"], 0)
+            self.assertEqual(eligible["summary_count_scanned"], 0)
+            candidate = json.loads((root / "out/data/screening/candidate_decision_points.jsonl").read_text())
+            self.assertFalse(candidate["after_compaction"])
+
+    def test_s0_deduplicates_compaction_episodes_before_candidate_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            first = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo-a"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "c1", "message": "summary"}},
+                *[
+                    {"timestamp": f"2026-08-16T00:{index + 2:02d}:00Z", "type": "response_item", "payload": {"id": f"failure-{index}", "type": "function_call_output", "output": "tests failed"}}
+                    for index in range(10)
+                ],
+            ]
+            second = [
+                {"timestamp": "2026-08-16T02:00:00Z", "type": "session_meta", "payload": {"id": "s2", "cwd": "/repo-b"}},
+                {"timestamp": "2026-08-16T02:01:00Z", "type": "compacted", "payload": {"id": "c2", "message": "summary"}},
+                {"timestamp": "2026-08-16T02:02:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "重新规划"}},
+            ]
+            (sessions / "first.jsonl").write_text("".join(json.dumps(row) + "\n" for row in first))
+            (sessions / "second.jsonl").write_text("".join(json.dumps(row) + "\n" for row in second))
+
+            result = run_s0_screening(root / "out", [sessions], max_sessions=2, max_candidates=2)
+
+            self.assertEqual(result["raw_candidate_signals"], 11)
+            self.assertEqual(result["unique_candidate_episodes_total"], 2)
+            self.assertEqual(result["candidate_episode_overflow"], 0)
+            candidates = [
+                json.loads(line)
+                for line in (root / "out/data/screening/candidate_decision_points.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual({row["session_id"] for row in candidates}, {"s1", "s2"})
+
+    def test_prepare_s0_review_separates_cutoff_evidence_from_outcome_and_redacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rollout = sessions / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/private/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "goal", "type": "message", "role": "user", "content": "Keep database access in the host app."}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "event_msg", "payload": {"id": "compact", "type": "context_compacted"}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "wrong", "type": "message", "role": "assistant", "content": "I will open the database in the extension."}},
+                {"timestamp": "2026-08-16T00:04:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "你忘了 host-only rule; api_key=must-not-leak"}},
+                {"timestamp": "2026-08-16T00:05:00Z", "type": "response_item", "payload": {"id": "result", "type": "function_call_output", "output": "tests failed after invalid extension access"}},
+            ]
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions], max_sessions=1)
+
+            result = prepare_s0_review(workspace, max_reviews=12)
+
+            self.assertEqual(result["review_cards"], 0)
+            self.assertEqual(result["status"], "DECIDED")
+            self.assertEqual(result["decision"], "STOP")
+            self.assertEqual(result["unique_structural_replay_upper_bound"], 1)
+            card = json.loads((workspace / "data/screening/evidence_cards.jsonl").read_text().splitlines()[0])
+            self.assertEqual(card["cutoff"]["timestamp"], "2026-08-16T00:02:00Z")
+            self.assertEqual(card["cutoff"]["maximum_allowed_event_id"], hashlib.sha256(b"compact").hexdigest())
+            contemporaneous = json.dumps(card["contemporaneous_evidence"])
+            retrospective = json.dumps(card["retrospective_outcome_evidence"], ensure_ascii=False)
+            self.assertNotIn("tests failed", contemporaneous)
+            self.assertNotIn("tests failed", retrospective)
+            self.assertIn("test_failure", retrospective)
+            self.assertIn("你忘了", retrospective)
+            self.assertNotIn("must-not-leak", json.dumps(card))
+            self.assertIn("[REDACTED]", json.dumps(card))
+            self.assertEqual(card["classification"], "uncertain")
+            self.assertTrue(card["evidence_completeness"]["has_pre_cutoff_state"])
+            self.assertTrue(card["evidence_completeness"]["has_post_cutoff_consequence"])
+            self.assertTrue(card["evidence_completeness"]["structural_replay_candidate"])
+            template = json.loads((workspace / "data/screening/user_review_answers.json").read_text())
+            self.assertEqual(template["answers"], [])
+
+    def test_prepare_s0_review_uses_latest_compaction_boundary_without_hash_guessing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rollout = sessions / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "goal", "type": "message", "role": "user", "content": "preserve constraint"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "old-compact", "message": "old"}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "work", "type": "message", "role": "assistant", "content": "continue"}},
+                {"timestamp": "2026-08-16T00:10:00Z", "type": "event_msg", "payload": {"id": "latest-compact", "type": "context_compacted"}},
+                {"timestamp": "2026-08-16T00:11:00Z", "type": "response_item", "payload": {"id": "action", "type": "message", "role": "assistant", "content": "wrong next action"}},
+                {"timestamp": "2026-08-16T00:12:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "你忘了 the constraint"}},
+            ]
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions], max_sessions=1)
+
+            prepare_s0_review(workspace)
+
+            card = json.loads((workspace / "data/screening/evidence_cards.jsonl").read_text())
+            self.assertEqual(card["cutoff"]["timestamp"], "2026-08-16T00:10:00Z")
+            self.assertEqual(
+                card["cutoff"]["maximum_allowed_event_id"],
+                hashlib.sha256(b"latest-compact").hexdigest(),
+            )
+
+    def test_adjudicate_s0_waits_for_all_reviews_then_applies_stop_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            cards = [
+                {
+                    "candidate_id": f"case-{index}",
+                    "classification": "uncertain",
+                    "suggested_failure_type": "A",
+                    "session_id_hash": f"session-{index}",
+                    "repository_identity_hash": "repo-a",
+                    "cutoff": {"timestamp": f"2026-08-16T00:{index:02d}:00Z"},
+                    "evidence_completeness": {"structural_replay_candidate": True, "has_post_cutoff_consequence": True},
+                }
+                for index in range(10)
+            ]
+            (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
+            queue = [{"candidate_id": card["candidate_id"]} for card in cards]
+            (output / "user_review_queue.json").write_text(json.dumps(queue))
+            self.bind_review_artifacts(output)
+            incomplete = workspace / "incomplete.json"
+            incomplete.write_text(json.dumps({"answers": [{"candidate_id": "case-0", "answer": "YES"}]}))
+
+            pending = adjudicate_s0(workspace, incomplete)
+
+            self.assertEqual(pending["status"], "PENDING_USER_REVIEW")
+            self.assertIsNone(pending["decision"])
+
+            complete = workspace / "complete.json"
+            complete.write_text(json.dumps({
+                "answers": [
+                    {"candidate_id": f"case-{index}", "answer": "YES" if index < 4 else "NO"}
+                    for index in range(10)
+                ]
+            }))
+
+            decided = adjudicate_s0(workspace, complete)
+
+            self.assertEqual(decided["status"], "DECIDED")
+            self.assertEqual(decided["decision"], "STOP")
+            self.assertEqual(decided["confirmed_type_abc"], 4)
+            self.assertIn("confirmed Type A/B/C below 5", decided["decision_reasons"])
+
+    def test_adjudicate_s0_pivots_when_confirmed_failures_are_narrowly_concentrated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            cards = [
+                {
+                    "candidate_id": f"case-{index}",
+                    "classification": "uncertain",
+                    "suggested_failure_type": "A",
+                    "session_id_hash": f"session-{index}",
+                    "repository_identity_hash": "one-repository",
+                    "cutoff": {"timestamp": f"2026-08-16T00:{index:02d}:00Z"},
+                    "evidence_completeness": {
+                        "structural_replay_candidate": True,
+                        "has_post_cutoff_consequence": True,
+                    },
+                }
+                for index in range(10)
+            ]
+            (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
+            queue = [{"candidate_id": f"case-{index}"} for index in range(10)]
+            (output / "user_review_queue.json").write_text(json.dumps(queue))
+            self.bind_review_artifacts(output)
+            answers = workspace / "answers.json"
+            answers.write_text(json.dumps({
+                "answers": [
+                    {"candidate_id": f"case-{index}", "answer": "YES" if index < 5 else "NO"}
+                    for index in range(10)
+                ]
+            }))
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["decision"], "PIVOT")
+            self.assertEqual(result["stage_outcome"], "PIVOT")
+
+    def test_adjudicate_s0_does_not_stop_or_pivot_from_an_overflowed_sample(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            cards = [
+                {
+                    "candidate_id": f"case-{index}",
+                    "suggested_failure_type": None,
+                    "session_id_hash": f"session-{index}",
+                    "repository_identity_hash": "one-repository",
+                    "cutoff": {"timestamp": f"2026-08-16T00:{index:02d}:00Z"},
+                    "evidence_completeness": {
+                        "structural_replay_candidate": True,
+                        "has_post_cutoff_consequence": True,
+                    },
+                }
+                for index in range(5)
+            ]
+            (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
+            (output / "user_review_queue.json").write_text(json.dumps([
+                {"candidate_id": card["candidate_id"]} for card in cards
+            ]))
+            self.bind_review_artifacts(output, overflow=20)
+            answers = workspace / "answers.json"
+            answers.write_text(json.dumps({"answers": [
+                {"candidate_id": card["candidate_id"], "answer": "YES"} for card in cards
+            ]}))
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["status"], "PENDING_CASE_CONSTRUCTION")
+            self.assertIsNone(result["decision"])
+            self.assertEqual(result["candidate_episode_overflow"], 20)
+
+    def test_prepare_s0_review_rejects_mixed_scan_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rollout = sessions / "rollout.jsonl"
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "signal", "type": "message", "role": "user", "content": "重新规划"}},
+            ]))
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions], max_sessions=1)
+            candidate_path = workspace / "data/screening/candidate_decision_points.jsonl"
+            candidate_path.write_text(candidate_path.read_text() + "\n")
+
+            with self.assertRaisesRegex(RuntimeError, "one complete compatible scan run"):
+                prepare_s0_review(workspace)
 
 
 if __name__ == "__main__":
