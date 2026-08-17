@@ -35,7 +35,7 @@
       "minimum": 20,
       "target": 30
     },
-    "independent_second_judge": true,
+    "independent_second_judge": "targeted review of every primary suspect and low-confidence case plus a reproducible Goal-root-stratified sample of healthy cases and no-post controls; target 30, normally 20-40, with mandatory-case overflow reported",
     "machine_judges_are_ground_truth": false,
     "name": "semantic_grading",
     "outcome_blinding": "State Diff sees pre-state, compaction summary, and post-plan only.",
@@ -46,8 +46,8 @@
     "state_diff_isolation": "one opportunity per API request; output schema binds the exact opportunity and allowed evidence IDs",
     "judge_transport": "direct OpenAI-compatible Responses API; no codex exec subprocess",
     "judge_tool_policy": "request and response both require tools=[]; store=false and parallel_tool_calls=false",
-    "maximum_judge_attempts_per_opportunity": 1,
-    "dispatch_recovery": "serial pre-POST durable tombstone; uncertain outcome forbids automatic resend",
+    "maximum_judge_attempts_per_opportunity": "1 normally; one explicitly authorized retry only for an HTTP 504 with no request ID, response ID, or usage",
+    "dispatch_recovery": "pre-POST durable tombstone; uncertain transport outcome forbids resend; a concrete HTTP 504 without provenance may receive one audited explicit retry",
     "smoke_gate": {
       "scope": "safety_and_evidence_binding_only; no accuracy or recall claim",
       "no_post_plan_controls": "all must be UNASSESSABLE and not suspected",

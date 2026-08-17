@@ -26,6 +26,7 @@ from coordy.semantic import (
     _claim_api_dispatch,
     _evaluate_state_smoke,
     _run_judge_batches,
+    _select_secondary_state_packets,
     _secure_write,
     _state_diff_batch_schema,
     _human_causal_chain,
@@ -140,6 +141,50 @@ class CoordyTests(unittest.TestCase):
                     packet=packet,
                     allow_http_504_retry=True,
                 )
+
+    def test_secondary_state_judge_uses_targeted_root_balanced_review(self):
+        packets = [
+            {
+                "opportunity_id_hash": f"{index:064x}",
+                "goal_thread_id_hash": f"root-{index % 8}",
+                "post_compaction_plan_events": (
+                    [] if 50 <= index < 54 else [{"evidence_id": "post"}]
+                ),
+            }
+            for index in range(60)
+        ]
+        primary = [
+            {
+                "opportunity_id_hash": packet["opportunity_id_hash"],
+                "suspected_state_change": index < 3,
+                "confidence": 0.5 if index in {3, 4} else 0.9,
+                "assessment_status": (
+                    "UNASSESSABLE"
+                    if not packet["post_compaction_plan_events"]
+                    else ("SUSPECT" if index < 3 else "NO_MATERIAL_CHANGE")
+                ),
+            }
+            for index, packet in enumerate(packets)
+        ]
+        selected, strata, metadata = _select_secondary_state_packets(
+            "scan-run", packets, primary
+        )
+        selected_again, strata_again, metadata_again = _select_secondary_state_packets(
+            "scan-run", list(reversed(packets)), list(reversed(primary))
+        )
+        selected_ids = {row["opportunity_id_hash"] for row in selected}
+        self.assertEqual(len(selected), 30)
+        self.assertTrue({f"{index:064x}" for index in range(5)} <= selected_ids)
+        self.assertEqual(metadata["no_post_control_count"], 3)
+        self.assertEqual(metadata["healthy_no_material_change_count"], 22)
+        self.assertEqual(metadata["distinct_goal_root_count"], 8)
+        self.assertFalse(metadata["maximum_exceeded_by_mandatory_cases"])
+        self.assertEqual(
+            [row["opportunity_id_hash"] for row in selected],
+            list(reversed([row["opportunity_id_hash"] for row in selected_again])),
+        )
+        self.assertEqual(strata, strata_again)
+        self.assertEqual(metadata, metadata_again)
 
     def test_redacts_nested_secrets(self):
         clean, count = redact_value({

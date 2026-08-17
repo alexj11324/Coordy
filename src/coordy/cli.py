@@ -201,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             allow_http_504_retry=args.retry_http_504,
         )
         secondary = ResponsesAPIStateJudge(
-            judge_id=f"responses-secondary:{args.secondary_model}",
+            judge_id=f"responses-secondary-targeted:{args.secondary_model}",
             api_key=api_key,
             base_url=base_url,
             model=args.secondary_model,

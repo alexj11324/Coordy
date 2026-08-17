@@ -121,15 +121,20 @@ Smoke approval binds both the immutable payload SHA-256 and the complete
 non-secret Judge configuration SHA-256; changing the prompt, schema, endpoint,
 model, effort, or timeout requires a new explicit approval.
 
-All State Diff opportunities receive a primary judge. Suspects, low-confidence
-cases, and a deterministic audit sample receive an independently identified
-second judge. Each model call is one direct OpenAI-compatible Responses API
+All State Diff opportunities receive a primary judge. Every suspect and
+low-confidence case, plus a reproducible Goal-root-stratified sample of healthy
+cases and no-post controls, receives an independently identified second judge.
+The target is 30 second-judge cases (normally 20–40 and no more than about 10%);
+if mandatory suspect/low-confidence cases exceed that range, the manifest
+reports the overflow instead of dropping them. Each model call is one direct
+OpenAI-compatible Responses API
 request for one opportunity. The request fixes `instructions`, sends `tools=[]`,
 sets `store=false` and `parallel_tool_calls=false`, and supplies a strict schema
 that admits only the exact opportunity and evidence IDs in that packet. The
 client verifies those fields again in the server response before accepting any
-output. Malformed output and transport errors fail closed without an automatic
-retry; one attempt is allowed, and valid results are atomically checkpointed
+output. Malformed output and unknown transport outcomes fail closed without an
+automatic retry. A concrete HTTP 504 with no request ID, response ID, or usage
+may receive one explicitly authorized, audited retry; valid results are atomically checkpointed
 with input, schema,
 request/response IDs, token usage, and full judge-configuration hashes. API
 smoke dispatch is serial. Every grading path durably records dispatch before

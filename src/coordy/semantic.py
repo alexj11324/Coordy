@@ -1556,6 +1556,100 @@ def _semantic_signature(result: dict[str, Any]) -> tuple[str, tuple[tuple[str, s
     )
 
 
+def _select_secondary_state_packets(
+    scan_run_id: str,
+    packets: list[dict[str, Any]],
+    primary: list[dict[str, Any]],
+    *,
+    target: int = 30,
+    maximum: int = 40,
+    no_post_control_target: int = 3,
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
+    packet_by_id = {str(row["opportunity_id_hash"]): row for row in packets}
+    primary_by_id = {str(row["opportunity_id_hash"]): row for row in primary}
+    mandatory = {
+        opportunity_id
+        for opportunity_id, row in primary_by_id.items()
+        if row["suspected_state_change"] is True
+        or float(row["confidence"]) < LOW_CONFIDENCE_THRESHOLD
+    }
+    selected = set(mandatory)
+    strata = {
+        opportunity_id: (
+            "suspected_state_change"
+            if primary_by_id[opportunity_id]["suspected_state_change"] is True
+            else "low_confidence"
+        )
+        for opportunity_id in mandatory
+    }
+    root_counts: dict[str, int] = {}
+    for opportunity_id in selected:
+        root = str(packet_by_id[opportunity_id].get("goal_thread_id_hash"))
+        root_counts[root] = root_counts.get(root, 0) + 1
+
+    def add_balanced(candidates: list[str], quota: int, stratum: str) -> int:
+        added = 0
+        remaining = set(candidates) - selected
+        while remaining and added < quota:
+            opportunity_id = min(
+                remaining,
+                key=lambda value: (
+                    root_counts.get(
+                        str(packet_by_id[value].get("goal_thread_id_hash")), 0
+                    ),
+                    _hash(f"{scan_run_id}:{stratum}:{value}"),
+                ),
+            )
+            selected.add(opportunity_id)
+            strata[opportunity_id] = stratum
+            root = str(packet_by_id[opportunity_id].get("goal_thread_id_hash"))
+            root_counts[root] = root_counts.get(root, 0) + 1
+            remaining.remove(opportunity_id)
+            added += 1
+        return added
+
+    desired_total = min(target, len(packets))
+    available_slots = max(0, desired_total - len(selected))
+    controls = [
+        opportunity_id
+        for opportunity_id, packet in packet_by_id.items()
+        if not packet.get("post_compaction_plan_events")
+    ]
+    control_count = add_balanced(
+        controls, min(no_post_control_target, available_slots), "no_post_control"
+    )
+    available_slots = max(0, desired_total - len(selected))
+    healthy = [
+        opportunity_id
+        for opportunity_id, row in primary_by_id.items()
+        if row["suspected_state_change"] is False
+        and float(row["confidence"]) >= LOW_CONFIDENCE_THRESHOLD
+        and row["assessment_status"] == "NO_MATERIAL_CHANGE"
+        and packet_by_id[opportunity_id].get("post_compaction_plan_events")
+    ]
+    healthy_count = add_balanced(healthy, available_slots, "healthy_no_material_change")
+    ordered_packets = [
+        packet for packet in packets if str(packet["opportunity_id_hash"]) in selected
+    ]
+    metadata = {
+        "target": target,
+        "maximum": maximum,
+        "mandatory_count": len(mandatory),
+        "selected_count": len(ordered_packets),
+        "no_post_control_count": control_count,
+        "healthy_no_material_change_count": healthy_count,
+        "distinct_goal_root_count": len({
+            str(packet.get("goal_thread_id_hash")) for packet in ordered_packets
+        }),
+        "maximum_exceeded_by_mandatory_cases": len(mandatory) > maximum,
+        "shortfall_reason": (
+            "insufficient eligible controls or healthy cases"
+            if len(ordered_packets) < desired_total else None
+        ),
+    }
+    return ordered_packets, strata, metadata
+
+
 def _run_s0b_state_diff_locked(
     workspace: Path,
     primary_judge: StateDiffJudge,
@@ -1578,30 +1672,9 @@ def _run_s0b_state_diff_locked(
         primary_judge, packets, batch_size, primary_path, workers
     )
     primary_by_id = {str(row["opportunity_id_hash"]): row for row in primary}
-    secondary_ids = {
-        str(row["opportunity_id_hash"])
-        for row in primary
-        if row["suspected_state_change"] is True
-        or float(row["confidence"]) < LOW_CONFIDENCE_THRESHOLD
-        or int(str(row["opportunity_id_hash"])[:8], 16) % 10 == 0
-    }
-    calibration_seed_ids = [
-        str(row["opportunity_id_hash"])
-        for row in sorted(
-            primary,
-            key=lambda row: (
-                not bool(row["suspected_state_change"]),
-                float(row["confidence"]) >= LOW_CONFIDENCE_THRESHOLD,
-                _hash(f'{manifest["scan_run_id"]}:{row["opportunity_id_hash"]}:calibration'),
-            ),
-        )[:min(30, len(primary))]
-    ]
-    secondary_ids.update(calibration_seed_ids)
-    if packets and not secondary_ids:
-        secondary_ids.add(min(str(packet["opportunity_id_hash"]) for packet in packets))
-    secondary_packets = [
-        packet for packet in packets if str(packet["opportunity_id_hash"]) in secondary_ids
-    ]
+    secondary_packets, secondary_strata, secondary_selection = (
+        _select_secondary_state_packets(manifest["scan_run_id"], packets, primary)
+    )
     secondary = _run_judge_batches(
         secondary_judge, secondary_packets, batch_size, secondary_path, workers
     )
@@ -1637,20 +1710,28 @@ def _run_s0b_state_diff_locked(
         }
         consensus.append(row)
 
-    calibration_target = min(30, len(consensus))
+    calibration_target = min(30, len(secondary))
     priority_groups = (
         (
             "disagreement_or_low_confidence",
-            [row for row in consensus if row["requires_human_calibration"]],
+            [
+                row for row in consensus
+                if row["secondary_judge_id"] is not None
+                and row["requires_human_calibration"]
+            ],
         ),
         (
             "suspected_state_change",
-            [row for row in consensus if row["suspected_state_change"] is True],
+            [
+                row for row in consensus
+                if row["secondary_judge_id"] is not None
+                and row["suspected_state_change"] is True
+            ],
         ),
         (
             "deterministic_control",
             sorted(
-                consensus,
+                [row for row in consensus if row["secondary_judge_id"] is not None],
                 key=lambda row: _hash(
                     f'{manifest["scan_run_id"]}:{row["opportunity_id_hash"]}:calibration'
                 ),
@@ -1684,6 +1765,7 @@ def _run_s0b_state_diff_locked(
                 "opportunity_id_hash": opportunity_id,
                 "goal_thread_id_hash": packet_by_id[opportunity_id].get("goal_thread_id_hash"),
                 "selection_stratum": stratum,
+                "secondary_selection_stratum": secondary_strata[opportunity_id],
                 "machine_status": row["status"],
                 "original_state": original_state,
                 "summary_or_post_state": retained_or_post_state,
@@ -1715,6 +1797,7 @@ def _run_s0b_state_diff_locked(
                 "opportunity_id_hash": opportunity_id,
                 "goal_thread_id_hash": packet_by_id[opportunity_id].get("goal_thread_id_hash"),
                 "selection_stratum": "deterministic_control",
+                "secondary_selection_stratum": secondary_strata[opportunity_id],
                 "machine_status": row["status"],
                 "original_state": [
                     item["statement"] for state_type in STATE_TYPES
@@ -1764,6 +1847,7 @@ def _run_s0b_state_diff_locked(
         "secondary_judge_configuration": getattr(secondary_judge, "configuration", None),
         "primary_state_diff_count": len(primary),
         "secondary_state_diff_count": len(secondary),
+        "secondary_selection": secondary_selection,
         "primary_model_calls_lower_bound": sum(int(row.get("judge_attempt", 1)) for row in primary),
         "secondary_model_calls_lower_bound": sum(int(row.get("judge_attempt", 1)) for row in secondary),
         "primary_model_token_usage": _sum_api_usage(primary),
