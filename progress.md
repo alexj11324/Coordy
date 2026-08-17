@@ -77,6 +77,7 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - The approved v26 direct-API smoke ran serially and stopped after 5 dispatches, with no retry. Four results passed local validation: all 3 no-post-plan controls were correctly `UNASSESSABLE`, and the first post-plan case was `NO_MATERIAL_CHANGE`. The fifth API response was schema-valid but failed the minimum earlier-to-post evidence comparison, so the remaining 7 cases were not sent. The five calls used 153,491 input and 7,889 output tokens (161,380 total, including 603 reasoning tokens). The failure ledger retains request/response/token provenance, but this pre-diagnostic run did not retain the rejected semantic body; subsequent fresh runs will store a redacted rejected result. This is a Judge safety/evidence-binding failure, not evidence for or against long-term drift prevalence.
 - The separately approved v5 smoke used an isolated ignored workspace and stopped after 4 dispatches, with no retry. Three controls passed; the fourth response cited a concrete goal item by index but added another pre-compaction evidence ID belonging to a different state item, so local binding validation rejected it. The four calls used 111,788 input and 5,236 output tokens (117,024 total, including 493 reasoning tokens). The redacted rejected result, request/response IDs, token usage, result hash, and dispatch snapshot hash are retained. This remains a Judge contract failure, not evidence for or against long-term drift.
 - The approved v6 smoke completed 12/12 serial dispatches: all 3 controls were `UNASSESSABLE`, all 9 post-plan cases were assessable, and none was marked suspect. It used 365,646 input and 20,806 output tokens (386,452 total, including 2,175 reasoning tokens). Result/config hashes, request/response provenance, 0600 permissions, and privacy probes passed. This validates the safety/evidence-binding seam only; it does not establish Judge accuracy or drift prevalence.
+- The first v6 full-population attempt was stopped after one response used an out-of-range numeric pre-state index. Before interruption it created 83 dispatch records (78 validated, 4 outcome-unknown in flight, 1 semantic failure), checkpointed 72 results, and recorded 2,848,700 known tokens. The fix removes numeric indices in favor of an exact copied pre-state statement and bounds concurrent submission to one worker-sized batch, so a future failure cannot drain the remaining population. No v6 result is reused under v7.
 - The earlier seven-case and four-case `STOP` attempts were invalid. The first capped raw signals before deduplication; the second scanned only 8 MiB prefixes and treated a keyword subset as a global upper bound. Both conclusions are explicitly retracted.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
 - Only 8 independently timed multi-hour Goals exist in the v26 snapshot; the other 92 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
@@ -86,8 +87,9 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-The simplified v6 State Diff Judge contract passed its frozen smoke. Before any
-population-level claim, run the full blinded State Diff population and the
+The simplified v6 State Diff Judge contract passed its frozen smoke; v7 removes
+the numeric-index ambiguity exposed by the first full run. Before any
+population-level claim, rerun the full blinded State Diff population and the
 independent/human calibration gates required by the semantic amendment.
 Do not resend the failed opportunity automatically, do not continue the remaining
 seven cases from this aborted run, and do not authorize the 472-case population.

@@ -1158,7 +1158,7 @@ class CoordyTests(unittest.TestCase):
             },
             "diffs": [{
                 "state_type": "constraint",
-                "pre_state_index": 0,
+                "pre_state_statement": "The constraint is active.",
                 "status": "preserved",
                 "downstream_relevance": "NONE",
                 "post_evidence_ids": ["e2"],
@@ -1197,8 +1197,8 @@ class CoordyTests(unittest.TestCase):
             validate_state_diff_result(packet, wrong_phase)
 
         missing_state_reference = json.loads(json.dumps(valid))
-        missing_state_reference["diffs"][0]["pre_state_index"] = 1
-        with self.assertRaisesRegex(ValueError, "extracted pre-state entry"):
+        missing_state_reference["diffs"][0]["pre_state_statement"] = "Not extracted."
+        with self.assertRaisesRegex(ValueError, "bound pre-state entry"):
             validate_state_diff_result(packet, missing_state_reference)
 
         summary_only_packet = json.loads(json.dumps(packet))
@@ -1281,7 +1281,7 @@ class CoordyTests(unittest.TestCase):
                             }] if key == "goal" else []) for key in packet["required_state_types"]},
                             "diffs": [{
                                 "state_type": "goal",
-                                "pre_state_index": 0,
+                                "pre_state_statement": "The goal remains active.",
                                 "status": "missing" if self.disagree else "preserved",
                                 "downstream_relevance": "DIRECT" if self.disagree else "NONE",
                                 "post_evidence_ids": [post],
@@ -1456,7 +1456,7 @@ class CoordyTests(unittest.TestCase):
                         }] if key == "constraint" else []) for key in packet["required_state_types"]},
                         "diffs": [{
                             "state_type": "constraint",
-                            "pre_state_index": 0,
+                            "pre_state_statement": "The constraint remains active.",
                             "status": "missing",
                             "downstream_relevance": "DIRECT",
                             "post_evidence_ids": [post],
@@ -1674,7 +1674,7 @@ class CoordyTests(unittest.TestCase):
             }] if key == "goal" else []) for key in STATE_TYPES},
             "diffs": [{
                 "state_type": "goal",
-                "pre_state_index": 0,
+                "pre_state_statement": "The goal remains active.",
                 "status": "preserved",
                 "downstream_relevance": "NONE",
                 "rationale": "The goal remains active.",
@@ -1792,7 +1792,7 @@ class CoordyTests(unittest.TestCase):
             base_url="https://example.invalid",
             dispatch_log_dir=Path(semantic_tmp.name),
         )
-        result["diffs"][0]["pre_state_index"] = 1
+        result["diffs"][0]["pre_state_statement"] = "Not extracted."
         response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
         with patch("coordy.semantic.urllib.request.build_opener", return_value=FakeOpener()):
             with self.assertRaisesRegex(NonRetryableJudgeError, "semantic validation"):
@@ -1800,10 +1800,10 @@ class CoordyTests(unittest.TestCase):
         semantic_record = json.loads(next(Path(semantic_tmp.name).glob("*.json")).read_text())
         self.assertEqual(semantic_record["status"], "SEMANTIC_VALIDATION_FAILED_NO_RETRY")
         self.assertEqual(
-            semantic_record["rejected_result"][0]["diffs"][0]["pre_state_index"],
-            1,
+            semantic_record["rejected_result"][0]["diffs"][0]["pre_state_statement"],
+            "Not extracted.",
         )
-        result["diffs"][0]["pre_state_index"] = 0
+        result["diffs"][0]["pre_state_statement"] = "The goal remains active."
         response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1883,7 +1883,7 @@ class CoordyTests(unittest.TestCase):
 
     def test_parallel_state_failures_preserve_other_completed_checkpoints(self):
         packets = []
-        for index in range(3):
+        for index in range(5):
             packets.append({
                 "opportunity_id_hash": f"opportunity-{index}",
                 "scan_run_id": "scan",
@@ -1899,8 +1899,12 @@ class CoordyTests(unittest.TestCase):
             model = "fake"
             configuration_sha256 = "config"
 
+            def __init__(self):
+                self.calls = []
+
             def grade(self, batch):
                 packet = batch[0]
+                self.calls.append(packet["opportunity_id_hash"])
                 if packet["opportunity_id_hash"] == "opportunity-1":
                     raise RuntimeError("expected isolated failure")
                 index = packet["opportunity_id_hash"].rsplit("-", 1)[1]
@@ -1913,7 +1917,7 @@ class CoordyTests(unittest.TestCase):
                     }] if key == "goal" else []) for key in STATE_TYPES},
                     "diffs": [{
                         "state_type": "goal",
-                        "pre_state_index": 0,
+                        "pre_state_statement": "The goal remains active.",
                         "status": "preserved",
                         "downstream_relevance": "NONE",
                         "rationale": "Bound comparison.",
@@ -1926,15 +1930,17 @@ class CoordyTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             checkpoint = Path(tmp) / "checkpoint.jsonl"
+            judge = PartialFailureJudge()
             with self.assertRaisesRegex(RuntimeError, "successful concurrent results"):
                 _run_judge_batches(
-                    PartialFailureJudge(), packets, 1, checkpoint, workers=3
+                    judge, packets, 1, checkpoint, workers=2
                 )
             saved = [json.loads(line) for line in checkpoint.read_text().splitlines()]
             self.assertEqual(
                 {row["opportunity_id_hash"] for row in saved},
-                {"opportunity-0", "opportunity-2"},
+                {"opportunity-0"},
             )
+            self.assertEqual(set(judge.calls), {"opportunity-0", "opportunity-1"})
 
     def test_nonretryable_judge_error_does_not_repeat_external_request(self):
         packet = {

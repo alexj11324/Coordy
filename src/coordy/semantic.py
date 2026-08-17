@@ -45,7 +45,7 @@ STATE_PHASES = {
     "post_compaction_plan",
 }
 LOW_CONFIDENCE_THRESHOLD = 0.80
-STATE_JUDGE_PROTOCOL_VERSION = "state-diff-v6-indexed-pre-state"
+STATE_JUDGE_PROTOCOL_VERSION = "state-diff-v7-statement-bound-pre-state"
 CAUSAL_JUDGE_PROTOCOL_VERSION = "causal-v4-responses-singleton-exact-evidence"
 RESPONSES_API_PROTOCOL_VERSION = "openai-compatible-responses-v1"
 SEMANTIC_WRITER_LOCK = ".s0b_semantic_writer.lock"
@@ -66,8 +66,8 @@ STATE_JUDGE_INSTRUCTIONS = (
     "engineering success/failure, causality, Type A/B/C, or prevalence; those outcomes are intentionally "
     "hidden. assessment_status SUSPECT and suspected_state_change true require at least one missing, "
     "contradicted, or stale-reactivated item with DIRECT downstream relevance. Every diff must cite "
-    "post_evidence_ids must cite only post_compaction_plan evidence. Each diff must identify "
-    "pre_state_index in states[state_type], and that entry must be a pre_compaction statement; its "
+    "post_evidence_ids must cite only post_compaction_plan evidence. Each diff must copy exactly one "
+    "pre_state_statement from a pre_compaction entry in states[state_type]; that entry's "
     "phase-bound evidence is the sole pre-state evidence for the diff. Return exactly "
     "one schema-valid result per input "
     "opportunity. Empty state categories are allowed. Be concise: use at most two entries per state "
@@ -142,7 +142,7 @@ def _state_diff_batch_schema(
         "additionalProperties": False,
         "required": [
             "state_type",
-            "pre_state_index",
+            "pre_state_statement",
             "status",
             "downstream_relevance",
             "rationale",
@@ -150,7 +150,7 @@ def _state_diff_batch_schema(
         ],
         "properties": {
             "state_type": {"type": "string", "enum": list(STATE_TYPES)},
-            "pre_state_index": {"type": "integer", "minimum": 0, "maximum": 1},
+            "pre_state_statement": {"type": "string", "maxLength": 500},
             "status": {"type": "string", "enum": sorted(STATE_DIFF_STATUSES)},
             "downstream_relevance": {"type": "string", "enum": sorted(DOWNSTREAM_RELEVANCE)},
             "rationale": {"type": "string", "maxLength": 500},
@@ -1243,8 +1243,7 @@ def validate_state_diff_result(
         if (
             not isinstance(row, dict)
             or row.get("state_type") not in STATE_TYPES
-            or isinstance(row.get("pre_state_index"), bool)
-            or not isinstance(row.get("pre_state_index"), int)
+            or not isinstance(row.get("pre_state_statement"), str)
             or row.get("status") not in STATE_DIFF_STATUSES
             or row.get("downstream_relevance") not in DOWNSTREAM_RELEVANCE
             or not isinstance(row.get("rationale"), str)
@@ -1255,15 +1254,12 @@ def validate_state_diff_result(
         post_evidence_ids = set(_validate_evidence_ids(
             row.get("post_evidence_ids"), post_ids
         ))
-        state_rows = states[row["state_type"]]
-        pre_state_index = row["pre_state_index"]
-        if pre_state_index < 0 or pre_state_index >= len(state_rows):
-            raise ValueError("each state diff must reference an extracted pre-state entry")
-        referenced_state = state_rows[pre_state_index]
-        if (
-            referenced_state["phase"] != "pre_compaction"
-            or not post_evidence_ids
-        ):
+        pre_state_statements = {
+            state["statement"]
+            for state in states[row["state_type"]]
+            if state["phase"] == "pre_compaction"
+        }
+        if row["pre_state_statement"] not in pre_state_statements or not post_evidence_ids:
             raise ValueError(
                 "each state diff requires a bound pre-state entry and post-plan evidence"
             )
@@ -1461,26 +1457,27 @@ def _run_judge_batches(
         _secure_write(checkpoint_path, checkpoint_content)
 
     if batch_size == 1 and workers > 1:
-        failures: list[Exception] = []
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            pending = {
-                executor.submit(grade_singleton_with_retries, packet): packet
-                for packet in missing
-            }
-            for future in as_completed(pending):
-                try:
-                    completed_rows = future.result()
-                except Exception as exc:
-                    failures.append(exc)
-                    continue
-                for row in completed_rows:
-                    saved_by_id[str(row["opportunity_id_hash"])] = row
-                write_checkpoint()
-        if failures:
-            raise RuntimeError(
-                f"judge {judge.judge_id} failed {len(failures)} isolated opportunities; "
-                "successful concurrent results were checkpointed"
-            ) from failures[0]
+        for start in range(0, len(missing), workers):
+            failures: list[Exception] = []
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                pending = {
+                    executor.submit(grade_singleton_with_retries, packet): packet
+                    for packet in missing[start:start + workers]
+                }
+                for future in as_completed(pending):
+                    try:
+                        completed_rows = future.result()
+                    except Exception as exc:
+                        failures.append(exc)
+                        continue
+                    for row in completed_rows:
+                        saved_by_id[str(row["opportunity_id_hash"])] = row
+                    write_checkpoint()
+            if failures:
+                raise RuntimeError(
+                    f"judge {judge.judge_id} failed {len(failures)} isolated opportunities; "
+                    "successful concurrent results were checkpointed"
+                ) from failures[0]
         return [saved_by_id[str(packet["opportunity_id_hash"])] for packet in packets]
 
     for start in range(0, len(missing), batch_size):
