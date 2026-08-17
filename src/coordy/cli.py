@@ -27,6 +27,8 @@ def parser() -> argparse.ArgumentParser:
     screen.add_argument("--codex-home", type=Path, default=Path.home() / ".codex")
     screen.add_argument("--max-sessions", type=int, default=100)
     screen.add_argument("--exclude-session", action="append", default=[])
+    screen.add_argument("--goals-db", type=Path)
+    screen.add_argument("--min-goal-seconds", type=int, default=7200)
     review = commands.add_parser("review-s0", help="prepare privacy-safe S0 evidence cards")
     review.add_argument("--workspace", type=Path, required=True)
     review.add_argument("--max-reviews", type=int, default=12)
@@ -53,11 +55,17 @@ def main(argv: list[str] | None = None) -> int:
             codex_executable=args.codex_executable,
         ), sort_keys=True))
     elif args.command == "screen":
+        default_goals_db = args.codex_home / "goals_1.sqlite"
+        goals_db = args.goals_db if args.goals_db is not None else (
+            default_goals_db if default_goals_db.is_file() else None
+        )
         print(json.dumps(run_s0_screening(
             args.workspace,
             [args.codex_home / "sessions", args.codex_home / "archived_sessions"],
             max_sessions=args.max_sessions,
             exclude_session_ids=args.exclude_session,
+            goal_db=goals_db,
+            min_goal_seconds=args.min_goal_seconds,
         ), sort_keys=True))
     elif args.command == "review-s0":
         print(json.dumps(prepare_s0_review(args.workspace, max_reviews=args.max_reviews), sort_keys=True))

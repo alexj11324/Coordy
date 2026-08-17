@@ -19,6 +19,8 @@ been emitted.
 - Corrected candidate selection to deduplicate by frozen source and compaction episode before applying the 30-card cap.
 - Bound scan, evidence-card, review-queue, and adjudication artifacts with a scan-run identity and SHA-256 checks.
 - Left A/B/C unclassified at S0 until external-change exclusions and a causal state-loss chain are reconstructed.
+- Added a frozen S0 sampling amendment that prioritizes measured two-hour-plus Goals without changing any decision gate.
+- Added read-only Goal-catalog discovery, parent-thread lineage, Goal-balanced session/candidate sampling, and first-session-meta identity locking.
 
 ## Outputs
 
@@ -27,6 +29,7 @@ been emitted.
 - `protocol/metrics_v1.json`
 - `protocol/decision_thresholds_v1.json`
 - `protocol/screening_v1.json`
+- `protocol/screening_sampling_amendment_v2.json`
 - Runtime discovery manifests are written below an ignored workspace.
 
 ## Data counts
@@ -35,13 +38,14 @@ been emitted.
 - Archived rollout JSONL: 696 files discovered.
 - Candidate source interfaces: 5.
 - Indexed sessions: 0 (Phase 0B not executed).
-- S0 eligible sessions: 100 across 20 hashed repository identities; 50 contain an explicit compaction marker.
-- S0 corrected scan: 217 files inspected, 31 auxiliary approval-reviewer sessions excluded, 100 eligible sessions, and 0 parse errors.
-- Candidate population: 301 raw signals and 159 unique signal episodes.
-- Review sample: 30 episode-diverse, frozen-prefix-verified evidence cards; 129 additional unique episodes remain outside the cap.
-- Structural candidates within the sample: 26; highest-ranked user review queue: 12.
+- Goal catalog: 38 total Goals; 7 lasted at least 7,200 seconds, including 6 over 6 hours.
+- All 7 multi-hour Goal roots linked to rollout history, yielding 204 root/descendant rollout files.
+- S0 selected 100 Goal-lineage sessions using root-balanced sampling: 7 independent Goal roots and 93 descendants across 4 hashed repository identities.
+- Candidate population: 370 raw signals and 230 unique signal episodes after excluding injected Goal context before signal matching.
+- Review sample: 30 Goal-balanced, episode-diverse, frozen-prefix-verified evidence cards spanning all 7 Goal roots; 200 additional unique episodes remain outside the cap.
+- Structural candidates within the sample: 17; the reviewable queue contains 10 cases spanning 5 Goal roots.
 - All cases remain `uncertain`; `decision` is `null` and the frozen S0 decision gates have not yet been evaluated.
-- Authoritative ignored runtime workspace: `.coordy/screening-s0-v8/data/screening/`.
+- Authoritative ignored runtime workspace: `.coordy/screening-s0-v17/data/screening/`.
 
 ## Failures or missing evidence
 
@@ -51,16 +55,17 @@ been emitted.
 - No cases, replays, or independent model evaluations have run.
 - The earlier seven-case `STOP` was invalid: raw signals had been capped before episode deduplication, so duplicate-heavy episodes hid unseen unique episodes. That conclusion is retracted.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
+- Only 7 independently timed multi-hour Goals exist locally; the other 93 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
 - The one-repository concentration check is an explicit PIVOT heuristic, not proof that a narrow scenario is high-value.
 - S1–S3 and confirmatory validation have not run because S0 awaits user review and adjudication.
 
 ## Next
 
-Collect one `YES`/`NO`/`UNCERTAIN` answer for each of the 12 frozen review
+Collect one `YES`/`NO`/`UNCERTAIN` answer for each of the 10 Goal-backed review
 cases, then run S0 adjudication. Proceed to causal case construction only if
 the frozen prevalence gates pass; do not proceed directly to S1.
 
 ## Early-stop status
 
-`PENDING_USER_REVIEW` — 12 episode-diverse cases require user confirmation.
+`PENDING_USER_REVIEW` — 10 Goal-backed, episode-diverse cases require user confirmation.
 Screening may later emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`.

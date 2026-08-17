@@ -4,14 +4,26 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from .redaction import redact_text
 
-SCANNER_VERSION = "s0-v3"
+SCANNER_VERSION = "s0-v5"
 MAX_SCAN_BYTES_PER_SESSION = 8 * 1024 * 1024
+MAX_SESSION_META_BYTES = 256 * 1024
+REQUIRED_GOAL_COLUMNS = {
+    "thread_id",
+    "status",
+    "tokens_used",
+    "time_used_seconds",
+    "created_at_ms",
+    "updated_at_ms",
+}
 
 SIGNALS = {
     "user_correction": ("你忘了", "之前已经决定", "不是原来的要求", "跑偏", "re-read", "replan"),
@@ -19,6 +31,10 @@ SIGNALS = {
     "test_failure": ("test failed", "tests failed", "failed (", "assertionerror", "build failed"),
     "plan_rewrite": ("plan rewrite", "重新规划", "重新实现", "rewrite"),
 }
+GOAL_CONTEXT = re.compile(
+    r"<codex_internal_context\b[^>]*\bsource\s*=\s*['\"]goal['\"][^>]*>.*?(?:</codex_internal_context>|$)",
+    flags=re.I | re.S,
+)
 
 
 def _now() -> str:
@@ -44,7 +60,7 @@ def _timestamps_are_close(left: str | None, right: str | None, seconds: int = 5)
 
 def _strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
-        yield value[:4096]
+        yield GOAL_CONTEXT.sub("[goal context withheld]", value)[:4096]
     elif isinstance(value, list):
         for item in value:
             yield from _strings(item)
@@ -88,7 +104,235 @@ def _secure_write(path: Path, content: str) -> None:
         handle.write(content)
 
 
-def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+def _file_signature(path: Path) -> tuple[int, int, str] | None:
+    if not path.exists():
+        return None
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns, _hash(path.read_bytes())
+
+
+def _snapshot_sqlite_database(source: Path, destination_dir: Path) -> Path:
+    """Copy a live SQLite database and sidecars without opening the source."""
+    source_paths = [source, Path(f"{source}-wal"), Path(f"{source}-shm")]
+    destination = destination_dir / source.name
+    for _ in range(3):
+        before = {path: _file_signature(path) for path in source_paths}
+        if before[source] is None:
+            raise RuntimeError(f"Goal database does not exist: {source}")
+        for path, signature in before.items():
+            target = destination_dir / path.name
+            if signature is not None:
+                shutil.copyfile(path, target)
+            elif target.exists():
+                target.unlink()
+        after = {path: _file_signature(path) for path in source_paths}
+        copied = {
+            path: _file_signature(destination_dir / path.name) if signature is not None else None
+            for path, signature in before.items()
+        }
+        copied_matches = all(
+            before[path] is None
+            or (
+                copied[path] is not None
+                and copied[path][0] == before[path][0]
+                and copied[path][2] == before[path][2]
+            )
+            for path in source_paths
+        )
+        if before == after and copied_matches:
+            return destination
+    raise RuntimeError("Goal database changed while a read-only filesystem snapshot was created")
+
+
+def _read_goal_catalog(goal_db: Path, minimum_seconds: int) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    if not goal_db.is_file():
+        raise RuntimeError(f"Goal database does not exist: {goal_db}")
+    with tempfile.TemporaryDirectory(prefix="coordy-goal-snapshot-") as temporary:
+        snapshot = _snapshot_sqlite_database(goal_db, Path(temporary))
+        uri = f"{snapshot.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as database:
+            database.execute("PRAGMA query_only = ON")
+            data_version = int(database.execute("PRAGMA data_version").fetchone()[0])
+            table = database.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='thread_goals'"
+            ).fetchone()
+            columns = {
+                str(row[1])
+                for row in database.execute("PRAGMA table_info(thread_goals)")
+            } if table else set()
+            if not REQUIRED_GOAL_COLUMNS.issubset(columns):
+                raise RuntimeError("unsupported Goal database schema")
+            rows = database.execute(
+                """SELECT thread_id, status, time_used_seconds
+                   FROM thread_goals
+                   WHERE time_used_seconds >= ?
+                   ORDER BY time_used_seconds DESC, thread_id""",
+                (minimum_seconds,),
+            ).fetchall()
+    catalog: dict[str, dict[str, Any]] = {}
+    for thread_id, status, time_used_seconds in rows:
+        key = str(thread_id)
+        if key in catalog:
+            raise RuntimeError("duplicate Goal thread identity in catalog snapshot")
+        catalog[key] = {
+            "status": str(status),
+            "time_used_seconds": int(time_used_seconds),
+        }
+    schema_signature = _hash("\n".join(sorted(columns)))
+    return catalog, {
+        "goal_catalog_status": "verified_read_only",
+        "goal_minimum_seconds": minimum_seconds,
+        "multi_hour_goals_discovered": len(catalog),
+        "goal_schema_signature_sha256": schema_signature,
+        "goal_catalog_data_version": data_version,
+    }
+
+
+def _read_rollout_identity(path: Path) -> dict[str, Any] | None:
+    before = path.stat()
+    bytes_read = 0
+    identity = None
+    with path.open("rb") as handle:
+        while bytes_read < MAX_SESSION_META_BYTES:
+            remaining = MAX_SESSION_META_BYTES - bytes_read
+            raw_line = handle.readline(remaining + 1)
+            if not raw_line or len(raw_line) > remaining:
+                break
+            bytes_read += len(raw_line)
+            if not raw_line.strip():
+                continue
+            try:
+                row = json.loads(raw_line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if not isinstance(row, dict) or row.get("type") != "session_meta":
+                continue
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            session_id = payload.get("id") or payload.get("session_id")
+            if not isinstance(session_id, str):
+                break
+            parent_thread_id = None
+            source = payload.get("source")
+            if isinstance(source, dict):
+                subagent = source.get("subagent")
+                if isinstance(subagent, dict):
+                    spawn = subagent.get("thread_spawn")
+                    if isinstance(spawn, dict) and isinstance(spawn.get("parent_thread_id"), str):
+                        parent_thread_id = spawn["parent_thread_id"]
+            identity = {
+                "session_id": session_id,
+                "parent_thread_id": parent_thread_id,
+            }
+            break
+    after = path.stat()
+    if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+        raise RuntimeError("rollout changed while session lineage was read")
+    return identity
+
+
+def _goal_lineage(
+    files: list[Path],
+    long_goals: dict[str, dict[str, Any]],
+) -> tuple[dict[Path, dict[str, Any]], set[str]]:
+    identities = {path: _read_rollout_identity(path) for path in files}
+    parent_candidates: dict[str, set[str | None]] = {}
+    for row in identities.values():
+        if row is not None:
+            parent_candidates.setdefault(row["session_id"], set()).add(row.get("parent_thread_id"))
+    conflicts = [session_id for session_id, parents in parent_candidates.items() if len(parents) > 1]
+    if conflicts:
+        raise RuntimeError(f"conflicting parent lineage for session {_hash(conflicts[0])}")
+    parent_by_session = {
+        session_id: next(iter(parents))
+        for session_id, parents in parent_candidates.items()
+    }
+    lineage: dict[Path, dict[str, Any]] = {}
+    linked_roots: set[str] = set()
+    for path, identity in identities.items():
+        if identity is None:
+            continue
+        cursor = identity["session_id"]
+        depth = 0
+        seen = set()
+        while cursor:
+            if cursor in seen:
+                raise RuntimeError(f"cycle in rollout lineage at session {_hash(cursor)}")
+            seen.add(cursor)
+            if cursor in long_goals:
+                goal = long_goals[cursor]
+                lineage[path] = {
+                    "goal_thread_id_hash": _hash(cursor),
+                    "goal_time_used_seconds": goal["time_used_seconds"],
+                    "goal_lineage_depth": depth,
+                }
+                linked_roots.add(cursor)
+                break
+            cursor = parent_by_session.get(cursor)
+            depth += 1
+    return lineage, linked_roots
+
+
+def _goal_balanced_file_order(files: list[Path], lineage: dict[Path, dict[str, Any]]) -> list[Path]:
+    groups: dict[str, list[Path]] = {}
+    for path in files:
+        if path in lineage:
+            groups.setdefault(str(lineage[path]["goal_thread_id_hash"]), []).append(path)
+    for paths in groups.values():
+        paths.sort(
+            key=lambda path: (
+                -int(lineage[path]["goal_lineage_depth"] == 0),
+                -path.stat().st_mtime_ns,
+                -path.stat().st_size,
+            )
+        )
+    group_order = sorted(
+        groups,
+        key=lambda root_hash: (
+            -int(lineage[groups[root_hash][0]]["goal_time_used_seconds"]),
+            root_hash,
+        ),
+    )
+    balanced = []
+    while any(groups[root_hash] for root_hash in group_order):
+        for root_hash in group_order:
+            if groups[root_hash]:
+                balanced.append(groups[root_hash].pop(0))
+    remaining = [path for path in files if path not in lineage]
+    remaining.sort(key=lambda path: (path.stat().st_mtime_ns, path.stat().st_size), reverse=True)
+    return balanced + remaining
+
+
+def _goal_balanced_candidates(rows: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            -int(row["engineering_consequence_signal"]),
+            -row["score"],
+            -row["supporting_signal_count"],
+            str(row.get("timestamp")),
+        ),
+    )
+    groups: dict[str, list[dict[str, Any]]] = {}
+    group_order = []
+    for row in ranked:
+        group = str(row.get("goal_thread_id_hash") or "not_goal_backed")
+        if group not in groups:
+            groups[group] = []
+            group_order.append(group)
+        groups[group].append(row)
+    selected = []
+    while len(selected) < limit and any(groups[group] for group in group_order):
+        for group in group_order:
+            if groups[group] and len(selected) < limit:
+                selected.append(groups[group].pop(0))
+    return selected
+
+
+def _scan_rollout(
+    path: Path,
+    *,
+    additional_eligibility_reason: str | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     stat_before = path.stat()
     digest = hashlib.sha256()
     session_id: str | None = None
@@ -103,6 +347,7 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
     current_compaction_id_hash: str | None = None
     current_compaction_timestamp: str | None = None
     exclusion_reason: str | None = None
+    conflicting_session_meta_count = 0
     bytes_read = 0
     parse_errors = 0
     with path.open("rb") as handle:
@@ -137,16 +382,18 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
             payload_type = str(payload.get("type") or "")
             if record_type == "session_meta":
                 raw_id = payload.get("id") or payload.get("session_id")
-                if isinstance(raw_id, str):
+                if isinstance(raw_id, str) and session_id is None:
                     session_id = raw_id
-                cwd = payload.get("cwd")
-                if isinstance(cwd, str):
-                    cwd_hash = _hash(cwd)
-                source = payload.get("source")
-                if isinstance(source, dict):
-                    subagent = source.get("subagent")
-                    if isinstance(subagent, dict) and subagent.get("other") == "guardian":
-                        exclusion_reason = "approval_reviewer_session"
+                    cwd = payload.get("cwd")
+                    if isinstance(cwd, str):
+                        cwd_hash = _hash(cwd)
+                    source = payload.get("source")
+                    if isinstance(source, dict):
+                        subagent = source.get("subagent")
+                        if isinstance(subagent, dict) and subagent.get("other") == "guardian":
+                            exclusion_reason = "approval_reviewer_session"
+                elif isinstance(raw_id, str) and raw_id != session_id:
+                    conflicting_session_meta_count += 1
             if record_type == "response_item" and payload_type in {"function_call", "custom_tool_call"}:
                 tool_calls += 1
             explicit = record_type in {"compacted", "context_compacted"} or payload_type == "context_compacted"
@@ -188,6 +435,8 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
         eligible_reasons.append("compaction_or_summary")
     if event_count >= 100 or tool_calls >= 20 or stat_before.st_size >= 1_000_000:
         eligible_reasons.append("long_or_multistage")
+    if additional_eligibility_reason:
+        eligible_reasons.append(additional_eligibility_reason)
     if not eligible_reasons:
         return None, []
     session = {
@@ -206,6 +455,7 @@ def _scan_rollout(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any
         "compaction_count_scanned": compactions,
         "summary_count_scanned": summaries,
         "parse_errors": parse_errors,
+        "conflicting_session_meta_count": conflicting_session_meta_count,
         "eligible_reasons": eligible_reasons,
         "candidate_signal_count": len(signals),
         "exclusion_reason": exclusion_reason,
@@ -226,39 +476,77 @@ def run_s0_screening(
     max_sessions: int = 100,
     max_candidates: int = 30,
     exclude_session_ids: Iterable[str] = (),
+    goal_db: Path | None = None,
+    min_goal_seconds: int = 7200,
 ) -> dict[str, Any]:
     if not 1 <= max_sessions <= 100:
         raise ValueError("max_sessions must be between 1 and 100")
     if not 1 <= max_candidates <= 30:
         raise ValueError("max_candidates must be between 1 and 30")
+    if min_goal_seconds <= 0:
+        raise ValueError("min_goal_seconds must be positive")
     excluded = set(exclude_session_ids)
     scan_run_id = _hash(os.urandom(32))
     files = []
     for root in rollout_roots:
         if root.is_dir():
             files.extend(root.rglob("*.jsonl"))
-    files.sort(key=lambda path: (path.stat().st_mtime_ns, path.stat().st_size), reverse=True)
+    long_goals: dict[str, dict[str, Any]] = {}
+    goal_summary = {
+        "goal_catalog_status": "not_configured",
+        "goal_minimum_seconds": min_goal_seconds,
+        "multi_hour_goals_discovered": 0,
+        "goal_schema_signature_sha256": None,
+        "goal_catalog_data_version": None,
+    }
+    goal_lineage: dict[Path, dict[str, Any]] = {}
+    linked_goal_roots: set[str] = set()
+    if goal_db is not None:
+        long_goals, goal_summary = _read_goal_catalog(goal_db, min_goal_seconds)
+        goal_lineage, linked_goal_roots = _goal_lineage(files, long_goals)
+    files = _goal_balanced_file_order(files, goal_lineage)
     sessions: list[dict[str, Any]] = []
     signals: list[dict[str, Any]] = []
     inspected = 0
     auxiliary_excluded = 0
+    duplicate_sessions_excluded = 0
+    selected_session_ids: set[str] = set()
     for path in files:
         if len(sessions) >= max_sessions:
             break
         inspected += 1
-        session, found = _scan_rollout(path)
+        lineage = goal_lineage.get(path)
+        session, found = _scan_rollout(
+            path,
+            additional_eligibility_reason="multi_hour_goal_lineage" if lineage else None,
+        )
         if session and session["session_id"] in excluded:
             continue
         if session and session.get("exclusion_reason"):
             auxiliary_excluded += 1
             continue
+        if session and session["session_id"] in selected_session_ids:
+            duplicate_sessions_excluded += 1
+            continue
         if session:
+            if lineage:
+                session.update({"goal_backed": True, **lineage})
+                for signal in found:
+                    signal.update({"goal_backed": True, **lineage})
+            else:
+                session["goal_backed"] = False
+                for signal in found:
+                    signal["goal_backed"] = False
             sessions.append(session)
             signals.extend(found)
-    episodes: dict[tuple[str, str, str], dict[str, Any]] = {}
+            selected_session_ids.add(session["session_id"])
+    episodes: dict[tuple[str, ...], dict[str, Any]] = {}
     for row in signals:
         boundary = row.get("compaction_boundary_id_hash") if row.get("after_compaction") else row["event_id_hash"]
-        key = str(row["session_id"]), str(row["source_prefix_sha256"]), str(boundary)
+        if row.get("goal_thread_id_hash"):
+            key = "goal_lineage", str(row["goal_thread_id_hash"]), str(boundary)
+        else:
+            key = "session", str(row["session_id"]), str(row["source_prefix_sha256"]), str(boundary)
         existing = episodes.get(key)
         if existing is None:
             episodes[key] = {**row, "supporting_signal_count": 1}
@@ -282,15 +570,7 @@ def run_s0_screening(
             for field in ("event_id_hash", "timestamp", "score"):
                 existing[field] = row[field]
     episode_rows = list(episodes.values())
-    candidates = sorted(
-        episode_rows,
-        key=lambda row: (
-            -int(row["engineering_consequence_signal"]),
-            -row["score"],
-            -row["supporting_signal_count"],
-            str(row.get("timestamp")),
-        ),
-    )[:max_candidates]
+    candidates = _goal_balanced_candidates(episode_rows, max_candidates)
     candidate_rows = []
     for index, row in enumerate(candidates, 1):
         candidate_rows.append({
@@ -320,8 +600,25 @@ def run_s0_screening(
         "files_inspected": inspected,
         "excluded_sessions": len(excluded),
         "auxiliary_sessions_excluded": auxiliary_excluded,
+        "duplicate_sessions_excluded": duplicate_sessions_excluded,
         "eligible_sessions": len(sessions),
+        **goal_summary,
+        "goal_lineage_rollouts_discovered": len(goal_lineage),
+        "goal_lineage_sessions_selected": sum(1 for row in sessions if row.get("goal_backed")),
+        "distinct_goal_roots_selected": len({
+            row["goal_thread_id_hash"] for row in sessions if row.get("goal_backed")
+        }),
+        "root_goal_sessions_selected": sum(
+            1 for row in sessions if row.get("goal_backed") and row.get("goal_lineage_depth") == 0
+        ),
+        "child_goal_sessions_selected": sum(
+            1 for row in sessions if row.get("goal_backed") and int(row.get("goal_lineage_depth", 0)) > 0
+        ),
+        "unlinked_multi_hour_goals": len(long_goals) - len(linked_goal_roots),
         "candidate_decision_points": len(candidate_rows),
+        "distinct_candidate_goal_roots": len({
+            row["goal_thread_id_hash"] for row in candidate_rows if row.get("goal_thread_id_hash")
+        }),
         "raw_candidate_signals": len(signals),
         "unique_candidate_episodes_total": len(episode_rows),
         "candidate_episode_overflow": max(0, len(episode_rows) - len(candidate_rows)),

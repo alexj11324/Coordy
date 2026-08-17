@@ -1,0 +1,18 @@
+{
+  "applies_to": "screening_v1.S0 sampling only",
+  "gate_changes": "none",
+  "independence_units": {
+    "goal_root": "An independently timed Goal from the read-only thread_goals catalog.",
+    "lineage_session": "A root or descendant rollout associated through session_meta parent_thread_id; descendants are not independently multi-hour Goals."
+  },
+  "maximum_selected_lineage_sessions": 100,
+  "preferred_goal_minimum_seconds": 7200,
+  "privacy": "Do not select or persist Goal objective text. Added lineage metadata uses a hashed Goal identity; the existing session_id remains solely for frozen source binding.",
+  "reason": "Operator clarified that measured multi-hour Goal duration must take priority over transcript-size proxies.",
+  "selection_order": [
+    "round_robin_across_eligible_goal_roots",
+    "root_rollout_before_descendants_within_each_goal",
+    "most_recent_proxy_eligible_rollouts_only_after_goal_lineage"
+  ],
+  "version": "2"
+}

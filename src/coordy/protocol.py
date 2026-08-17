@@ -91,6 +91,25 @@ SCREENING = {
     "S3": {"maximum_bounded_continuations": 5, "requires_material_action_difference": True},
 }
 
+SCREENING_SAMPLING_AMENDMENT = {
+    "version": "2",
+    "applies_to": "screening_v1.S0 sampling only",
+    "gate_changes": "none",
+    "reason": "Operator clarified that measured multi-hour Goal duration must take priority over transcript-size proxies.",
+    "preferred_goal_minimum_seconds": 7200,
+    "maximum_selected_lineage_sessions": 100,
+    "independence_units": {
+        "goal_root": "An independently timed Goal from the read-only thread_goals catalog.",
+        "lineage_session": "A root or descendant rollout associated through session_meta parent_thread_id; descendants are not independently multi-hour Goals.",
+    },
+    "selection_order": [
+        "round_robin_across_eligible_goal_roots",
+        "root_rollout_before_descendants_within_each_goal",
+        "most_recent_proxy_eligible_rollouts_only_after_goal_lineage",
+    ],
+    "privacy": "Do not select or persist Goal objective text. Added lineage metadata uses a hashed Goal identity; the existing session_id remains solely for frozen source binding.",
+}
+
 PROTOCOL_TEXT = """# Coordy Protocol v1
 
 Frozen before inspecting any locked-test result.
@@ -151,6 +170,7 @@ def initialize(workspace: Path) -> None:
     protocol.mkdir(parents=True, exist_ok=True)
     (protocol / "protocol_v1.md").write_text(PROTOCOL_TEXT, encoding="utf-8")
     _write_json(protocol / "screening_v1.json", SCREENING)
+    _write_json(protocol / "screening_sampling_amendment_v2.json", SCREENING_SAMPLING_AMENDMENT)
     _write_json(protocol / "hypotheses_v1.json", HYPOTHESES)
     _write_json(protocol / "metrics_v1.json", METRICS)
     _write_json(protocol / "decision_thresholds_v1.json", THRESHOLDS)

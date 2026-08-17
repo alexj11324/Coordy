@@ -27,7 +27,7 @@ python -m venv .venv
 python -m pip install -e .
 coordy init --workspace .
 coordy discover --workspace .coordy/discovery
-coordy screen --workspace .coordy/screening-s0 --max-sessions 100
+coordy screen --workspace .coordy/screening-s0 --max-sessions 100 --min-goal-seconds 7200
 coordy review-s0 --workspace .coordy/screening-s0 --max-reviews 12
 coordy adjudicate-s0 --workspace .coordy/screening-s0 --answers .coordy/screening-s0/data/screening/user_review_answers.json
 coordy run --input examples/synthetic_sessions.jsonl --workspace .coordy/demo
@@ -63,6 +63,17 @@ contents. An unknown history schema fails closed with no selected adapter.
 `coordy screen` runs only the low-cost S0 prevalence gate. It scans at most
 100 eligible sessions and at most 8 MiB per rollout. Every generated case stays
 `uncertain` until evidence review, and Screening can never emit `GO`.
+When the standard Codex Goal database is available, screening first makes a
+verified filesystem snapshot of the database and its WAL sidecars without
+opening the live database, then reads only Goal identity/status/duration. Goals
+lasting at least two hours are selected before transcript-size proxies, their
+rollout descendants are linked through `session_meta.parent_thread_id`, and
+selection rotates across Goal roots before filling the 100-session cap. A
+descendant is reported as a lineage session, not misrepresented as an
+independently multi-hour Goal. Goal objectives are neither selected nor
+persisted, Goal lineage uses a hashed root identity, and the existing session
+identity remains only for frozen source binding. Unknown or ambiguous Goal
+schemas and parent lineages fail closed.
 
 `coordy review-s0` verifies each frozen source prefix before writing local
 0600 evidence cards. Cutoff-safe evidence and retrospective outcome evidence

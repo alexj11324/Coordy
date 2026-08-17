@@ -35,7 +35,7 @@ class CoordyTests(unittest.TestCase):
         }
         manifest = {
             "scan_run_id": "test-run",
-            "scanner_version": "s0-v3",
+            "scanner_version": "s0-v5",
             "candidate_episode_overflow": overflow,
             "reviewable_population_size": (
                 len(json.loads(queue.read_text()))
@@ -227,6 +227,7 @@ class CoordyTests(unittest.TestCase):
                     "metrics_v1.json",
                     "decision_thresholds_v1.json",
                     "screening_v1.json",
+                    "screening_sampling_amendment_v2.json",
                 },
             )
             thresholds = json.loads((protocol / "decision_thresholds_v1.json").read_text())
@@ -238,6 +239,9 @@ class CoordyTests(unittest.TestCase):
             self.assertEqual(screening["allowed_decisions"], ["STOP", "PIVOT", "PROCEED_TO_CONFIRMATION"])
             self.assertEqual(screening["S0"]["maximum_eligible_sessions"], 100)
             self.assertEqual(screening["S0"]["stop_if_confirmed_type_abc_below"], 5)
+            sampling = json.loads((protocol / "screening_sampling_amendment_v2.json").read_text())
+            self.assertEqual(sampling["preferred_goal_minimum_seconds"], 7200)
+            self.assertEqual(sampling["gate_changes"], "none")
             self.assertTrue((workspace / "data/manifests/capability_manifest.json").is_file())
 
     def test_s0_screening_keeps_candidates_uncertain_and_does_not_persist_content(self):
@@ -331,6 +335,373 @@ class CoordyTests(unittest.TestCase):
             ]
             self.assertEqual({row["session_id"] for row in candidates}, {"s1", "s2"})
 
+    def test_s0_prioritizes_multi_hour_goal_lineage_before_recent_proxies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT PRIMARY KEY,
+                        objective TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        tokens_used INTEGER NOT NULL,
+                        time_used_seconds INTEGER NOT NULL,
+                        created_at_ms INTEGER NOT NULL,
+                        updated_at_ms INTEGER NOT NULL
+                    )"""
+                )
+                db.execute(
+                    "INSERT INTO thread_goals VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("long-root", "private objective must-not-persist", "complete", 500000, 10800, 1, 2),
+                )
+            root_rows = [
+                {"timestamp": "2026-08-01T00:00:00Z", "type": "session_meta", "payload": {"id": "long-root", "cwd": "/repo"}},
+                {"timestamp": "2026-08-01T00:01:00Z", "type": "response_item", "payload": {"id": "root-work", "type": "message", "role": "assistant", "content": "ordinary root work"}},
+            ]
+            child_rows = [
+                {
+                    "timestamp": "2026-08-01T01:00:00Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "long-child",
+                        "cwd": "/repo",
+                        "source": {"subagent": {"thread_spawn": {"parent_thread_id": "long-root", "depth": 1}}},
+                    },
+                },
+                {"timestamp": "2026-08-01T01:01:00Z", "type": "response_item", "payload": {"id": "child-work", "type": "message", "role": "assistant", "content": "ordinary child work"}},
+            ]
+            recent_rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "recent-proxy", "cwd": "/other"}},
+                *[
+                    {"timestamp": f"2026-08-16T00:{index // 60:02d}:{index % 60:02d}Z", "type": "response_item", "payload": {"id": f"recent-{index}", "type": "message", "role": "assistant", "content": "ordinary work"}}
+                    for index in range(100)
+                ],
+            ]
+            root_path = sessions / "root.jsonl"
+            child_path = sessions / "child.jsonl"
+            recent_path = sessions / "recent.jsonl"
+            root_path.write_text("".join(json.dumps(row) + "\n" for row in root_rows))
+            child_path.write_text("".join(json.dumps(row) + "\n" for row in child_rows))
+            recent_path.write_text("".join(json.dumps(row) + "\n" for row in recent_rows))
+            root_path.touch()
+            child_path.touch()
+            recent_path.touch()
+
+            before = hashlib.sha256(goal_db.read_bytes()).hexdigest()
+            result = run_s0_screening(
+                root / "out",
+                [sessions],
+                max_sessions=2,
+                goal_db=goal_db,
+                min_goal_seconds=7200,
+            )
+
+            self.assertEqual(hashlib.sha256(goal_db.read_bytes()).hexdigest(), before)
+            self.assertEqual(result["eligible_sessions"], 2)
+            self.assertEqual(result["goal_catalog_status"], "verified_read_only")
+            self.assertEqual(result["multi_hour_goals_discovered"], 1)
+            self.assertEqual(result["goal_lineage_rollouts_discovered"], 2)
+            self.assertEqual(result["goal_lineage_sessions_selected"], 2)
+            eligible = [
+                json.loads(line)
+                for line in (root / "out/data/screening/eligible_sessions.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual({row["session_id"] for row in eligible}, {"long-root", "long-child"})
+            self.assertEqual({row["goal_lineage_depth"] for row in eligible}, {0, 1})
+            self.assertTrue(all(row["goal_time_used_seconds"] == 10800 for row in eligible))
+            self.assertTrue(all("goal_thread_id" not in row for row in eligible))
+            self.assertNotIn("must-not-persist", "".join(
+                path.read_text() for path in (root / "out/data/screening").iterdir()
+            ))
+
+    def test_s0_goal_catalog_fails_closed_for_unknown_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute("CREATE TABLE unexpected (value TEXT)")
+
+            with self.assertRaisesRegex(RuntimeError, "unsupported Goal database schema"):
+                run_s0_screening(root / "out", [sessions], goal_db=goal_db)
+
+    def test_s0_goal_catalog_snapshot_does_not_mutate_live_wal_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            (sessions / "goal.jsonl").write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "long-root", "cwd": "/repo"},
+            }) + "\n")
+            goal_db = root / "goals_1.sqlite"
+            writer = sqlite3.connect(goal_db)
+            try:
+                writer.execute("PRAGMA journal_mode=WAL")
+                writer.execute("PRAGMA wal_autocheckpoint=0")
+                writer.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+                        tokens_used INTEGER NOT NULL, time_used_seconds INTEGER NOT NULL,
+                        created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
+                    )"""
+                )
+                writer.execute("INSERT INTO thread_goals VALUES ('long-root', 'complete', 1, 10800, 1, 2)")
+                writer.commit()
+                source_files = [goal_db, Path(f"{goal_db}-wal"), Path(f"{goal_db}-shm")]
+                before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in source_files}
+
+                result = run_s0_screening(root / "out", [sessions], goal_db=goal_db)
+
+                after = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in source_files}
+                self.assertEqual(after, before)
+                self.assertEqual(result["multi_hour_goals_discovered"], 1)
+            finally:
+                writer.close()
+
+    def test_s0_goal_catalog_rejects_duplicate_goal_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT, status TEXT, tokens_used INTEGER,
+                        time_used_seconds INTEGER, created_at_ms INTEGER, updated_at_ms INTEGER
+                    )"""
+                )
+                db.executemany(
+                    "INSERT INTO thread_goals VALUES ('duplicate', 'complete', 1, ?, 1, 2)",
+                    [(10800,), (14400,)],
+                )
+
+            with self.assertRaisesRegex(RuntimeError, "duplicate Goal thread identity"):
+                run_s0_screening(root / "out", [sessions], goal_db=goal_db)
+
+    def test_s0_goal_lineage_rejects_conflicting_parents_and_cycles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT PRIMARY KEY, status TEXT, tokens_used INTEGER,
+                        time_used_seconds INTEGER, created_at_ms INTEGER, updated_at_ms INTEGER
+                    )"""
+                )
+                db.executemany(
+                    "INSERT INTO thread_goals VALUES (?, 'complete', 1, 10800, 1, 2)",
+                    [("root-a",), ("root-b",)],
+                )
+
+            conflicting = root / "conflicting"
+            conflicting.mkdir()
+            for name, parent in (("one", "root-a"), ("two", "root-b")):
+                (conflicting / f"{name}.jsonl").write_text(json.dumps({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "same-child",
+                        "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent}}},
+                    },
+                }) + "\n")
+            with self.assertRaisesRegex(RuntimeError, "conflicting parent lineage"):
+                run_s0_screening(root / "out-conflict", [conflicting], goal_db=goal_db)
+
+            cyclic = root / "cyclic"
+            cyclic.mkdir()
+            for session, parent in (("cycle-a", "cycle-b"), ("cycle-b", "cycle-a")):
+                (cyclic / f"{session}.jsonl").write_text(json.dumps({
+                    "type": "session_meta",
+                    "payload": {
+                        "id": session,
+                        "source": {"subagent": {"thread_spawn": {"parent_thread_id": parent}}},
+                    },
+                }) + "\n")
+            with self.assertRaisesRegex(RuntimeError, "cycle in rollout lineage"):
+                run_s0_screening(root / "out-cycle", [cyclic], goal_db=goal_db)
+
+    def test_s0_balances_selected_sessions_across_multi_hour_goal_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        tokens_used INTEGER NOT NULL,
+                        time_used_seconds INTEGER NOT NULL,
+                        created_at_ms INTEGER NOT NULL,
+                        updated_at_ms INTEGER NOT NULL
+                    )"""
+                )
+                db.executemany(
+                    "INSERT INTO thread_goals VALUES (?, ?, ?, ?, ?, ?)",
+                    [
+                        ("goal-a", "complete", 1, 36000, 1, 2),
+                        ("goal-b", "complete", 1, 10800, 1, 2),
+                    ],
+                )
+            rollouts = {
+                "a-root.jsonl": [
+                    {"timestamp": "2026-08-01T00:00:00Z", "type": "session_meta", "payload": {"id": "goal-a", "cwd": "/repo-a"}},
+                ],
+                "a-child.jsonl": [
+                    {"timestamp": "2026-08-01T01:00:00Z", "type": "session_meta", "payload": {"id": "goal-a-child", "cwd": "/repo-a", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "goal-a", "depth": 1}}}}},
+                ],
+                "b-root.jsonl": [
+                    {"timestamp": "2026-08-01T02:00:00Z", "type": "session_meta", "payload": {"id": "goal-b", "cwd": "/repo-b"}},
+                ],
+            }
+            for name, rows in rollouts.items():
+                (sessions / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(
+                root / "out",
+                [sessions],
+                max_sessions=2,
+                goal_db=goal_db,
+                min_goal_seconds=7200,
+            )
+
+            eligible = [
+                json.loads(line)
+                for line in (root / "out/data/screening/eligible_sessions.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual({row["session_id"] for row in eligible}, {"goal-a", "goal-b"})
+            self.assertEqual(result["distinct_goal_roots_selected"], 2)
+            self.assertEqual(result["root_goal_sessions_selected"], 2)
+            self.assertEqual(result["child_goal_sessions_selected"], 0)
+
+    def test_s0_keeps_first_session_meta_as_rollout_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rollout = sessions / "fork.jsonl"
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "current-session", "cwd": "/current-repo"}},
+                {"timestamp": "2026-08-16T00:00:01Z", "type": "session_meta", "payload": {"id": "inherited-parent", "cwd": "/parent-repo"}},
+                *[
+                    {"timestamp": f"2026-08-16T00:{index // 60:02d}:{index % 60:02d}Z", "type": "response_item", "payload": {"id": f"work-{index}", "type": "message", "role": "assistant", "content": "ordinary work"}}
+                    for index in range(100)
+                ],
+            ]
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            run_s0_screening(root / "out", [sessions], max_sessions=1)
+
+            eligible = json.loads((root / "out/data/screening/eligible_sessions.jsonl").read_text())
+            self.assertEqual(eligible["session_id"], "current-session")
+            self.assertEqual(eligible["repository_identity_hash"], hashlib.sha256(b"/current-repo").hexdigest())
+            self.assertEqual(eligible["conflicting_session_meta_count"], 1)
+
+    def test_s0_balances_candidate_cap_across_goal_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        tokens_used INTEGER NOT NULL,
+                        time_used_seconds INTEGER NOT NULL,
+                        created_at_ms INTEGER NOT NULL,
+                        updated_at_ms INTEGER NOT NULL
+                    )"""
+                )
+                db.executemany(
+                    "INSERT INTO thread_goals VALUES (?, 'complete', 1, 10800, 1, 2)",
+                    [("goal-a",), ("goal-b",), ("goal-c",)],
+                )
+            goal_a_rows = [
+                {"timestamp": "2026-08-01T00:00:00Z", "type": "session_meta", "payload": {"id": "goal-a", "cwd": "/repo-a"}},
+            ]
+            for index in range(5):
+                goal_a_rows.extend([
+                    {"timestamp": f"2026-08-01T00:{index * 2 + 1:02d}:00Z", "type": "compacted", "payload": {"id": f"compact-a-{index}"}},
+                    {"timestamp": f"2026-08-01T00:{index * 2 + 2:02d}:00Z", "type": "response_item", "payload": {"id": f"signal-a-{index}", "type": "function_call_output", "output": "tests failed"}},
+                ])
+            rollouts = {
+                "a.jsonl": goal_a_rows,
+                "b.jsonl": [
+                    {"timestamp": "2026-08-01T01:00:00Z", "type": "session_meta", "payload": {"id": "goal-b", "cwd": "/repo-b"}},
+                    {"timestamp": "2026-08-01T01:01:00Z", "type": "compacted", "payload": {"id": "compact-b"}},
+                    {"timestamp": "2026-08-01T01:02:00Z", "type": "response_item", "payload": {"id": "signal-b", "type": "message", "role": "user", "content": "你忘了 the requirement"}},
+                ],
+                "c.jsonl": [
+                    {"timestamp": "2026-08-01T02:00:00Z", "type": "session_meta", "payload": {"id": "goal-c", "cwd": "/repo-c"}},
+                    {"timestamp": "2026-08-01T02:01:00Z", "type": "compacted", "payload": {"id": "compact-c"}},
+                    {"timestamp": "2026-08-01T02:02:00Z", "type": "response_item", "payload": {"id": "signal-c", "type": "message", "role": "user", "content": "你忘了 the requirement"}},
+                ],
+            }
+            for name, rows in rollouts.items():
+                (sessions / name).write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(
+                root / "out",
+                [sessions],
+                max_sessions=3,
+                max_candidates=3,
+                goal_db=goal_db,
+            )
+
+            candidates = [
+                json.loads(line)
+                for line in (root / "out/data/screening/candidate_decision_points.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len({row["goal_thread_id_hash"] for row in candidates}), 3)
+            self.assertEqual(result["distinct_candidate_goal_roots"], 3)
+
+    def test_s0_deduplicates_copied_episode_across_one_goal_lineage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            goal_db = root / "goals_1.sqlite"
+            with sqlite3.connect(goal_db) as db:
+                db.execute(
+                    """CREATE TABLE thread_goals (
+                        thread_id TEXT PRIMARY KEY,
+                        status TEXT NOT NULL,
+                        tokens_used INTEGER NOT NULL,
+                        time_used_seconds INTEGER NOT NULL,
+                        created_at_ms INTEGER NOT NULL,
+                        updated_at_ms INTEGER NOT NULL
+                    )"""
+                )
+                db.execute("INSERT INTO thread_goals VALUES ('goal-root', 'complete', 1, 10800, 1, 2)")
+            for child in ("child-a", "child-b"):
+                rows = [
+                    {"timestamp": "2026-08-01T00:00:00Z", "type": "session_meta", "payload": {"id": child, "cwd": "/repo", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "goal-root", "depth": 1}}}}},
+                    {"timestamp": "2026-08-01T00:01:00Z", "type": "compacted", "payload": {"id": "copied-compact"}},
+                    {"timestamp": "2026-08-01T00:02:00Z", "type": "response_item", "payload": {"id": "copied-failure", "type": "function_call_output", "output": "tests failed"}},
+                ]
+                (sessions / f"{child}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(
+                root / "out",
+                [sessions],
+                max_sessions=2,
+                goal_db=goal_db,
+            )
+
+            self.assertEqual(result["raw_candidate_signals"], 2)
+            self.assertEqual(result["unique_candidate_episodes_total"], 1)
+            candidate = json.loads((root / "out/data/screening/candidate_decision_points.jsonl").read_text())
+            self.assertEqual(candidate["supporting_signal_count"], 2)
+
     def test_prepare_s0_review_separates_cutoff_evidence_from_outcome_and_redacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -372,6 +743,31 @@ class CoordyTests(unittest.TestCase):
             self.assertTrue(card["evidence_completeness"]["structural_replay_candidate"])
             template = json.loads((workspace / "data/screening/user_review_answers.json").read_text())
             self.assertEqual(template["answers"], [])
+
+    def test_prepare_s0_review_withholds_goal_context_injected_into_rollout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rollout = sessions / "rollout.jsonl"
+            private_objective = "private objective git reset must-not-persist " + ("x" * 5000)
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "goal", "type": "message", "role": "user", "content": f"<codex_internal_context source=\"goal\"><objective>{private_objective}</objective></codex_internal_context> ordinary constraint"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "action", "type": "message", "role": "assistant", "content": "wrong action"}},
+                {"timestamp": "2026-08-16T00:04:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "你忘了 the constraint"}},
+            ]
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in rows))
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions])
+
+            prepare_s0_review(workspace)
+
+            persisted = "".join(path.read_text() for path in (workspace / "data/screening").iterdir())
+            self.assertNotIn(private_objective, persisted)
+            self.assertNotIn("git reset", persisted)
+            self.assertIn("[goal context withheld]", persisted)
 
     def test_prepare_s0_review_uses_latest_compaction_boundary_without_hash_guessing(self):
         with tempfile.TemporaryDirectory() as tmp:

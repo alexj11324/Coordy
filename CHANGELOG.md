@@ -11,3 +11,4 @@
 - Add privacy-safe S0 evidence cards, auxiliary-session filtering, and frozen-gate adjudication.
 - Deduplicate and diversify S0 candidates by compaction episode before applying the review cap.
 - Bind screening, evidence, and adjudication artifacts to one scan run and carry overflow gates end to end.
+- Prioritize measured multi-hour Goals, balance lineage sessions and candidates across Goal roots, and preserve the first session identity in inherited transcripts.

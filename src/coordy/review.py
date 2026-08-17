@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .redaction import redact_text, redact_value
-from .screening import SCANNER_VERSION, _matched_signals
+from .screening import GOAL_CONTEXT, SCANNER_VERSION, _matched_signals
 
 ALLOWED_ANSWERS = {"YES", "NO", "UNCERTAIN"}
 ALLOWED_FAILURE_TYPES = {"A", "B", "C"}
@@ -45,7 +45,7 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def _strings(value: Any) -> Iterable[str]:
     if isinstance(value, str):
-        yield value[:4096]
+        yield GOAL_CONTEXT.sub("[goal context withheld]", value)[:4096]
     elif isinstance(value, list):
         for item in value:
             yield from _strings(item)
@@ -65,6 +65,7 @@ def _excerpt(payload: dict[str, Any]) -> str:
     text = " ".join(part for value in preferred for part in _strings(value) if part)[:4096]
     if not text:
         text = str(payload.get("type") or "")
+    text = GOAL_CONTEXT.sub("[goal context withheld]", text)
     text = re.sub(r"/Users/[^/\s]+/", "$HOME/", text)
     text = re.sub(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[EMAIL]", text, flags=re.I)
     text, _ = redact_text(text)
@@ -329,10 +330,23 @@ def _select_review_cards(cards: list[dict[str, Any]], candidates: dict[str, dict
             card["candidate_id"],
         ),
     )
+    groups: dict[str, list[dict[str, Any]]] = {}
+    group_order: list[str] = []
+    for card in ranked:
+        group = str(card.get("goal_thread_id_hash") or "not_goal_backed")
+        if group not in groups:
+            groups[group] = []
+            group_order.append(group)
+        groups[group].append(card)
+    balanced: list[dict[str, Any]] = []
+    while any(groups[group] for group in group_order):
+        for group in group_order:
+            if groups[group]:
+                balanced.append(groups[group].pop(0))
     selected = []
     per_session: dict[str, int] = {}
     seen_incidents: set[tuple[Any, ...]] = set()
-    for card in ranked:
+    for card in balanced:
         candidate = candidates[card["candidate_id"]]
         incident = (
             candidate.get("session_id"),
@@ -446,6 +460,8 @@ def prepare_s0_review(workspace: Path, *, max_reviews: int = 12) -> dict[str, An
             }
         else:
             card = _build_card(candidate, session)
+        card["goal_thread_id_hash"] = candidate.get("goal_thread_id_hash")
+        card["goal_lineage_depth"] = candidate.get("goal_lineage_depth")
         cards.append(card)
     by_id = {row["candidate_id"]: row for row in candidates}
     structural_upper_bound = _unique_structural_count(cards)
