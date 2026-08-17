@@ -72,7 +72,7 @@
       "acceptance_criteria"
     ],
     "state_window": "deterministic temporal coverage plus recency; not a last-N-only window",
-    "user_message_serialization": "when Codex response-annotation metadata precedes an explicit My request for Codex section, preserve the actual user request before applying the bounded excerpt limit",
+    "user_message_serialization": "preserve complete textual message content, including response annotations and the actual user request; do not truncate or redact semantic text; replace embedded image bytes with evidence-bound unassessed markers",
     "single_writer": "one workspace semantic lock with atomic fsynced checkpoint replacement"
   },
   "applies_to": "screening_v1.S0 semantic evidence grading",

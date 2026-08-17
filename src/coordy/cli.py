@@ -94,6 +94,7 @@ def parser() -> argparse.ArgumentParser:
     grade_smoke.add_argument("--model", default="gpt-5.6-luna")
     grade_smoke.add_argument("--reasoning-effort", default="low")
     grade_smoke.add_argument("--env-file", type=Path, default=Path(".env.local"))
+    grade_smoke.add_argument("--retry-http-504", action="store_true")
     grade_semantic = commands.add_parser(
         "grade-s0b-state", help="run primary and independent state continuity judges"
     )
@@ -181,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
             model=args.model,
             reasoning_effort=args.reasoning_effort,
             dispatch_log_dir=args.workspace / "data/screening/api_dispatch",
+            allow_http_504_retry=args.retry_http_504,
         )
         print(json.dumps(run_s0b_state_smoke(
             args.workspace,

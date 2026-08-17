@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import tempfile
 import urllib.error
 import urllib.parse
@@ -45,9 +46,9 @@ STATE_PHASES = {
     "post_compaction_plan",
 }
 LOW_CONFIDENCE_THRESHOLD = 0.80
-STATE_JUDGE_PROTOCOL_VERSION = "state-diff-v8-direct-evidence"
+STATE_JUDGE_PROTOCOL_VERSION = "state-diff-v9-complete-message-evidence"
 CAUSAL_JUDGE_PROTOCOL_VERSION = "causal-v4-responses-singleton-exact-evidence"
-RESPONSES_API_PROTOCOL_VERSION = "openai-compatible-responses-v1"
+RESPONSES_API_PROTOCOL_VERSION = "openai-compatible-responses-v4-nested-text-evidence"
 SEMANTIC_WRITER_LOCK = ".s0b_semantic_writer.lock"
 MAX_JUDGE_ATTEMPTS = 3
 SMOKE_MAX_POST_SUSPECT_RATE = 2 / 3
@@ -384,6 +385,47 @@ def _response_output_text(envelope: dict[str, Any]) -> str:
     return texts[0]
 
 
+_IMAGE_ENVELOPE = re.compile(r"<image(?P<attributes>[^>]*)>\s*(?P<body>.*?)\s*</image>", re.DOTALL)
+
+
+def _responses_multimodal_input(input_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep complete message text while replacing embedded image bytes with evidence markers."""
+    payload = json.loads(json.dumps(input_payload))
+    packet = payload.get("packet") if isinstance(payload.get("packet"), dict) else payload
+    image_count = 0
+    for section in (
+        "pre_compaction_events",
+        "compaction_summary_events",
+        "post_compaction_plan_events",
+    ):
+        for event in packet.get(section, []):
+            content = event.get("content")
+            if not isinstance(content, str) or "<image" not in content:
+                continue
+
+            def replace(match: re.Match[str]) -> str:
+                nonlocal image_count
+                try:
+                    descriptor = json.loads(match.group("body"))
+                except json.JSONDecodeError:
+                    return match.group(0)
+                image_url = descriptor.get("image_url") if isinstance(descriptor, dict) else None
+                if not isinstance(image_url, str) or not image_url.startswith("data:image/"):
+                    return match.group(0)
+                image_count += 1
+                return (
+                    f"[embedded image {image_count} omitted from State Diff transport; "
+                    f"evidence_id={event.get('evidence_id')}; visual content unassessed]"
+                )
+
+            event["content"] = _IMAGE_ENVELOPE.sub(replace, content)
+    content_items: list[dict[str, Any]] = [{
+        "type": "input_text",
+        "text": json.dumps(payload, ensure_ascii=False, sort_keys=True),
+    }]
+    return [{"role": "user", "content": content_items}]
+
+
 def _validated_api_usage(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         raise NonRetryableJudgeError("Responses judge omitted token usage")
@@ -493,7 +535,7 @@ def _claim_api_dispatch(
                 "judge_configuration_sha256",
                 "input_packet_sha256",
             ))
-            retryable = (
+            retryable_504 = (
                 same_request
                 and existing.get("status") == "HTTP_ERROR_NO_RETRY"
                 and existing.get("http_status") == 504
@@ -502,15 +544,29 @@ def _claim_api_dispatch(
                 and not existing.get("api_usage")
                 and existing.get("judge_attempt", 1) < 3
             )
+            retryable_dns = (
+                same_request
+                and existing.get("status") in {
+                    "NOT_DISPATCHED_DNS_FAILURE",
+                    "TRANSPORT_OUTCOME_UNKNOWN_NO_RETRY",
+                }
+                and existing.get("transport_error_type") == "gaierror"
+                and existing.get("judge_attempt", 1) < 3
+            )
+            retryable = retryable_504 or retryable_dns
             if retryable:
                 prior_attempts = list(existing.get("prior_attempts") or [])
                 if not prior_attempts and existing.get("prior_attempt"):
                     prior_attempts.append(existing["prior_attempt"])
-                prior_attempts.append({
+                prior_attempt = {
                     "status": existing["status"],
-                    "http_status": existing["http_status"],
                     "judge_attempt": existing.get("judge_attempt", 1),
-                })
+                }
+                if existing.get("http_status") is not None:
+                    prior_attempt["http_status"] = existing["http_status"]
+                if existing.get("transport_error_type") is not None:
+                    prior_attempt["transport_error_type"] = existing["transport_error_type"]
+                prior_attempts.append(prior_attempt)
                 record["judge_attempt"] = existing.get("judge_attempt", 1) + 1
                 record["prior_attempts"] = prior_attempts
                 _secure_write(path, json.dumps(record, indent=2, sort_keys=True) + "\n")
@@ -567,7 +623,7 @@ def _run_responses_api_structured(
     request_payload = {
         "model": model,
         "instructions": instructions,
-        "input": json.dumps(input_payload, sort_keys=True),
+        "input": _responses_multimodal_input(input_payload),
         "reasoning": {"effort": reasoning_effort},
         "store": False,
         "tools": [],
@@ -575,6 +631,11 @@ def _run_responses_api_structured(
         "text": {"format": format_payload},
     }
     request_bytes = json.dumps(request_payload, sort_keys=True).encode("utf-8")
+    _update_api_dispatch(
+        dispatch_record_path,
+        request_body_bytes=len(request_bytes),
+        request_body_sha256=_hash(request_bytes),
+    )
     request = urllib.request.Request(
         base_url.rstrip("/") + "/v1/responses",
         data=request_bytes,
@@ -603,9 +664,13 @@ def _run_responses_api_structured(
             f"Responses judge {label} failed with HTTP {exc.code}: {clean_detail[-2000:]}"
         ) from exc
     except urllib.error.URLError as exc:
+        dns_failure = isinstance(exc.reason, socket.gaierror)
         _update_api_dispatch(
             dispatch_record_path,
-            status="TRANSPORT_OUTCOME_UNKNOWN_NO_RETRY",
+            status=(
+                "NOT_DISPATCHED_DNS_FAILURE"
+                if dns_failure else "TRANSPORT_OUTCOME_UNKNOWN_NO_RETRY"
+            ),
             transport_error_type=type(exc.reason).__name__,
         )
         raise NonRetryableJudgeError(
@@ -706,6 +771,32 @@ def _normalize_state_diff_top_level(
     }
 
 
+def _deduplicate_result_evidence_ids(row: dict[str, Any]) -> dict[str, Any]:
+    normalized = json.loads(json.dumps(row))
+    removed = 0
+    lists: list[list[Any]] = []
+    for entries in (normalized.get("states") or {}).values():
+        if isinstance(entries, list):
+            lists.extend(
+                item["evidence_ids"]
+                for item in entries
+                if isinstance(item, dict) and isinstance(item.get("evidence_ids"), list)
+            )
+    for diff in normalized.get("diffs") or []:
+        if not isinstance(diff, dict):
+            continue
+        for key in ("pre_evidence_ids", "post_evidence_ids"):
+            if isinstance(diff.get(key), list):
+                lists.append(diff[key])
+    for values in lists:
+        unique = list(dict.fromkeys(values))
+        removed += len(values) - len(unique)
+        values[:] = unique
+    if removed:
+        normalized["duplicate_evidence_ids_removed"] = removed
+    return normalized
+
+
 class ResponsesAPIStateJudge:
     """Outcome-blinded singleton judge over a strict OpenAI-compatible Responses API."""
 
@@ -798,7 +889,7 @@ class ResponsesAPIStateJudge:
             raise RuntimeError(f"Responses state judge {self.judge_id} omitted results")
         combined = [{**row, **metadata} if isinstance(row, dict) else row for row in results]
         combined = [
-            _normalize_state_diff_top_level(packet, row)
+            _normalize_state_diff_top_level(packet, _deduplicate_result_evidence_ids(row))
             if isinstance(row, dict) else row
             for row in combined
         ]
@@ -954,17 +1045,39 @@ def _event_basis(row: dict[str, Any], line_number: int) -> str:
     return str(payload.get("id") or row.get("id") or f"{line_number}:{row.get('timestamp')}")
 
 
+def _message_content(value: Any) -> str:
+    """Return message text faithfully; semantic evidence is not a display excerpt."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for item in value if (part := _message_content(item)))
+    if isinstance(value, dict):
+        for key in ("text", "content", "message"):
+            if key in value:
+                return _message_content(value[key])
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _complete_message_content(payload: dict[str, Any]) -> str:
+    for key in ("content", "text", "message"):
+        if key in payload:
+            return _message_content(payload[key])
+    return str(payload.get("type") or "")
+
+
 def _semantic_event(row: dict[str, Any], line_number: int) -> dict[str, Any]:
     payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-    clean, _ = redact_value(payload)
-    excerpt = _excerpt(clean)
     return {
         "evidence_id": _hash(_event_basis(row, line_number)),
         "timestamp": row.get("timestamp"),
         "record_type": str(row.get("type") or row.get("record_type") or "unknown"),
         "payload_type": str(payload.get("type") or "unknown"),
         "actor": payload.get("role"),
-        "redacted_excerpt": excerpt,
+        "content": _complete_message_content(payload),
+        "content_complete": True,
     }
 
 
@@ -2798,7 +2911,7 @@ def _human_causal_chain(packet: dict[str, Any]) -> dict[str, list[dict[str, Any]
             key: event[key]
             for key in (
                 "evidence_id", "timestamp", "actor", "payload_type",
-                "redacted_excerpt", "tool_name", "operation_kind",
+                "content", "content_complete", "redacted_excerpt", "tool_name", "operation_kind",
                 "verification_source", "exit_code", "success",
                 "result_excerpt", "changed_file_count",
             )

@@ -2,10 +2,13 @@
 
 ## Current phase
 
-S0a evidence infrastructure is complete for the current frozen run. The first
-v8 S0b calibration queue is retracted because bounded excerpts allowed Codex
-response-annotation metadata to hide the user's actual request. Corrected v27
-inputs are prepared for selective regrading. No Screening decision has been
+S0a evidence infrastructure is complete for the current frozen run. The v8 and
+v27 S0b evidence paths are retracted because bounded excerpts first hid the
+user's request and then discarded its response-annotation context. The v32
+path preserves complete textual messages and marks embedded screenshots as
+visually unassessed instead of transmitting their bytes. Its targeted repair
+completed 118 of the 123 affected packets; five prior dispatches remain
+outcome-unknown and were not resent. No Screening decision has been
 emitted: rule/keyword counts and retracted semantic labels do not establish
 drift, causality, Type A/B/C/D/U, or prevalence.
 
@@ -38,7 +41,8 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 - Revised the State Diff contract after the v5 smoke exposed a redundant-binding failure: every comparison now identifies one phase-bound pre-compaction state item by index and cites post-plan evidence without repeating a second, potentially inconsistent pre-evidence list. The approved v6 smoke completed all 12 cases and passed the safety/evidence-binding gate.
 - Completed the v8 direct-API State Diff run over all 472 frozen compaction opportunities, then independently rejudged the 45 mandatory suspect/normalized cases plus 3 no-post and 3 healthy controls without resending completed checkpoints.
 - Corrected the calibration sampler after the first real run exposed mislabeled pseudo-controls: only actual no-post or healthy rejudged cases may be counted as deterministic controls.
-- Fixed bounded evidence serialization after a human audit recovered an explicit pre-compaction decision that the Judge never received: `My request for Codex` now takes priority over response-annotation metadata before the 280-character limit.
+- Replaced bounded S0b evidence serialization after a human audit recovered an explicit pre-compaction decision the Judge never received: semantic packets now retain both the complete response annotations and the complete request, while compact S0a review excerpts remain bounded/redacted.
+- Added State Diff transport that preserves complete semantic text while replacing embedded screenshot bytes with evidence-bound unassessed markers; each request remains one compaction opportunity.
 
 ## Outputs
 
@@ -64,7 +68,7 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 - Opportunity population: 472 Goal-root-plus-compaction clusters, including 469 structural opportunities; 142 carry rule signals, but that subset is not an upper bound.
 - Candidate sample: 30 Goal-balanced opportunities across all 8 Goal roots; 442 opportunities remain outside the candidate cap.
 - Cross-session S0a opportunity population: 197 hashed entity-change joins from successful patch events; these are not confirmed invalidations.
-- S0b blinded input population: 472/472 opportunities, SHA-256-bound to the v26 scan. The widened T0 window retains deterministic temporal coverage plus recency (up to 48 evidence events) rather than only the last 12 messages. The 16.7 MB artifact is mode 0600 and passed local path/objective/key/password/email probes.
+- S0b complete-message input population: 472/472 opportunities, SHA-256-bound to the frozen scan. The v32 artifact is 118,682,403 bytes with SHA-256 `8a760076b7ac09e592f1bec17dd51822b2a292c148b1aabaa5315d1b7b0c0aaf`; its widened T0 window retains deterministic temporal coverage plus recency (up to 48 evidence events) rather than only the last 12 messages.
 - Cost policy is frozen as one full 472-opportunity primary State Diff plus a targeted independent rejudge: every primary suspect and low-confidence result, then Goal-root-stratified healthy and no-post controls to a 30-case target (normally 20–40). The second judge estimates precision, misses, and agreement; it is not a second prevalence scan.
 - The retracted v8 primary State Diff completed 472/472 opportunities across all 8 Goal roots: 44 machine suspects, 408 `NO_MATERIAL_CHANGE`, and 20 `UNASSESSABLE`. These labels are retained only as historical provenance and cannot support calibration or prevalence.
 - The targeted v8 secondary Judge completed 51 cases across all 8 Goal roots: 45 mandatory suspect/normalized cases plus 3 no-post and 3 healthy controls. Mandatory cases alone exceeded the nominal 40-case maximum, and that overflow is recorded rather than silently dropping cases.
@@ -72,8 +76,11 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 - Known v8 State Diff usage is 17,099,724 primary tokens plus 1,774,150 targeted-secondary tokens. The completed results and queue are SHA-256-bound, mode 0600, and passed local path, email, private-key, and secret-value probes.
 - Stratified audit queue: 6 high-signal, 3 no-keyword recall probes, and 1 suspicious-looking no-consequence hard-negative candidate across 6 Goal clusters. The hard-negative stratum reports a two-case shortfall instead of backfilling from another stratum.
 - Conservative machine prelabel: all 10 cases remain `UNCERTAIN`. These are preliminary labels, not completed human review, so no precision, missed-positive, or false-pause metric is claimed.
-- Current status is `PENDING_LLM_STATE_DIFF`, `decision=null`; the corrected inputs have not yet been regraded.
-- Authoritative corrected ignored runtime workspace: `.coordy/screening-s0-v27-request-priority/data/screening/`. The v26/v8 workspace is retracted historical evidence only.
+- The v29 multimodal smoke completed 12/12 using Luna low: 3 controls were `UNASSESSABLE`, all 9 post-plan cases were assessable, and 1 was a suspect. It used 391,163 input and 25,547 output tokens (416,710 total). This is a transport/evidence-contract result, not accuracy evidence.
+- Of the 123 packets affected by the old excerpt bug, the superseded multimodal run completed 87 before its inline-image ceiling stopped it. The replacement v32 text-evidence run completed 118 under one configuration: 11 suspects, 102 `NO_MATERIAL_CHANGE`, and 5 `UNASSESSABLE`, using 4,146,642 input and 283,000 output tokens. Five durable pre-existing dispatches remain outcome-unknown and were not resent. Request bodies were 80,103–254,040 bytes, contained no screenshot bytes, and produced no context-window 502.
+- The user-audited current-book-search case is `NO_MATERIAL_CHANGE` at 0.98 confidence under the complete-text contract: its pre-compaction state explicitly rejects cross-book full-library search, and the post-compaction plan preserves current-book-only search. The earlier drift label was caused by the truncated evidence, not by that task's actual conversation.
+- Current status is `PENDING_LLM_STATE_DIFF`, `decision=null`; the complete-message population has not been fully graded.
+- Authoritative corrected ignored runtime workspace: `.coordy/screening-s0-v32-text-evidence/data/screening/`. The v26/v8, v27, v29, v30, and v31 workspaces are retracted historical evidence only.
 
 ## Failures or missing evidence
 
@@ -90,6 +97,9 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 - The first v6 full-population attempt was stopped after one response used an out-of-range numeric pre-state index. Before interruption it created 83 dispatch records (78 validated, 4 outcome-unknown in flight, 1 semantic failure), checkpointed 72 results, and recorded 2,848,700 known tokens. The fix removes numeric indices in favor of an exact copied pre-state statement and bounds concurrent submission to one worker-sized batch, so a future failure cannot drain the remaining population. No v6 result is reused under v7.
 - The v7 smoke showed that exact long-statement copying is also a brittle duplicate representation: after 3 valid controls, the first post-plan response paraphrased the extracted pre-state and was rejected (4 dispatches, 116,142 tokens). v8 removes the cross-reference entirely; each diff carries one pre-state statement with direct pre-compaction evidence plus direct post-plan evidence. The independent states extraction remains descriptive rather than a second source that must match word-for-word.
 - Human review of the second v8 calibration card found that the original transcript explicitly rejected whole-library search before compaction, while the Judge input showed only the leading response-annotation wrapper. The generic 280-character head excerpt had removed the entire user request. This affected 76 wrapped event instances across 45 opportunities and changed 123 packet hashes because events are reused across later compaction windows. The v8 calibration queue is therefore invalid even though all artifact hashes were internally consistent.
+- The v27 request-priority repair was also retracted: deleting the annotation prefix removed potentially relevant user context. Complete-message v29 keeps both regions instead of adapting to individual wrapper formats.
+- The user-audited current-book-search opportunity contains 73,033 bytes of text and two original screenshots whose data URLs total 2,667,988 bytes. The user-owned proxy has no `/v1/files` endpoint (404), and a one-worker original multimodal request returned HTTP 502 `input exceeds the context window`; this is an observed payload limitation, not evidence that five-way concurrency is unstable. No 504 retry was attempted for that 502.
+- The first complete-text transport implementation still inspected the outer `{packet: ...}` wrapper instead of its nested packet. That test-gap left inline image data inside the actual request and reproduced a 2.81 MB context-window 502. v32 fixes the earliest boundary, tests the real wrapper shape, records the request-body hash/size, and sends the same case as a 144 KB text-only request that returned 200. Later bare 504s were intermittent gateway timeouts: eight cases succeeded on attempt 2 and three on attempt 3.
 - The earlier seven-case and four-case `STOP` attempts were invalid. The first capped raw signals before deduplication; the second scanned only 8 MiB prefixes and treated a keyword subset as a global upper bound. Both conclusions are explicitly retracted.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
 - Only 8 independently timed multi-hour Goals exist in the v26 snapshot; the other 92 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
@@ -99,15 +109,17 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-Regrade the 123 corrected packets while retaining only the 349 byte-identical
-v8 primary results with their original provenance, then rebuild the targeted
-secondary review and human calibration queue. Only after the corrected queue is
+Reconcile the five outcome-unknown targeted dispatches manually, then reuse the
+349 byte-identical primary results and the 118 corrected results to build the
+targeted secondary review and human calibration queue. Only after the corrected queue is
 human-reviewed may state-change suspects proceed to outcome-aware causal
 grading. Do not infer STOP, PIVOT, or prevalence from the retracted v8 labels.
 
 ## Early-stop status
 
-`PENDING_LLM_STATE_DIFF` — corrected v27 evidence is frozen, but 123 changed
-packets require regrading and the v8 human queue is retracted. Type B still has
+`PENDING_LLM_STATE_DIFF` — complete-message evidence is frozen and 118/123
+changed packets have configuration-bound results; five outcome-unknown
+dispatches prevent declaring the corrected primary population complete. The
+v8/v27 human queues are retracted. Type B still has
 structural opportunity evidence only.
 Screening may later emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`.

@@ -19,7 +19,6 @@ from coordy.pipeline import run
 from coordy.protocol import initialize
 from coordy.redaction import redact_value
 from coordy.review import adjudicate_s0, prepare_s0_review
-from coordy.review import _excerpt
 from coordy.semantic import (
     STATE_JUDGE_INSTRUCTIONS,
     STATE_TYPES,
@@ -28,10 +27,13 @@ from coordy.semantic import (
     _claim_api_dispatch,
     _evaluate_state_smoke,
     _run_judge_batches,
+    _responses_multimodal_input,
+    _deduplicate_result_evidence_ids,
     _select_secondary_state_packets,
     _secure_write,
     _state_diff_batch_schema,
     _human_causal_chain,
+    _semantic_event,
     _normalize_state_diff_top_level,
     _select_state_smoke_packets,
     adjudicate_s0b_causal_review,
@@ -51,7 +53,7 @@ from coordy.state import update_state
 
 
 class CoordyTests(unittest.TestCase):
-    def test_excerpt_prioritizes_user_request_after_response_annotations(self):
+    def test_semantic_event_preserves_annotation_and_complete_user_request(self):
         text = """
         # Response annotations:
         <response-annotations>[{"text":"全库搜索"}]</response-annotations>
@@ -61,12 +63,67 @@ class CoordyTests(unittest.TestCase):
         这个全库搜索如果是在所有书里面搜索，就没有必要了。你应该只在当前打开的这一本书里面搜索。
         """
 
-        excerpt = _excerpt({"content": [{"type": "input_text", "text": text}]})
+        long_tail = "尾部语义" * 200
+        event = _semantic_event({
+            "timestamp": "2026-08-17T00:00:00Z",
+            "type": "response_item",
+            "payload": {
+                "id": "user-message",
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text + long_tail}],
+            },
+        }, 1)
 
-        self.assertIn("当前打开的这一本书", excerpt)
-        self.assertIn("没有必要", excerpt)
-        self.assertNotIn("Response annotations", excerpt)
-        self.assertLessEqual(len(excerpt), 280)
+        self.assertIn("Response annotations", event["content"])
+        self.assertIn('"text":"全库搜索"', event["content"])
+        self.assertIn("当前打开的这一本书", event["content"])
+        self.assertTrue(event["content"].endswith(long_tail))
+        self.assertGreater(len(event["content"]), 280)
+        self.assertTrue(event["content_complete"])
+
+    def test_responses_transport_omits_image_bytes_but_preserves_evidence_marker(self):
+        data_url = "data:image/png;base64," + ("A" * 1000)
+        packet = {
+            "pre_compaction_events": [{
+                "evidence_id": "event-1",
+                "content": (
+                    "before\n<image name=[Image #1]>\n"
+                    + json.dumps({"type": "input_image", "image_url": data_url, "detail": "low"})
+                    + "\n</image>\nafter"
+                ),
+            }],
+            "compaction_summary_events": [],
+            "post_compaction_plan_events": [],
+        }
+
+        request_input = _responses_multimodal_input({"packet": packet})
+
+        self.assertEqual(len(request_input), 1)
+        content = request_input[0]["content"]
+        self.assertEqual(len(content), 1)
+        self.assertNotIn(data_url, content[0]["text"])
+        self.assertIn("before", content[0]["text"])
+        self.assertIn("after", content[0]["text"])
+        self.assertIn("evidence_id=event-1", content[0]["text"])
+        self.assertIn("visual content unassessed", content[0]["text"])
+        self.assertIn(data_url, packet["pre_compaction_events"][0]["content"])
+
+    def test_duplicate_evidence_ids_are_normalized_without_a_second_call(self):
+        result = {
+            "states": {"goal": [{"evidence_ids": ["pre", "pre"]}]},
+            "diffs": [{
+                "pre_evidence_ids": ["pre", "pre"],
+                "post_evidence_ids": ["post", "post"],
+            }],
+        }
+
+        normalized = _deduplicate_result_evidence_ids(result)
+
+        self.assertEqual(normalized["states"]["goal"][0]["evidence_ids"], ["pre"])
+        self.assertEqual(normalized["diffs"][0]["pre_evidence_ids"], ["pre"])
+        self.assertEqual(normalized["diffs"][0]["post_evidence_ids"], ["post"])
+        self.assertEqual(normalized["duplicate_evidence_ids_removed"], 3)
 
     def bind_review_artifacts(
         self,
@@ -175,6 +232,36 @@ class CoordyTests(unittest.TestCase):
                     packet=packet,
                     allow_http_504_retry=True,
                 )
+
+    def test_preconnection_dns_failure_can_resume_without_claiming_dispatch(self):
+        packet = {"opportunity_id_hash": "op-dns", "scan_run_id": "run-1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+            )
+            failed = json.loads(path.read_text())
+            failed.update({
+                "status": "NOT_DISPATCHED_DNS_FAILURE",
+                "transport_error_type": "gaierror",
+            })
+            _secure_write(path, json.dumps(failed))
+
+            retried = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+                allow_http_504_retry=True,
+            )
+
+            record = json.loads(retried.read_text())
+            self.assertEqual(record["judge_attempt"], 2)
+            self.assertEqual(record["prior_attempts"][0]["status"], "NOT_DISPATCHED_DNS_FAILURE")
+            self.assertEqual(record["prior_attempts"][0]["transport_error_type"], "gaierror")
 
     def test_secondary_state_judge_uses_targeted_root_balanced_review(self):
         packets = [
@@ -483,6 +570,7 @@ class CoordyTests(unittest.TestCase):
             self.assertEqual(semantic["S0a"]["name"], "evidence_infrastructure")
             self.assertEqual(semantic["S0b"]["state_diff_coverage"], "every compaction opportunity")
             self.assertFalse(semantic["S0b"]["machine_judges_are_ground_truth"])
+            self.assertIn("do not truncate or redact", semantic["S0b"]["user_message_serialization"])
             self.assertTrue((workspace / "data/manifests/capability_manifest.json").is_file())
 
     def test_s0_screening_keeps_candidates_uncertain_and_does_not_persist_content(self):
@@ -1946,6 +2034,12 @@ class CoordyTests(unittest.TestCase):
         self.assertEqual(opener.calls, 1)
         self.assertEqual(judge.configuration["api_base_url"], "https://example.invalid")
         self.assertNotIn("fake-secret", json.dumps(judge.configuration))
+        accepted_dispatch = json.loads(next(dispatch_dir.glob("*.json")).read_text())
+        self.assertEqual(accepted_dispatch["request_body_bytes"], len(opener.request.data))
+        self.assertEqual(
+            accepted_dispatch["request_body_sha256"],
+            hashlib.sha256(opener.request.data).hexdigest(),
+        )
 
         malformed_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(malformed_tmp.cleanup)

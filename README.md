@@ -145,10 +145,13 @@ The top-level suspect flag is treated as a deterministic summary of the
 fine-grained diffs: only a missing, contradicted, or stale-reactivated item with
 `DIRECT` downstream relevance is a suspect. A model mismatch is preserved,
 normalized without another API call, and forced into independent/human review.
-For Codex messages wrapped in response-annotation metadata, evidence extraction
-prioritizes the explicit `My request for Codex` body before applying the bounded
-excerpt limit. Metadata must not consume the excerpt and hide the user's actual
-decision.
+S0b semantic packets preserve the complete textual message, including Codex
+response annotations and the explicit `My request for Codex` body. They do not
+truncate or redact semantic text. Embedded screenshot bytes are not sent to the
+State Diff Judge; an evidence-bound marker says that their visual content was
+not assessed. One request still represents exactly one compaction opportunity.
+The compact S0a human-review artifacts keep
+their separate bounded/redacted display policy.
 A reproducible 20–40 case human calibration queue includes disagreements,
 suspects, and actual no-post/healthy controls. Mandatory rejudge cases may exceed
 the nominal cap, but they cannot displace the control probes or be mislabeled as

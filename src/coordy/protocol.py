@@ -153,6 +153,7 @@ SEMANTIC_GRADING_AMENDMENT = {
         "state_diff_labels": ["missing", "contradicted", "stale_reactivated", "preserved"],
         "outcome_blinding": "State Diff sees pre-state, compaction summary, and post-plan only.",
         "state_window": "deterministic temporal coverage plus recency; not a last-N-only window",
+        "user_message_serialization": "preserve complete textual message content, including response annotations and the actual user request; do not truncate or redact semantic text; replace embedded image bytes with evidence-bound unassessed markers",
         "checkpoint_provenance": "scan, packet, model, effort, executable, timeout, prompt, and schema hashes",
         "single_writer": "one workspace semantic lock with atomic fsynced checkpoint replacement",
         "causal_judge_scope": "agreed high-confidence state-change suspects",

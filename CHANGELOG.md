@@ -24,7 +24,8 @@
 - Derive the State Diff top-level suspect label from evidence-bound direct risks; preserve inconsistent model summaries and route them to independent/human review without another model call.
 - Complete the v8 State Diff run across all 472 frozen compaction opportunities and 8 Goal roots, then target the independent Judge at 45 mandatory cases plus 3 no-post and 3 healthy controls.
 - Require real rejudged no-post/healthy cases for the calibration control stratum; do not relabel arbitrary mandatory disagreements as deterministic controls.
-- Preserve the actual user request ahead of Codex response-annotation metadata when constructing bounded semantic evidence; retract State Diff calibration artifacts built from header-only excerpts.
+- Preserve complete S0b text, including response annotations and the actual user request, without semantic truncation or redaction; replace embedded screenshot bytes with evidence-bound unassessed markers and retract calibration artifacts built from header-only excerpts.
+- Fix the real nested packet transport so screenshot data is actually omitted, bind request-body size/hash in dispatch provenance, and regrade 118/123 excerpt-affected packets without another context-window 502 or resending five outcome-unknown dispatches.
 - Bind stronger causal judging to structured tool exit codes and successful patch facts, keep prose from masquerading as engineering outcomes, and require human review before any machine Type A/B/C/D/U prelabel becomes ground truth.
 - Make S0b resumability fail closed: one semantic writer lock, atomic/fsynced checkpoints, full judge-configuration provenance, frozen-session binding, direct T0/T1 causal evidence, and hash-bound causal answer ingestion; the former subprocess cleanup path is retained only in retracted history.
 - Add the local-report-driven Active Plan State scope as a protocol amendment while keeping the ignored report itself out of Git.
