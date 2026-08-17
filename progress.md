@@ -33,7 +33,7 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - Added isolated, resumable LLM judge checkpoints, evidence-ID validation, an independent second judge, a reproducible 30-case human calibration sample, and readable one-question review cards.
 - Added a causal evidence policy that accepts structured tool exit codes and `patch_apply_end` facts while refusing to treat transcript prose as an engineering consequence.
 - Added a deterministic, hash-bound State Diff smoke artifact so external approval names an immutable payload rather than a moving workspace.
-- Revised the State Diff contract after the v5 smoke exposed a redundant-binding failure: every comparison now identifies one phase-bound pre-compaction state item by index and cites post-plan evidence without repeating a second, potentially inconsistent pre-evidence list. A fresh smoke requires approval of both the payload and judge-configuration hashes; no request has been sent with v6.
+- Revised the State Diff contract after the v5 smoke exposed a redundant-binding failure: every comparison now identifies one phase-bound pre-compaction state item by index and cites post-plan evidence without repeating a second, potentially inconsistent pre-evidence list. The approved v6 smoke completed all 12 cases and passed the safety/evidence-binding gate.
 
 ## Outputs
 
@@ -76,6 +76,7 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - Official App Server v2 schema exposes `thread/list`, `thread/read`, and explicit compaction events, but a read-only runtime connection was not verified; starting a new server would initialize Codex state and was rejected for this phase.
 - The approved v26 direct-API smoke ran serially and stopped after 5 dispatches, with no retry. Four results passed local validation: all 3 no-post-plan controls were correctly `UNASSESSABLE`, and the first post-plan case was `NO_MATERIAL_CHANGE`. The fifth API response was schema-valid but failed the minimum earlier-to-post evidence comparison, so the remaining 7 cases were not sent. The five calls used 153,491 input and 7,889 output tokens (161,380 total, including 603 reasoning tokens). The failure ledger retains request/response/token provenance, but this pre-diagnostic run did not retain the rejected semantic body; subsequent fresh runs will store a redacted rejected result. This is a Judge safety/evidence-binding failure, not evidence for or against long-term drift prevalence.
 - The separately approved v5 smoke used an isolated ignored workspace and stopped after 4 dispatches, with no retry. Three controls passed; the fourth response cited a concrete goal item by index but added another pre-compaction evidence ID belonging to a different state item, so local binding validation rejected it. The four calls used 111,788 input and 5,236 output tokens (117,024 total, including 493 reasoning tokens). The redacted rejected result, request/response IDs, token usage, result hash, and dispatch snapshot hash are retained. This remains a Judge contract failure, not evidence for or against long-term drift.
+- The approved v6 smoke completed 12/12 serial dispatches: all 3 controls were `UNASSESSABLE`, all 9 post-plan cases were assessable, and none was marked suspect. It used 365,646 input and 20,806 output tokens (386,452 total, including 2,175 reasoning tokens). Result/config hashes, request/response provenance, 0600 permissions, and privacy probes passed. This validates the safety/evidence-binding seam only; it does not establish Judge accuracy or drift prevalence.
 - The earlier seven-case and four-case `STOP` attempts were invalid. The first capped raw signals before deduplication; the second scanned only 8 MiB prefixes and treated a keyword subset as a global upper bound. Both conclusions are explicitly retracted.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
 - Only 8 independently timed multi-hour Goals exist in the v26 snapshot; the other 92 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
@@ -85,10 +86,9 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-The simplified v6 State Diff Judge contract is locally implemented and verified but
-not yet approved for external use. The next smoke must retain rejected-result
-diagnostics, preserve the same three controls, and receive explicit approval
-for its new judge-configuration hash.
+The simplified v6 State Diff Judge contract passed its frozen smoke. Before any
+population-level claim, run the full blinded State Diff population and the
+independent/human calibration gates required by the semantic amendment.
 Do not resend the failed opportunity automatically, do not continue the remaining
 seven cases from this aborted run, and do not authorize the 472-case population.
 Only a fresh safety/evidence-binding smoke may reopen human calibration and causal
