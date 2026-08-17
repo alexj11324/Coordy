@@ -1621,6 +1621,7 @@ def _select_secondary_state_packets(
     target: int = 30,
     maximum: int = 40,
     no_post_control_target: int = 3,
+    healthy_control_target: int = 3,
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, Any]]:
     packet_by_id = {str(row["opportunity_id_hash"]): row for row in packets}
     primary_by_id = {str(row["opportunity_id_hash"]): row for row in primary}
@@ -1671,16 +1672,14 @@ def _select_secondary_state_packets(
         return added
 
     desired_total = min(target, len(packets))
-    available_slots = max(0, desired_total - len(selected))
     controls = [
         opportunity_id
         for opportunity_id, packet in packet_by_id.items()
         if not packet.get("post_compaction_plan_events")
     ]
     control_count = add_balanced(
-        controls, min(no_post_control_target, available_slots), "no_post_control"
+        controls, no_post_control_target, "no_post_control"
     )
-    available_slots = max(0, desired_total - len(selected))
     healthy = [
         opportunity_id
         for opportunity_id, row in primary_by_id.items()
@@ -1689,7 +1688,14 @@ def _select_secondary_state_packets(
         and row["assessment_status"] == "NO_MATERIAL_CHANGE"
         and packet_by_id[opportunity_id].get("post_compaction_plan_events")
     ]
-    healthy_count = add_balanced(healthy, available_slots, "healthy_no_material_change")
+    healthy_count = add_balanced(
+        healthy, healthy_control_target, "healthy_no_material_change"
+    )
+    healthy_count += add_balanced(
+        healthy,
+        max(0, desired_total - len(selected)),
+        "healthy_no_material_change",
+    )
     ordered_packets = [
         packet for packet in packets if str(packet["opportunity_id_hash"]) in selected
     ]
@@ -1705,8 +1711,11 @@ def _select_secondary_state_packets(
         }),
         "maximum_exceeded_by_mandatory_cases": len(mandatory) > maximum,
         "shortfall_reason": (
-            "insufficient eligible controls or healthy cases"
-            if len(ordered_packets) < desired_total else None
+            "insufficient eligible no-post or healthy controls"
+            if control_count < no_post_control_target
+            or healthy_count < healthy_control_target
+            or len(ordered_packets) < desired_total
+            else None
         ),
     }
     return ordered_packets, strata, metadata
@@ -1778,6 +1787,11 @@ def _run_s0b_state_diff_locked(
         consensus.append(row)
 
     calibration_target = min(30, len(secondary))
+    true_control_ids = {
+        opportunity_id
+        for opportunity_id, stratum in secondary_strata.items()
+        if stratum in {"no_post_control", "healthy_no_material_change"}
+    }
     priority_groups = (
         (
             "disagreement_or_low_confidence",
@@ -1785,6 +1799,7 @@ def _run_s0b_state_diff_locked(
                 row for row in consensus
                 if row["secondary_judge_id"] is not None
                 and row["requires_human_calibration"]
+                and str(row["opportunity_id_hash"]) not in true_control_ids
             ],
         ),
         (
@@ -1793,12 +1808,16 @@ def _run_s0b_state_diff_locked(
                 row for row in consensus
                 if row["secondary_judge_id"] is not None
                 and row["suspected_state_change"] is True
+                and str(row["opportunity_id_hash"]) not in true_control_ids
             ],
         ),
         (
             "deterministic_control",
             sorted(
-                [row for row in consensus if row["secondary_judge_id"] is not None],
+                [
+                    row for row in consensus
+                    if str(row["opportunity_id_hash"]) in true_control_ids
+                ],
                 key=lambda row: _hash(
                     f'{manifest["scan_run_id"]}:{row["opportunity_id_hash"]}:calibration'
                 ),
@@ -1853,17 +1872,31 @@ def _run_s0b_state_diff_locked(
             break
 
     if len(calibration) < calibration_target:
-        for row in priority_groups[-1][1]:
+        remaining_rows = sorted(
+            [row for row in consensus if row["secondary_judge_id"] is not None],
+            key=lambda row: _hash(
+                f'{manifest["scan_run_id"]}:{row["opportunity_id_hash"]}:calibration-fill'
+            ),
+        )
+        for row in remaining_rows:
             opportunity_id = str(row["opportunity_id_hash"])
             if opportunity_id in selected:
                 continue
             selected.add(opportunity_id)
             first = primary_by_id[opportunity_id]
             second = secondary_by_id.get(opportunity_id)
+            if opportunity_id in true_control_ids:
+                selection_stratum = "deterministic_control"
+            elif row["requires_human_calibration"]:
+                selection_stratum = "disagreement_or_low_confidence"
+            elif row["suspected_state_change"] is True:
+                selection_stratum = "suspected_state_change"
+            else:
+                selection_stratum = "independent_rejudge"
             calibration.append({
                 "opportunity_id_hash": opportunity_id,
                 "goal_thread_id_hash": packet_by_id[opportunity_id].get("goal_thread_id_hash"),
-                "selection_stratum": "deterministic_control",
+                "selection_stratum": selection_stratum,
                 "secondary_selection_stratum": secondary_strata[opportunity_id],
                 "machine_status": row["status"],
                 "original_state": [

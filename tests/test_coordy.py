@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
@@ -200,6 +201,51 @@ class CoordyTests(unittest.TestCase):
         )
         self.assertEqual(strata, strata_again)
         self.assertEqual(metadata, metadata_again)
+
+    def test_secondary_state_judge_keeps_real_controls_when_mandatory_cases_overflow(self):
+        packets = [
+            {
+                "opportunity_id_hash": f"{index:064x}",
+                "goal_thread_id_hash": f"root-{index % 8}",
+                "post_compaction_plan_events": (
+                    [] if 45 <= index < 50 else [{"evidence_id": "post"}]
+                ),
+            }
+            for index in range(60)
+        ]
+        primary = [
+            {
+                "opportunity_id_hash": packet["opportunity_id_hash"],
+                "suspected_state_change": index < 45,
+                "confidence": 0.95,
+                "assessment_status": (
+                    "SUSPECT"
+                    if index < 45
+                    else (
+                        "UNASSESSABLE"
+                        if not packet["post_compaction_plan_events"]
+                        else "NO_MATERIAL_CHANGE"
+                    )
+                ),
+            }
+            for index, packet in enumerate(packets)
+        ]
+
+        selected, strata, metadata = _select_secondary_state_packets(
+            "scan-run", packets, primary
+        )
+
+        self.assertEqual(len(selected), 51)
+        self.assertEqual(metadata["mandatory_count"], 45)
+        self.assertEqual(metadata["no_post_control_count"], 3)
+        self.assertEqual(metadata["healthy_no_material_change_count"], 3)
+        self.assertTrue(metadata["maximum_exceeded_by_mandatory_cases"])
+        self.assertEqual(
+            Counter(strata.values())["no_post_control"], 3
+        )
+        self.assertEqual(
+            Counter(strata.values())["healthy_no_material_change"], 3
+        )
 
     def test_state_diff_top_level_is_derived_from_direct_risks(self):
         packet = {"post_compaction_plan_events": [{"evidence_id": "post"}]}

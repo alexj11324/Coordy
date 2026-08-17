@@ -146,7 +146,9 @@ fine-grained diffs: only a missing, contradicted, or stale-reactivated item with
 `DIRECT` downstream relevance is a suspect. A model mismatch is preserved,
 normalized without another API call, and forced into independent/human review.
 A reproducible 20–40 case human calibration queue includes disagreements,
-suspects, and deterministic controls. Bound `HUMAN_CONFIRMED` answers produce
+suspects, and actual no-post/healthy controls. Mandatory rejudge cases may exceed
+the nominal cap, but they cannot displace the control probes or be mislabeled as
+controls. Bound `HUMAN_CONFIRMED` answers produce
 precision, recall, false-pause rate, primary/secondary agreement, and a
 missed-positive control-probe rate; fewer than 20 decided cases or failure of
 the frozen 0.80/0.70/0.10 quality floor remains insufficient evidence.
