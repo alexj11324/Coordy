@@ -141,6 +141,10 @@ smoke dispatch is serial. Every grading path durably records dispatch before
 each POST, so an interrupted or otherwise uncertain dispatch blocks automatic
 resend. API credentials are read only from a private `0600` `.env.local` or process
 environment; `.env*` files are ignored except for `.env.example`.
+The top-level suspect flag is treated as a deterministic summary of the
+fine-grained diffs: only a missing, contradicted, or stale-reactivated item with
+`DIRECT` downstream relevance is a suspect. A model mismatch is preserved,
+normalized without another API call, and forced into independent/human review.
 A reproducible 20–40 case human calibration queue includes disagreements,
 suspects, and deterministic controls. Bound `HUMAN_CONFIRMED` answers produce
 precision, recall, false-pause rate, primary/secondary agreement, and a

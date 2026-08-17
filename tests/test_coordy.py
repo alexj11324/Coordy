@@ -30,6 +30,7 @@ from coordy.semantic import (
     _secure_write,
     _state_diff_batch_schema,
     _human_causal_chain,
+    _normalize_state_diff_top_level,
     _select_state_smoke_packets,
     adjudicate_s0b_causal_review,
     adjudicate_s0b_state_calibration,
@@ -199,6 +200,24 @@ class CoordyTests(unittest.TestCase):
         )
         self.assertEqual(strata, strata_again)
         self.assertEqual(metadata, metadata_again)
+
+    def test_state_diff_top_level_is_derived_from_direct_risks(self):
+        packet = {"post_compaction_plan_events": [{"evidence_id": "post"}]}
+        row = {
+            "assessment_status": "SUSPECT",
+            "suspected_state_change": True,
+            "diffs": [
+                {
+                    "status": "stale_reactivated",
+                    "downstream_relevance": "NONE",
+                }
+            ],
+        }
+        normalized = _normalize_state_diff_top_level(packet, row)
+        self.assertEqual(normalized["assessment_status"], "NO_MATERIAL_CHANGE")
+        self.assertFalse(normalized["suspected_state_change"])
+        self.assertTrue(normalized["top_level_normalized"])
+        self.assertEqual(normalized["judge_reported_assessment_status"], "SUSPECT")
 
     def test_redacts_nested_secrets(self):
         clean, count = redact_value({

@@ -459,6 +459,7 @@ def _claim_api_dispatch(
     configuration_sha256: str,
     packet: dict[str, Any],
     allow_http_504_retry: bool = False,
+    allow_semantic_normalization: bool = False,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
@@ -477,8 +478,14 @@ def _claim_api_dispatch(
     try:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as exc:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            allow_semantic_normalization
+            and existing.get("status") == "SEMANTIC_VALIDATION_FAILED_NO_RETRY"
+            and isinstance(existing.get("rejected_result"), list)
+        ):
+            return path
         if allow_http_504_retry:
-            existing = json.loads(path.read_text(encoding="utf-8"))
             same_request = all(existing.get(key) == record.get(key) for key in (
                 "scan_run_id",
                 "opportunity_id_hash",
@@ -672,6 +679,33 @@ def _run_responses_api_structured(
     return structured, metadata
 
 
+def _normalize_state_diff_top_level(
+    packet: dict[str, Any], row: dict[str, Any]
+) -> dict[str, Any]:
+    if not packet.get("post_compaction_plan_events"):
+        return row
+    direct_risk = any(
+        diff.get("status") in {"missing", "contradicted", "stale_reactivated"}
+        and diff.get("downstream_relevance") == "DIRECT"
+        for diff in row.get("diffs", [])
+        if isinstance(diff, dict)
+    )
+    expected_status = "SUSPECT" if direct_risk else "NO_MATERIAL_CHANGE"
+    if (
+        row.get("suspected_state_change") is direct_risk
+        and row.get("assessment_status") == expected_status
+    ):
+        return row
+    return {
+        **row,
+        "judge_reported_assessment_status": row.get("assessment_status"),
+        "judge_reported_suspected_state_change": row.get("suspected_state_change"),
+        "assessment_status": expected_status,
+        "suspected_state_change": direct_risk,
+        "top_level_normalized": True,
+    }
+
+
 class ResponsesAPIStateJudge:
     """Outcome-blinded singleton judge over a strict OpenAI-compatible Responses API."""
 
@@ -731,7 +765,21 @@ class ResponsesAPIStateJudge:
             configuration_sha256=self.configuration_sha256,
             packet=packet,
             allow_http_504_retry=self.allow_http_504_retry,
+            allow_semantic_normalization=True,
         )
+        existing_dispatch = json.loads(dispatch_record_path.read_text(encoding="utf-8"))
+        if existing_dispatch.get("status") == "SEMANTIC_VALIDATION_FAILED_NO_RETRY":
+            combined = [
+                _normalize_state_diff_top_level(packet, row)
+                for row in existing_dispatch["rejected_result"]
+            ]
+            for row in combined:
+                validate_state_diff_result(packet, row)
+            _update_api_dispatch(
+                dispatch_record_path,
+                status="SEMANTIC_RESULT_NORMALIZED_PENDING_CHECKPOINT",
+            )
+            return combined
         envelope, metadata = _run_responses_api_structured(
             base_url=self.base_url,
             api_key=self.api_key,
@@ -749,6 +797,11 @@ class ResponsesAPIStateJudge:
         if not isinstance(results, list):
             raise RuntimeError(f"Responses state judge {self.judge_id} omitted results")
         combined = [{**row, **metadata} if isinstance(row, dict) else row for row in results]
+        combined = [
+            _normalize_state_diff_top_level(packet, row)
+            if isinstance(row, dict) else row
+            for row in combined
+        ]
         try:
             for row in combined:
                 validate_state_diff_result(packet, row)
@@ -1576,13 +1629,18 @@ def _select_secondary_state_packets(
         for opportunity_id, row in primary_by_id.items()
         if row["suspected_state_change"] is True
         or float(row["confidence"]) < LOW_CONFIDENCE_THRESHOLD
+        or row.get("top_level_normalized") is True
     }
     selected = set(mandatory)
     strata = {
         opportunity_id: (
             "suspected_state_change"
             if primary_by_id[opportunity_id]["suspected_state_change"] is True
-            else "low_confidence"
+            else (
+                "normalized_top_level"
+                if primary_by_id[opportunity_id].get("top_level_normalized") is True
+                else "low_confidence"
+            )
         )
         for opportunity_id in mandatory
     }
@@ -1694,13 +1752,18 @@ def _run_s0b_state_diff_locked(
         low_confidence = float(first["confidence"]) < LOW_CONFIDENCE_THRESHOLD or (
             second is not None and float(second["confidence"]) < LOW_CONFIDENCE_THRESHOLD
         )
+        normalized_top_level = first.get("top_level_normalized") is True or (
+            second is not None and second.get("top_level_normalized") is True
+        )
         disagreement = second is not None and _semantic_signature(first) != _semantic_signature(second)
         status = "PRIMARY_ONLY"
         if second is not None:
             status = "DISAGREEMENT" if disagreement else "AGREED"
-        if low_confidence:
+        if normalized_top_level:
+            status = "NORMALIZED_TOP_LEVEL" if not disagreement else "DISAGREEMENT_NORMALIZED"
+        elif low_confidence:
             status = "LOW_CONFIDENCE" if not disagreement else "DISAGREEMENT_LOW_CONFIDENCE"
-        agreed_state_change = None if disagreement or low_confidence else bool(
+        agreed_state_change = None if disagreement or low_confidence or normalized_top_level else bool(
             first["suspected_state_change"]
         )
         row = {
@@ -1710,7 +1773,7 @@ def _run_s0b_state_diff_locked(
             "secondary_judge_id": secondary_judge.judge_id if second is not None else None,
             "status": status,
             "suspected_state_change": agreed_state_change,
-            "requires_human_calibration": disagreement or low_confidence,
+            "requires_human_calibration": disagreement or low_confidence or normalized_top_level,
         }
         consensus.append(row)
 

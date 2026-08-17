@@ -44,6 +44,7 @@
     "prose_is_engineering_consequence": false,
     "state_diff_coverage": "every compaction opportunity",
     "state_diff_isolation": "one opportunity per API request; output schema binds the exact opportunity and allowed evidence IDs",
+    "state_diff_top_level": "suspect is deterministically derived from at least one missing, contradicted, or stale-reactivated diff with DIRECT downstream relevance; inconsistent model summaries are preserved, normalized without another call, and forced to independent/human review",
     "judge_transport": "direct OpenAI-compatible Responses API; no codex exec subprocess",
     "judge_tool_policy": "request and response both require tools=[]; store=false and parallel_tool_calls=false",
     "maximum_judge_attempts_per_opportunity": "1 normally; up to two explicitly authorized retries only for an HTTP 504 with no request ID, response ID, or usage",
