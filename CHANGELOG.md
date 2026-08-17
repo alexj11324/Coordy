@@ -29,3 +29,4 @@
 - Record the approved v5 smoke abort after 4 dispatches and remove its redundant diff-level pre-evidence list; v6 binds each diff to one phase-validated pre-state item plus post-plan evidence.
 - Complete the approved v6 12-case smoke with 3/3 controls and 9/9 post-plan cases passing the safety/evidence-binding gate; retain accuracy and full-population claims as false pending calibration.
 - Replace numeric pre-state indices with exact statement binding after the first full-population attempt exposed an off-by-one Judge output; submit concurrent work in bounded worker-sized batches so failures stop further dispatch.
+- Remove the remaining states-to-diff cross-reference after v7 showed exact-text copying was brittle; bind each diff directly to pre-compaction and post-plan evidence instead.
