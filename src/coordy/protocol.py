@@ -107,6 +107,22 @@ SCREENING_SAMPLING_AMENDMENT = {
         "root_rollout_before_descendants_within_each_goal",
         "most_recent_proxy_eligible_rollouts_only_after_goal_lineage",
     ],
+    "opportunity_population": {
+        "unit": "goal_root_plus_real_compaction_boundary",
+        "keyword_rules": "ranking_only_not_population_definition",
+        "required_artifact": "opportunity_population.jsonl",
+        "prefix_truncation": "fail_closed",
+    },
+    "stratified_review": {
+        "maximum_cases": 12,
+        "targets": {"high_signal": 6, "recall_probe": 3, "healthy_hard_negative": 3},
+        "answers": ["YES", "NO", "UNCERTAIN"],
+        "required_reviewer_types": ["HUMAN_CONFIRMED", "MACHINE_PRELABEL"],
+        "machine_prelabels_are_terminal_evidence": False,
+        "positive_probe_requires_candidate_expansion": True,
+    },
+    "pivot_evidence": "Requires 1-4 confirmed classified failures, all in one explicit scenario, plus cases from at least three Goal roots or a separately recorded high-value rationale; repository concentration is not sufficient.",
+    "duration_semantics": "goal_time_used_seconds is an observed Codex Goal selection attribute, not a human-equivalent task duration or METR time horizon.",
     "privacy": "Do not select or persist Goal objective text. Added lineage metadata uses a hashed Goal identity; the existing session_id remains solely for frozen source binding.",
 }
 

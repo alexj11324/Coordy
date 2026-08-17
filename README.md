@@ -61,8 +61,10 @@ keys, and limitations; it never writes transcript content or reads config/auth
 contents. An unknown history schema fails closed with no selected adapter.
 
 `coordy screen` runs only the low-cost S0 prevalence gate. It scans at most
-100 eligible sessions and at most 8 MiB per rollout. Every generated case stays
-`uncertain` until evidence review, and Screening can never emit `GO`.
+100 eligible sessions. Each selected rollout is streamed in full, with a
+2 GiB fail-closed safety ceiling; no prefix-truncated session is accepted.
+Every generated case stays `uncertain` until evidence review, and Screening
+can never emit `GO`.
 When the standard Codex Goal database is available, screening first makes a
 verified filesystem snapshot of the database and its WAL sidecars without
 opening the live database, then reads only Goal identity/status/duration. Goals
@@ -75,20 +77,26 @@ persisted, Goal lineage uses a hashed root identity, and the existing session
 identity remains only for frozen source binding. Unknown or ambiguous Goal
 schemas and parent lineages fail closed.
 
-`coordy review-s0` verifies each frozen source prefix before writing local
-0600 evidence cards. Cutoff-safe evidence and retrospective outcome evidence
-remain separate, auxiliary approval-reviewer sessions are excluded, and cards
-are deduplicated by session plus compaction episode. These cards are only a
-structural upper bound: they are not called replayable Decision Points until a
-causal case manifest and repository cutoff are reconstructed. Fewer than 10
-unique structural episodes can trigger the frozen S0 `STOP` rule without asking
-the user to label noise only when the full candidate population was retained
-(`candidate_episode_overflow == 0`). Otherwise, only structurally complete cases
-with interpretable outcome evidence may enter the maximum-12 queue; the user
-answers only `YES`, `NO`, or `UNCERTAIN`. S0 leaves the exact A/B/C type
-unclassified until external-change exclusions and the causal chain are built.
-Passing those prevalence gates proceeds to causal case construction, not S1 or
-a premature GO.
+Every real compaction boundary becomes a privacy-safe structural opportunity,
+whether or not a keyword matched. Opportunities are clustered by Goal root plus
+boundary; descendant sessions are observations inside that cluster, not
+independent long tasks. `rule_discovered_episodes.jsonl` is only a ranked subset
+of `opportunity_population.jsonl`, never a population estimate or upper bound.
+
+`coordy review-s0` verifies frozen source hashes before writing local 0600 T0-T5
+evidence cards. The maximum-12 queue is stratified into six high-signal cases,
+three deterministic no-keyword recall probes, and three healthy-looking hard
+negatives. Missing quota is reported rather than silently backfilled. Each case
+asks exactly one `YES`/`NO`/`UNCERTAIN` causal question. Answer files are bound to
+the scan run, evidence-card hash, and queue hash. A positive recall probe or hard
+negative forces candidate expansion; incomplete Type B cross-session coverage
+keeps the result at `INSUFFICIENT_EVIDENCE` rather than allowing a premature
+`STOP` or `PIVOT`. The answer artifact must also declare whether answers are
+`HUMAN_CONFIRMED` or only a `MACHINE_PRELABEL`. Machine prelabels produce
+preliminary metrics and `PENDING_HUMAN_CALIBRATION`; they can never trigger a
+Screening decision. A `PIVOT` additionally requires 1-4 confirmed classified
+failures, all bound to one scenario tag, plus cases spanning at least three
+Goal roots or a separately recorded high-value rationale.
 
 ## Privacy and evidence
 

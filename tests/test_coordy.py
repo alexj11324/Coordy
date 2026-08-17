@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from coordy.ingest import ingest
 from coordy.discovery import discover_codex_environment
@@ -26,26 +27,49 @@ class CoordyTests(unittest.TestCase):
         *,
         overflow: int = 0,
         reviewable_population_size: int | None = None,
+        cross_status: str = "COMPLETE",
     ) -> None:
         evidence = output / "evidence_cards.jsonl"
         queue = output / "user_review_queue.json"
         summary = {
             "scan_run_id": "test-run",
             "candidate_episode_overflow": overflow,
+            "opportunity_population_count": len(evidence.read_text().splitlines()) + overflow,
+            "cross_session_invalidation_mining_status": cross_status,
         }
         manifest = {
             "scan_run_id": "test-run",
-            "scanner_version": "s0-v5",
+            "scanner_version": "s0-v7",
             "candidate_episode_overflow": overflow,
-            "reviewable_population_size": (
-                len(json.loads(queue.read_text()))
-                if reviewable_population_size is None else reviewable_population_size
-            ),
+            "opportunity_population_count": len(evidence.read_text().splitlines()) + overflow,
+            "population_replayability_validated": overflow == 0,
+            "cross_session_invalidation_mining_status": cross_status,
+            "opportunity_population_sha256": hashlib.sha256(b"").hexdigest(),
             "evidence_cards_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
             "user_review_queue_sha256": hashlib.sha256(queue.read_bytes()).hexdigest(),
         }
         (output / "screening_summary.json").write_text(json.dumps(summary))
         (output / "s0_review_manifest.json").write_text(json.dumps(manifest))
+        (output / "opportunity_population.jsonl").write_text("")
+
+    def write_bound_answers(
+        self,
+        output: Path,
+        path: Path,
+        answers: list[dict],
+        *,
+        reviewer_type: str = "HUMAN_CONFIRMED",
+        **extra: object,
+    ) -> None:
+        manifest = json.loads((output / "s0_review_manifest.json").read_text())
+        path.write_text(json.dumps({
+            "scan_run_id": manifest["scan_run_id"],
+            "evidence_cards_sha256": manifest["evidence_cards_sha256"],
+            "user_review_queue_sha256": manifest["user_review_queue_sha256"],
+            "reviewer_type": reviewer_type,
+            "answers": answers,
+            **extra,
+        }))
 
     def event(self, event_id: str, session: str, timestamp: str, content: str, **kwargs) -> CanonicalEvent:
         return CanonicalEvent(event_id, session, timestamp, 0, "user", kwargs.pop("event_type", "message"), content, **kwargs)
@@ -242,6 +266,8 @@ class CoordyTests(unittest.TestCase):
             sampling = json.loads((protocol / "screening_sampling_amendment_v2.json").read_text())
             self.assertEqual(sampling["preferred_goal_minimum_seconds"], 7200)
             self.assertEqual(sampling["gate_changes"], "none")
+            self.assertEqual(sampling["opportunity_population"]["keyword_rules"], "ranking_only_not_population_definition")
+            self.assertIn("not a human-equivalent", sampling["duration_semantics"])
             self.assertTrue((workspace / "data/manifests/capability_manifest.json").is_file())
 
     def test_s0_screening_keeps_candidates_uncertain_and_does_not_persist_content(self):
@@ -300,8 +326,162 @@ class CoordyTests(unittest.TestCase):
             self.assertEqual(eligible["session_id"], "main")
             self.assertEqual(eligible["compaction_count_scanned"], 0)
             self.assertEqual(eligible["summary_count_scanned"], 0)
+            self.assertEqual((root / "out/data/screening/candidate_decision_points.jsonl").read_text(), "")
+
+    def test_s0_ignores_internal_subagent_notifications_as_user_corrections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "main", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "response_item", "payload": {
+                    "id": "notification", "type": "message", "role": "user",
+                    "content": "<subagent_notification>review says rollback and 你忘了 a test</subagent_notification>",
+                }},
+            ]
+            (sessions / "main.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(root / "out", [sessions])
+
+            self.assertEqual(result["raw_candidate_signals"], 0)
+            self.assertEqual(result["candidate_decision_points"], 1)
             candidate = json.loads((root / "out/data/screening/candidate_decision_points.jsonl").read_text())
-            self.assertFalse(candidate["after_compaction"])
+            self.assertEqual(candidate["rule_signals"], [])
+            self.assertFalse(candidate["has_observable_outcome"])
+
+    def test_s0_excludes_auxiliary_code_review_subagents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {
+                    "id": "reviewer", "cwd": "/repo",
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "main", "agent_path": "/root/final_code_review",
+                        "agent_role": "code-reviewer",
+                    }}},
+                }},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "response_item", "payload": {
+                    "id": "finding", "type": "message", "role": "assistant", "content": "rollback path is unsafe",
+                }},
+            ]
+            (sessions / "reviewer.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(root / "out", [sessions])
+
+            self.assertEqual(result["eligible_sessions"], 0)
+            self.assertEqual(result["auxiliary_sessions_excluded"], 1)
+
+    def test_s0_excludes_no_role_spec_review_by_terminal_task_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {
+                    "id": "reviewer", "cwd": "/repo",
+                    "source": {"subagent": {"thread_spawn": {
+                        "parent_thread_id": "main", "agent_path": "/root/event_snapshot_spec_review2",
+                    }}},
+                }},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "compact"}},
+            ]
+            (sessions / "reviewer.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(root / "out", [sessions])
+
+            self.assertEqual(result["eligible_sessions"], 0)
+            self.assertEqual(result["auxiliary_sessions_excluded"], 1)
+
+    def test_s0_assistant_rollback_mention_is_not_an_engineering_consequence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "main", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "response_item", "payload": {
+                    "id": "mention", "type": "message", "role": "assistant", "content": "review the rollback behavior",
+                }},
+            ]
+            (sessions / "main.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            run_s0_screening(root / "out", [sessions])
+
+            candidate = json.loads((root / "out/data/screening/candidate_decision_points.jsonl").read_text())
+            self.assertFalse(candidate["has_observable_outcome"])
+
+    def test_s0_preserves_legitimate_user_text_next_to_internal_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "main", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "state", "type": "message", "role": "user", "content": "must preserve the real constraint"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "action", "type": "message", "role": "assistant", "content": "continue"}},
+                {"timestamp": "2026-08-16T00:04:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "<recommended_plugins>internal</recommended_plugins> 你忘了 real constraint"}},
+            ]
+            (sessions / "main.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(root / "out", [sessions])
+
+            self.assertEqual(result["raw_candidate_signals"], 1)
+            opportunity = json.loads((root / "out/data/screening/opportunity_population.jsonl").read_text())
+            self.assertIn("user_correction", opportunity["rule_signals"])
+
+    def test_s0_keeps_implementation_subagent_whose_name_mentions_review_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "impl", "cwd": "/repo", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "main", "agent_path": "/root/luna_fix_review_findings", "agent_role": "sol_advisor_luna_implementer"}}}}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "response_item", "payload": {"id": "action", "type": "message", "role": "assistant", "content": "implementation continues"}},
+            ]
+            (sessions / "impl.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            result = run_s0_screening(root / "out", [sessions])
+
+            self.assertEqual(result["eligible_sessions"], 1)
+            self.assertEqual(result["auxiliary_sessions_excluded"], 0)
+
+    def test_s0_expected_tdd_failure_is_not_an_observable_consequence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "main", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "state", "type": "message", "role": "user", "content": "must add regression coverage"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "red", "type": "message", "role": "assistant", "content": "This red test should fail before the fix."}},
+                {"timestamp": "2026-08-16T00:04:00Z", "type": "response_item", "payload": {"id": "failure", "type": "function_call_output", "output": "tests failed"}},
+            ]
+            (sessions / "main.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+
+            run_s0_screening(root / "out", [sessions])
+
+            opportunity = json.loads((root / "out/data/screening/opportunity_population.jsonl").read_text())
+            self.assertFalse(opportunity["has_observable_outcome"])
+
+    def test_s0_fails_closed_instead_of_truncating_a_rollout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            (sessions / "large.jsonl").write_text("x" * 101)
+
+            with patch("coordy.screening.MAX_SCAN_BYTES_PER_SESSION", 100):
+                with self.assertRaisesRegex(RuntimeError, "fail-closed scan ceiling"):
+                    run_s0_screening(root / "out", [sessions])
 
     def test_s0_deduplicates_compaction_episodes_before_candidate_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -327,13 +507,15 @@ class CoordyTests(unittest.TestCase):
             result = run_s0_screening(root / "out", [sessions], max_sessions=2, max_candidates=2)
 
             self.assertEqual(result["raw_candidate_signals"], 11)
-            self.assertEqual(result["unique_candidate_episodes_total"], 2)
+            self.assertEqual(result["opportunity_population_count"], 2)
             self.assertEqual(result["candidate_episode_overflow"], 0)
             candidates = [
                 json.loads(line)
                 for line in (root / "out/data/screening/candidate_decision_points.jsonl").read_text().splitlines()
             ]
-            self.assertEqual({row["session_id"] for row in candidates}, {"s1", "s2"})
+            self.assertEqual({row["session_id_hash"] for row in candidates}, {
+                hashlib.sha256(b"s1").hexdigest(), hashlib.sha256(b"s2").hexdigest()
+            })
 
     def test_s0_prioritizes_multi_hour_goal_lineage_before_recent_proxies(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -698,9 +880,14 @@ class CoordyTests(unittest.TestCase):
             )
 
             self.assertEqual(result["raw_candidate_signals"], 2)
-            self.assertEqual(result["unique_candidate_episodes_total"], 1)
+            self.assertEqual(result["opportunity_population_count"], 1)
             candidate = json.loads((root / "out/data/screening/candidate_decision_points.jsonl").read_text())
-            self.assertEqual(candidate["supporting_signal_count"], 2)
+            self.assertEqual(candidate["cluster_observation_count"], 2)
+            opportunity_text = (root / "out/data/screening/opportunity_population.jsonl").read_text()
+            opportunity = json.loads(opportunity_text)
+            self.assertEqual(opportunity["goal_time_used_seconds_observed"], 10800)
+            self.assertNotIn("human", opportunity_text.lower())
+            self.assertNotIn("goal-root", opportunity_text)
 
     def test_prepare_s0_review_separates_cutoff_evidence_from_outcome_and_redacts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -722,10 +909,9 @@ class CoordyTests(unittest.TestCase):
 
             result = prepare_s0_review(workspace, max_reviews=12)
 
-            self.assertEqual(result["review_cards"], 0)
-            self.assertEqual(result["status"], "DECIDED")
-            self.assertEqual(result["decision"], "STOP")
-            self.assertEqual(result["unique_structural_replay_upper_bound"], 1)
+            self.assertEqual(result["review_cards"], 1)
+            self.assertEqual(result["status"], "PENDING_USER_REVIEW")
+            self.assertIsNone(result["decision"])
             card = json.loads((workspace / "data/screening/evidence_cards.jsonl").read_text().splitlines()[0])
             self.assertEqual(card["cutoff"]["timestamp"], "2026-08-16T00:02:00Z")
             self.assertEqual(card["cutoff"]["maximum_allowed_event_id"], hashlib.sha256(b"compact").hexdigest())
@@ -740,9 +926,9 @@ class CoordyTests(unittest.TestCase):
             self.assertEqual(card["classification"], "uncertain")
             self.assertTrue(card["evidence_completeness"]["has_pre_cutoff_state"])
             self.assertTrue(card["evidence_completeness"]["has_post_cutoff_consequence"])
-            self.assertTrue(card["evidence_completeness"]["structural_replay_candidate"])
+            self.assertTrue(card["evidence_completeness"]["structural_opportunity"])
             template = json.loads((workspace / "data/screening/user_review_answers.json").read_text())
-            self.assertEqual(template["answers"], [])
+            self.assertEqual(len(template["answers"]), 1)
 
     def test_prepare_s0_review_withholds_goal_context_injected_into_rollout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -781,6 +967,10 @@ class CoordyTests(unittest.TestCase):
                 {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "old-compact", "message": "old"}},
                 {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "work", "type": "message", "role": "assistant", "content": "continue"}},
                 {"timestamp": "2026-08-16T00:10:00Z", "type": "event_msg", "payload": {"id": "latest-compact", "type": "context_compacted"}},
+                {"timestamp": "2026-08-16T00:10:01Z", "type": "world_state", "payload": {}},
+                {"timestamp": "2026-08-16T00:10:01Z", "type": "turn_context", "payload": {}},
+                {"timestamp": "2026-08-16T00:10:02Z", "type": "compacted", "payload": {"id": "latest-compact-paired"}},
+                {"timestamp": "2026-08-16T00:10:03Z", "type": "response_item", "payload": {"id": "developer", "type": "message", "role": "developer", "content": "internal instructions are not an agent action"}},
                 {"timestamp": "2026-08-16T00:11:00Z", "type": "response_item", "payload": {"id": "action", "type": "message", "role": "assistant", "content": "wrong next action"}},
                 {"timestamp": "2026-08-16T00:12:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "你忘了 the constraint"}},
             ]
@@ -790,12 +980,211 @@ class CoordyTests(unittest.TestCase):
 
             prepare_s0_review(workspace)
 
-            card = json.loads((workspace / "data/screening/evidence_cards.jsonl").read_text())
-            self.assertEqual(card["cutoff"]["timestamp"], "2026-08-16T00:10:00Z")
+            cards = [json.loads(line) for line in (workspace / "data/screening/evidence_cards.jsonl").read_text().splitlines()]
+            card = next(card for card in cards if card["cutoff"]["timestamp"] == "2026-08-16T00:10:02Z")
+            self.assertEqual(card["cutoff"]["timestamp"], "2026-08-16T00:10:02Z")
             self.assertEqual(
                 card["cutoff"]["maximum_allowed_event_id"],
-                hashlib.sha256(b"latest-compact").hexdigest(),
+                hashlib.sha256(b"latest-compact-paired").hexdigest(),
             )
+            self.assertEqual(
+                card["causal_chain"]["T2_post_compaction_plan_or_judgment"]["redacted_excerpt"],
+                "wrong next action",
+            )
+
+    def test_prepare_s0_review_uses_complete_structural_population_before_stopping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:00:01Z", "type": "response_item", "payload": {"id": "state", "type": "message", "role": "user", "content": "preserve constraint"}},
+            ]
+            for index in range(35):
+                rows.extend([
+                    {"timestamp": f"2026-08-16T00:{index + 1:02d}:00Z", "type": "compacted", "payload": {"id": f"compact-{index}"}},
+                    {"timestamp": f"2026-08-16T00:{index + 1:02d}:01Z", "type": "response_item", "payload": {"id": f"mention-{index}", "type": "message", "role": "assistant", "content": "review rollback behavior"}},
+                ])
+                if index == 0:
+                    rows.append({
+                        "timestamp": "2026-08-16T00:01:02Z", "type": "response_item",
+                        "payload": {"id": "correction", "type": "message", "role": "user", "content": "你忘了 the constraint"},
+                    })
+            (sessions / "rollout.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            workspace = root / "out"
+
+            screening = run_s0_screening(workspace, [sessions], max_candidates=30)
+            result = prepare_s0_review(workspace)
+
+            self.assertEqual(screening["opportunity_population_count"], 35)
+            self.assertEqual(screening["candidate_episode_overflow"], 5)
+            self.assertEqual(len((workspace / "data/screening/opportunity_population.jsonl").read_text().splitlines()), 35)
+            self.assertIsNone(result["decision"])
+            self.assertEqual(result["status"], "PENDING_USER_REVIEW")
+
+    def test_prepare_s0_review_builds_reproducible_three_stratum_queue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "private-session-id", "cwd": "/private/secret-repo"}},
+                {"timestamp": "2026-08-16T00:00:01Z", "type": "response_item", "payload": {"id": "state", "type": "message", "role": "user", "content": "must preserve constraint"}},
+            ]
+            for index in range(12):
+                minute = index + 1
+                rows.extend([
+                    {"timestamp": f"2026-08-16T00:{minute:02d}:00Z", "type": "compacted", "payload": {"id": f"compact-{index}"}},
+                    {"timestamp": f"2026-08-16T00:{minute:02d}:01Z", "type": "response_item", "payload": {"id": f"action-{index}", "type": "message", "role": "assistant", "content": "continue implementation"}},
+                ])
+                if index < 6:
+                    rows.append({"timestamp": f"2026-08-16T00:{minute:02d}:02Z", "type": "response_item", "payload": {"id": f"failure-{index}", "type": "function_call_output", "output": "tests failed"}})
+            (sessions / "rollout.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            queues = []
+            for name in ("first", "second"):
+                workspace = root / name
+                run_s0_screening(workspace, [sessions])
+                result = prepare_s0_review(workspace)
+                queue = json.loads((workspace / "data/screening/user_review_queue.json").read_text())
+                queues.append([(row["candidate_id"], row["selection_stratum"]) for row in queue])
+                self.assertEqual(result["selection_stratum_actual"], {
+                    "high_signal": 6,
+                    "recall_probe": 3,
+                    "healthy_hard_negative": 3,
+                })
+                opportunity_text = (workspace / "data/screening/opportunity_population.jsonl").read_text()
+                self.assertNotIn("private-session-id", opportunity_text)
+                self.assertNotIn("/private/secret-repo", opportunity_text)
+            self.assertEqual(queues[0], queues[1])
+
+    def test_adjudicate_s0_recall_probe_yes_requires_candidate_expansion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            cards = [
+                {
+                    "candidate_id": f"case-{index}",
+                    "session_id_hash": f"session-{index}",
+                    "goal_thread_id_hash": f"root-{index}",
+                    "evidence_completeness": {"has_post_cutoff_consequence": True},
+                }
+                for index in range(6)
+            ]
+            (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
+            queue = [
+                {
+                    "candidate_id": card["candidate_id"],
+                    "selection_stratum": "recall_probe" if index == 5 else "high_signal",
+                    "goal_cluster_hash": card["goal_thread_id_hash"],
+                }
+                for index, card in enumerate(cards)
+            ]
+            (output / "user_review_queue.json").write_text(json.dumps(queue))
+            self.bind_review_artifacts(output)
+            answers = workspace / "answers.json"
+            self.write_bound_answers(output, answers, [
+                {"candidate_id": card["candidate_id"], "answer": "YES"}
+                for card in cards
+            ])
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["status"], "PENDING_CANDIDATE_EXPANSION")
+            self.assertIsNone(result["decision"])
+            self.assertGreater(result["missed_positive_probe_rate"], 0)
+            tampered = json.loads(answers.read_text())
+            tampered["scan_run_id"] = "other-run"
+            answers.write_text(json.dumps(tampered))
+            with self.assertRaisesRegex(RuntimeError, "answers are not bound"):
+                adjudicate_s0(workspace, answers)
+
+    def test_adjudicate_s0_treats_machine_answers_as_prelabels_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            card = {
+                "candidate_id": "case-0",
+                "session_id_hash": "session-0",
+                "evidence_completeness": {"has_post_cutoff_consequence": False},
+            }
+            (output / "evidence_cards.jsonl").write_text(json.dumps(card) + "\n")
+            (output / "user_review_queue.json").write_text(json.dumps([{
+                "candidate_id": "case-0",
+                "selection_stratum": "healthy_hard_negative",
+                "goal_cluster_hash": "root-0",
+            }]))
+            self.bind_review_artifacts(output)
+            answers = workspace / "answers.json"
+            self.write_bound_answers(
+                output,
+                answers,
+                [{"candidate_id": "case-0", "answer": "NO"}],
+                reviewer_type="MACHINE_PRELABEL",
+            )
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["status"], "PENDING_HUMAN_CALIBRATION")
+            self.assertIsNone(result["decision"])
+            self.assertEqual(result["metrics_status"], "PRELIMINARY_MACHINE_PRELABEL")
+            persisted = json.loads((output / "s0_adjudication.json").read_text())
+            self.assertEqual(persisted["scan_run_id"], "test-run")
+            self.assertEqual(persisted["answers_sha256"], hashlib.sha256(answers.read_bytes()).hexdigest())
+            self.assertEqual(persisted["evidence_cards_sha256"], hashlib.sha256((output / "evidence_cards.jsonl").read_bytes()).hexdigest())
+            self.assertEqual(persisted["user_review_queue_sha256"], hashlib.sha256((output / "user_review_queue.json").read_bytes()).hexdigest())
+
+    def test_adjudicate_s0_does_not_invent_failure_type_from_yes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            card = {
+                "candidate_id": "case-0",
+                "session_id_hash": "session-0",
+                "evidence_completeness": {"has_post_cutoff_consequence": True},
+            }
+            (output / "evidence_cards.jsonl").write_text(json.dumps(card) + "\n")
+            (output / "user_review_queue.json").write_text(json.dumps([{
+                "candidate_id": "case-0",
+                "selection_stratum": "high_signal",
+                "goal_cluster_hash": "root-0",
+            }]))
+            self.bind_review_artifacts(output)
+            answers = workspace / "answers.json"
+            self.write_bound_answers(output, answers, [{"candidate_id": "case-0", "answer": "YES"}])
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["confirmed_causal_failures"], 1)
+            self.assertEqual(result["confirmed_type_abc"], 0)
+
+    def test_adjudicate_s0_cannot_stop_before_type_b_opportunities_exist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            card = {
+                "candidate_id": "case-0",
+                "session_id_hash": "session-0",
+                "evidence_completeness": {"has_post_cutoff_consequence": False},
+            }
+            (output / "evidence_cards.jsonl").write_text(json.dumps(card) + "\n")
+            (output / "user_review_queue.json").write_text(json.dumps([{
+                "candidate_id": "case-0",
+                "selection_stratum": "healthy_hard_negative",
+                "goal_cluster_hash": "root-0",
+            }]))
+            self.bind_review_artifacts(output, cross_status="NOT_EXECUTED")
+            answers = workspace / "answers.json"
+            self.write_bound_answers(output, answers, [{"candidate_id": "case-0", "answer": "NO"}])
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["status"], "INSUFFICIENT_EVIDENCE")
+            self.assertIsNone(result["decision"])
 
     def test_adjudicate_s0_waits_for_all_reviews_then_applies_stop_threshold(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -806,20 +1195,20 @@ class CoordyTests(unittest.TestCase):
                 {
                     "candidate_id": f"case-{index}",
                     "classification": "uncertain",
-                    "suggested_failure_type": "A",
+                    "system_classification": {"status": "CLASSIFIED", "failure_type": "A"},
                     "session_id_hash": f"session-{index}",
                     "repository_identity_hash": "repo-a",
                     "cutoff": {"timestamp": f"2026-08-16T00:{index:02d}:00Z"},
-                    "evidence_completeness": {"structural_replay_candidate": True, "has_post_cutoff_consequence": True},
+                    "evidence_completeness": {"structural_opportunity": True, "has_post_cutoff_consequence": True},
                 }
                 for index in range(10)
             ]
             (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
-            queue = [{"candidate_id": card["candidate_id"]} for card in cards]
+            queue = [{"candidate_id": card["candidate_id"], "selection_stratum": "high_signal", "goal_cluster_hash": card["session_id_hash"]} for card in cards]
             (output / "user_review_queue.json").write_text(json.dumps(queue))
             self.bind_review_artifacts(output)
             incomplete = workspace / "incomplete.json"
-            incomplete.write_text(json.dumps({"answers": [{"candidate_id": "case-0", "answer": "YES"}]}))
+            self.write_bound_answers(output, incomplete, [{"candidate_id": "case-0", "answer": "YES"}])
 
             pending = adjudicate_s0(workspace, incomplete)
 
@@ -827,21 +1216,19 @@ class CoordyTests(unittest.TestCase):
             self.assertIsNone(pending["decision"])
 
             complete = workspace / "complete.json"
-            complete.write_text(json.dumps({
-                "answers": [
-                    {"candidate_id": f"case-{index}", "answer": "YES" if index < 4 else "NO"}
-                    for index in range(10)
-                ]
-            }))
+            self.write_bound_answers(output, complete, [
+                {"candidate_id": f"case-{index}", "answer": "YES" if index < 4 else "NO"}
+                for index in range(10)
+            ])
 
             decided = adjudicate_s0(workspace, complete)
 
             self.assertEqual(decided["status"], "DECIDED")
             self.assertEqual(decided["decision"], "STOP")
             self.assertEqual(decided["confirmed_type_abc"], 4)
-            self.assertIn("confirmed Type A/B/C below 5", decided["decision_reasons"])
+            self.assertTrue(any("confirmed Type A/B/C below 5" in reason for reason in decided["decision_reasons"]))
 
-    def test_adjudicate_s0_pivots_when_confirmed_failures_are_narrowly_concentrated(self):
+    def test_adjudicate_s0_does_not_pivot_from_repository_concentration_alone(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             output = workspace / "data/screening"
@@ -850,33 +1237,90 @@ class CoordyTests(unittest.TestCase):
                 {
                     "candidate_id": f"case-{index}",
                     "classification": "uncertain",
-                    "suggested_failure_type": "A",
+                    "system_classification": {"status": "CLASSIFIED", "failure_type": "A"},
                     "session_id_hash": f"session-{index}",
                     "repository_identity_hash": "one-repository",
                     "cutoff": {"timestamp": f"2026-08-16T00:{index:02d}:00Z"},
                     "evidence_completeness": {
-                        "structural_replay_candidate": True,
+                        "structural_opportunity": True,
                         "has_post_cutoff_consequence": True,
                     },
                 }
                 for index in range(10)
             ]
             (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
-            queue = [{"candidate_id": f"case-{index}"} for index in range(10)]
+            queue = [{"candidate_id": f"case-{index}", "selection_stratum": "high_signal", "goal_cluster_hash": f"session-{index}"} for index in range(10)]
             (output / "user_review_queue.json").write_text(json.dumps(queue))
             self.bind_review_artifacts(output)
             answers = workspace / "answers.json"
-            answers.write_text(json.dumps({
-                "answers": [
-                    {"candidate_id": f"case-{index}", "answer": "YES" if index < 5 else "NO"}
-                    for index in range(10)
-                ]
-            }))
+            self.write_bound_answers(output, answers, [
+                {"candidate_id": f"case-{index}", "answer": "YES" if index < 5 else "NO"}
+                for index in range(10)
+            ])
+
+            result = adjudicate_s0(workspace, answers)
+
+            self.assertEqual(result["decision"], "PROCEED_TO_CONFIRMATION")
+            self.assertEqual(result["stage_outcome"], "PROCEED_TO_CONFIRMATION")
+
+    def test_adjudicate_s0_pivots_only_with_bound_scenario_and_multiple_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            cards = [
+                {
+                    "candidate_id": f"case-{index}",
+                    "system_classification": {"status": "CLASSIFIED", "failure_type": "A"},
+                    "session_id_hash": f"session-{index}",
+                    "goal_thread_id_hash": f"root-{index}",
+                    "evidence_completeness": {"has_post_cutoff_consequence": True},
+                }
+                for index in range(5)
+            ]
+            (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
+            (output / "user_review_queue.json").write_text(json.dumps([
+                {
+                    "candidate_id": card["candidate_id"],
+                    "selection_stratum": "high_signal",
+                    "goal_cluster_hash": card["goal_thread_id_hash"],
+                }
+                for card in cards
+            ]))
+            self.bind_review_artifacts(output, overflow=5)
+            answers = workspace / "answers.json"
+            self.write_bound_answers(
+                output,
+                answers,
+                [
+                    {"candidate_id": card["candidate_id"], "answer": "YES" if index < 3 else "NO"}
+                    for index, card in enumerate(cards)
+                ],
+                pivot_scenario={
+                    "tag": "compaction-restores-obsolete-plan",
+                    "case_ids": ["case-0", "case-1", "case-2"],
+                    "high_value_reason": "",
+                },
+            )
 
             result = adjudicate_s0(workspace, answers)
 
             self.assertEqual(result["decision"], "PIVOT")
-            self.assertEqual(result["stage_outcome"], "PIVOT")
+            self.assertEqual(result["pivot_scenario_tag"], "compaction-restores-obsolete-plan")
+            self.assertEqual(result["pivot_distinct_goal_roots"], 3)
+
+            self.write_bound_answers(
+                output,
+                answers,
+                [{"candidate_id": card["candidate_id"], "answer": "YES"} for card in cards],
+                pivot_scenario={
+                    "tag": "compaction-restores-obsolete-plan",
+                    "case_ids": ["case-0", "case-1", "case-2"],
+                    "high_value_reason": "",
+                },
+            )
+            widespread = adjudicate_s0(workspace, answers)
+            self.assertEqual(widespread["decision"], "PROCEED_TO_CONFIRMATION")
 
     def test_adjudicate_s0_does_not_stop_or_pivot_from_an_overflowed_sample(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -886,12 +1330,12 @@ class CoordyTests(unittest.TestCase):
             cards = [
                 {
                     "candidate_id": f"case-{index}",
-                    "suggested_failure_type": None,
+                    "system_classification": {"status": "CLASSIFIED", "failure_type": "A"},
                     "session_id_hash": f"session-{index}",
                     "repository_identity_hash": "one-repository",
                     "cutoff": {"timestamp": f"2026-08-16T00:{index:02d}:00Z"},
                     "evidence_completeness": {
-                        "structural_replay_candidate": True,
+                        "structural_opportunity": True,
                         "has_post_cutoff_consequence": True,
                     },
                 }
@@ -899,18 +1343,18 @@ class CoordyTests(unittest.TestCase):
             ]
             (output / "evidence_cards.jsonl").write_text("".join(json.dumps(card) + "\n" for card in cards))
             (output / "user_review_queue.json").write_text(json.dumps([
-                {"candidate_id": card["candidate_id"]} for card in cards
+                {"candidate_id": card["candidate_id"], "selection_stratum": "high_signal", "goal_cluster_hash": card["session_id_hash"]} for card in cards
             ]))
             self.bind_review_artifacts(output, overflow=20)
             answers = workspace / "answers.json"
-            answers.write_text(json.dumps({"answers": [
+            self.write_bound_answers(output, answers, [
                 {"candidate_id": card["candidate_id"], "answer": "YES"} for card in cards
-            ]}))
+            ])
 
             result = adjudicate_s0(workspace, answers)
 
-            self.assertEqual(result["status"], "PENDING_CASE_CONSTRUCTION")
-            self.assertIsNone(result["decision"])
+            self.assertEqual(result["status"], "DECIDED")
+            self.assertEqual(result["decision"], "PROCEED_TO_CONFIRMATION")
             self.assertEqual(result["candidate_episode_overflow"], 20)
 
     def test_prepare_s0_review_rejects_mixed_scan_artifacts(self):
