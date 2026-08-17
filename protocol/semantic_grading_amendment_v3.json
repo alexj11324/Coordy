@@ -40,6 +40,7 @@
     "name": "semantic_grading",
     "outcome_blinding": "State Diff sees pre-state, compaction summary, and post-plan only.",
     "checkpoint_provenance": "scan, packet, model, effort, API base, timeout, prompt, schema, request/response IDs, and token usage",
+    "smoke_approval_binding": "exact payload SHA-256 plus exact non-secret judge-configuration SHA-256",
     "prose_is_engineering_consequence": false,
     "state_diff_coverage": "every compaction opportunity",
     "state_diff_isolation": "one opportunity per API request; output schema binds the exact opportunity and allowed evidence IDs",

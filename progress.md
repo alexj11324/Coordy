@@ -33,6 +33,7 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 - Added isolated, resumable LLM judge checkpoints, evidence-ID validation, an independent second judge, a reproducible 30-case human calibration sample, and readable one-question review cards.
 - Added a causal evidence policy that accepts structured tool exit codes and `patch_apply_end` facts while refusing to treat transcript prose as an engineering consequence.
 - Added a deterministic, hash-bound State Diff smoke artifact so external approval names an immutable payload rather than a moving workspace.
+- Revised the State Diff contract locally after the aborted smoke: every comparison now cites separately constrained earlier-state and post-plan evidence, and a fresh smoke requires approval of both the payload and judge-configuration hashes. No request has been sent with this revised contract.
 
 ## Outputs
 
@@ -83,9 +84,10 @@ establish drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-Revise and refreeze the State Diff Judge contract before any new external call.
-The next smoke must retain rejected-result diagnostics, preserve the same three
-controls, and receive explicit approval for its new judge-configuration hash.
+The revised State Diff Judge contract is locally implemented and verified but
+not yet approved for external use. The next smoke must retain rejected-result
+diagnostics, preserve the same three controls, and receive explicit approval
+for its new judge-configuration hash.
 Do not resend the failed opportunity automatically, do not continue the remaining
 seven cases from this aborted run, and do not authorize the 472-case population.
 Only a fresh safety/evidence-binding smoke may reopen human calibration and causal

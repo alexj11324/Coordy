@@ -90,6 +90,7 @@ def parser() -> argparse.ArgumentParser:
     )
     grade_smoke.add_argument("--workspace", type=Path, required=True)
     grade_smoke.add_argument("--approved-smoke-sha256", required=True)
+    grade_smoke.add_argument("--approved-judge-configuration-sha256", required=True)
     grade_smoke.add_argument("--model", default="gpt-5.6-luna")
     grade_smoke.add_argument("--reasoning-effort", default="low")
     grade_smoke.add_argument("--env-file", type=Path, default=Path(".env.local"))
@@ -184,6 +185,7 @@ def main(argv: list[str] | None = None) -> int:
             args.workspace,
             judge,
             args.approved_smoke_sha256,
+            args.approved_judge_configuration_sha256,
             workers=1,
         ), sort_keys=True))
     elif args.command == "grade-s0b-state":

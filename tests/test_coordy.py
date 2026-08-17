@@ -1158,15 +1158,22 @@ class CoordyTests(unittest.TestCase):
             },
             "diffs": [{
                 "state_type": "constraint",
+                "pre_state_index": 0,
                 "status": "preserved",
                 "downstream_relevance": "NONE",
-                "evidence_ids": ["e1", "e2"],
+                "pre_state_evidence_ids": ["e1"],
+                "post_evidence_ids": ["e2"],
                 "rationale": "The constraint is present before and after compaction.",
             }],
             "assessment_status": "NO_MATERIAL_CHANGE",
             "suspected_state_change": False,
             "confidence": 0.9,
         }
+        valid["states"]["constraint"] = [{
+            "phase": "pre_compaction",
+            "statement": "The constraint is active.",
+            "evidence_ids": ["e1"],
+        }]
         normalized = validate_state_diff_result(packet, valid)
         self.assertEqual(normalized["diffs"][0]["status"], "preserved")
 
@@ -1176,14 +1183,32 @@ class CoordyTests(unittest.TestCase):
             validate_state_diff_result(packet, vacuous)
 
         invalid = json.loads(json.dumps(valid))
-        invalid["diffs"][0]["evidence_ids"] = ["future-event"]
+        invalid["diffs"][0]["post_evidence_ids"] = ["future-event"]
         with self.assertRaisesRegex(ValueError, "unknown evidence"):
             validate_state_diff_result(packet, invalid)
 
         duplicate = json.loads(json.dumps(valid))
-        duplicate["diffs"][0]["evidence_ids"] = ["e1", "e1", "e2"]
+        duplicate["diffs"][0]["pre_state_evidence_ids"] = ["e1", "e1"]
         with self.assertRaisesRegex(ValueError, "duplicates"):
             validate_state_diff_result(packet, duplicate)
+
+        wrong_phase = json.loads(json.dumps(valid))
+        wrong_phase["states"]["constraint"][0]["phase"] = "post_compaction_plan"
+        with self.assertRaisesRegex(ValueError, "unknown evidence"):
+            validate_state_diff_result(packet, wrong_phase)
+
+        missing_state_reference = json.loads(json.dumps(valid))
+        missing_state_reference["diffs"][0]["pre_state_index"] = 1
+        with self.assertRaisesRegex(ValueError, "extracted pre-state entry"):
+            validate_state_diff_result(packet, missing_state_reference)
+
+        summary_only_packet = json.loads(json.dumps(packet))
+        summary_only_packet["allowed_evidence_ids"].append("summary")
+        summary_only_packet["compaction_summary_events"] = [{"evidence_id": "summary"}]
+        summary_only = json.loads(json.dumps(valid))
+        summary_only["diffs"][0]["pre_state_evidence_ids"] = ["summary"]
+        with self.assertRaisesRegex(ValueError, "unknown evidence"):
+            validate_state_diff_result(summary_only_packet, summary_only)
 
         no_post_packet = json.loads(json.dumps(packet))
         no_post_packet["post_compaction_plan_events"] = []
@@ -1246,12 +1271,18 @@ class CoordyTests(unittest.TestCase):
                         post = packet["post_compaction_plan_events"][0]["evidence_id"]
                         results.append({
                             "opportunity_id_hash": packet["opportunity_id_hash"],
-                            "states": {key: [] for key in packet["required_state_types"]},
+                            "states": {key: ([{
+                                "phase": "pre_compaction",
+                                "statement": "The goal remains active.",
+                                "evidence_ids": [earlier],
+                            }] if key == "goal" else []) for key in packet["required_state_types"]},
                             "diffs": [{
                                 "state_type": "goal",
+                                "pre_state_index": 0,
                                 "status": "missing" if self.disagree else "preserved",
                                 "downstream_relevance": "DIRECT" if self.disagree else "NONE",
-                                "evidence_ids": [earlier, post],
+                                "pre_state_evidence_ids": [earlier],
+                                "post_evidence_ids": [post],
                                 "rationale": "Independent semantic assessment.",
                             }],
                             "assessment_status": "SUSPECT" if self.disagree else "NO_MATERIAL_CHANGE",
@@ -1271,14 +1302,30 @@ class CoordyTests(unittest.TestCase):
                     results = super().grade(packets)
                     if not self.failed_once:
                         self.failed_once = True
-                        results[0]["diffs"][0]["evidence_ids"] = ["unknown-evidence"]
+                        results[0]["diffs"][0]["post_evidence_ids"] = ["unknown-evidence"]
                     return results
 
             smoke_judge = FlakySmokeJudge()
             with self.assertRaisesRegex(RuntimeError, "approved smoke hash"):
-                run_s0b_state_smoke(workspace, smoke_judge, "wrong-hash")
+                run_s0b_state_smoke(
+                    workspace,
+                    smoke_judge,
+                    "wrong-hash",
+                    smoke_judge.configuration_sha256,
+                )
+            with self.assertRaisesRegex(RuntimeError, "judge configuration hash"):
+                run_s0b_state_smoke(
+                    workspace,
+                    smoke_judge,
+                    smoke["smoke_inputs_sha256"],
+                    "wrong-configuration",
+                )
+            self.assertEqual(smoke_judge.calls, [])
             smoke_report = run_s0b_state_smoke(
-                workspace, smoke_judge, smoke["smoke_inputs_sha256"]
+                workspace,
+                smoke_judge,
+                smoke["smoke_inputs_sha256"],
+                smoke_judge.configuration_sha256,
             )
             self.assertEqual(smoke_report["smoke_input_count"], 3)
             self.assertTrue(smoke_report["external_transmission_completed"])
@@ -1400,12 +1447,18 @@ class CoordyTests(unittest.TestCase):
                         post = packet["post_compaction_plan_events"][0]["evidence_id"]
                         results.append({
                         "opportunity_id_hash": packet["opportunity_id_hash"],
-                        "states": {key: [] for key in packet["required_state_types"]},
+                        "states": {key: ([{
+                            "phase": "pre_compaction",
+                            "statement": "The constraint remains active.",
+                            "evidence_ids": [earlier],
+                        }] if key == "constraint" else []) for key in packet["required_state_types"]},
                         "diffs": [{
                             "state_type": "constraint",
+                            "pre_state_index": 0,
                             "status": "missing",
                             "downstream_relevance": "DIRECT",
-                            "evidence_ids": [earlier, post],
+                            "pre_state_evidence_ids": [earlier],
+                            "post_evidence_ids": [post],
                             "rationale": "The constraint is absent after compaction.",
                         }],
                         "assessment_status": "SUSPECT",
@@ -1570,6 +1623,9 @@ class CoordyTests(unittest.TestCase):
         packet = {
             "opportunity_id_hash": "opportunity-1",
             "allowed_evidence_ids": ["event-1", "event-2"],
+            "pre_compaction_events": [{"evidence_id": "event-1"}],
+            "compaction_summary_events": [],
+            "post_compaction_plan_events": [{"evidence_id": "event-2"}],
         }
         schema = _state_diff_batch_schema([packet])
         results = schema["properties"]["results"]
@@ -1579,10 +1635,24 @@ class CoordyTests(unittest.TestCase):
         self.assertEqual(
             item["properties"]["opportunity_id_hash"]["enum"], ["opportunity-1"]
         )
-        evidence_items = item["properties"]["diffs"]["items"]["properties"][
-            "evidence_ids"
-        ]["items"]
-        self.assertEqual(evidence_items["enum"], ["event-1", "event-2"])
+        diff_schema = item["properties"]["diffs"]
+        self.assertEqual(diff_schema["minItems"], 1)
+        diff_properties = diff_schema["items"]["properties"]
+        self.assertEqual(
+            diff_properties["pre_state_evidence_ids"]["items"]["enum"], ["event-1"]
+        )
+        self.assertEqual(
+            diff_properties["post_evidence_ids"]["items"]["enum"], ["event-2"]
+        )
+        state_variants = item["properties"]["states"]["properties"]["goal"]["items"]["anyOf"]
+        self.assertEqual(
+            {
+                variant["properties"]["phase"]["enum"][0]:
+                variant["properties"]["evidence_ids"]["items"]["enum"]
+                for variant in state_variants
+            },
+            {"pre_compaction": ["event-1"], "post_compaction_plan": ["event-2"]},
+        )
         with self.assertRaisesRegex(ValueError, "one isolated opportunity"):
             _state_diff_batch_schema([packet, packet])
 
@@ -1598,13 +1668,19 @@ class CoordyTests(unittest.TestCase):
         }
         result = {
             "opportunity_id_hash": "opportunity",
-            "states": {key: [] for key in STATE_TYPES},
+            "states": {key: ([{
+                "phase": "pre_compaction",
+                "statement": "The goal remains active.",
+                "evidence_ids": ["earlier"],
+            }] if key == "goal" else []) for key in STATE_TYPES},
             "diffs": [{
                 "state_type": "goal",
+                "pre_state_index": 0,
                 "status": "preserved",
                 "downstream_relevance": "NONE",
                 "rationale": "The goal remains active.",
-                "evidence_ids": ["earlier", "post"],
+                "pre_state_evidence_ids": ["earlier"],
+                "post_evidence_ids": ["post"],
             }],
             "assessment_status": "NO_MATERIAL_CHANGE",
             "suspected_state_change": False,
@@ -1718,7 +1794,7 @@ class CoordyTests(unittest.TestCase):
             base_url="https://example.invalid",
             dispatch_log_dir=Path(semantic_tmp.name),
         )
-        result["diffs"][0]["evidence_ids"] = ["post"]
+        result["diffs"][0]["pre_state_evidence_ids"] = []
         response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
         with patch("coordy.semantic.urllib.request.build_opener", return_value=FakeOpener()):
             with self.assertRaisesRegex(NonRetryableJudgeError, "semantic validation"):
@@ -1726,10 +1802,10 @@ class CoordyTests(unittest.TestCase):
         semantic_record = json.loads(next(Path(semantic_tmp.name).glob("*.json")).read_text())
         self.assertEqual(semantic_record["status"], "SEMANTIC_VALIDATION_FAILED_NO_RETRY")
         self.assertEqual(
-            semantic_record["rejected_result"][0]["diffs"][0]["evidence_ids"],
-            ["post"],
+            semantic_record["rejected_result"][0]["diffs"][0]["pre_state_evidence_ids"],
+            [],
         )
-        result["diffs"][0]["evidence_ids"] = ["earlier", "post"]
+        result["diffs"][0]["pre_state_evidence_ids"] = ["earlier"]
         response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1803,6 +1879,7 @@ class CoordyTests(unittest.TestCase):
                     Path(tmp),
                     object(),
                     "not-used",
+                    "not-used",
                     workers=2,
                 )
 
@@ -1831,13 +1908,19 @@ class CoordyTests(unittest.TestCase):
                 index = packet["opportunity_id_hash"].rsplit("-", 1)[1]
                 return [{
                     "opportunity_id_hash": packet["opportunity_id_hash"],
-                    "states": {key: [] for key in STATE_TYPES},
+                    "states": {key: ([{
+                        "phase": "pre_compaction",
+                        "statement": "The goal remains active.",
+                        "evidence_ids": [f"earlier-{index}"],
+                    }] if key == "goal" else []) for key in STATE_TYPES},
                     "diffs": [{
                         "state_type": "goal",
+                        "pre_state_index": 0,
                         "status": "preserved",
                         "downstream_relevance": "NONE",
                         "rationale": "Bound comparison.",
-                        "evidence_ids": [f"earlier-{index}", f"post-{index}"],
+                        "pre_state_evidence_ids": [f"earlier-{index}"],
+                        "post_evidence_ids": [f"post-{index}"],
                     }],
                     "assessment_status": "NO_MATERIAL_CHANGE",
                     "suspected_state_change": False,

@@ -39,7 +39,7 @@ coordy review-s0 --workspace .coordy/screening-s0 --max-reviews 12
 coordy adjudicate-s0 --workspace .coordy/screening-s0 --answers .coordy/screening-s0/data/screening/user_review_answers.json
 coordy prepare-s0b --workspace .coordy/screening-s0
 coordy prepare-s0b-smoke --workspace .coordy/screening-s0 --sample-size 12 --no-post-plan-controls 3
-coordy grade-s0b-smoke --workspace .coordy/screening-s0 --approved-smoke-sha256 <approved-sha256>
+coordy grade-s0b-smoke --workspace .coordy/screening-s0 --approved-smoke-sha256 <approved-sha256> --approved-judge-configuration-sha256 <approved-config-sha256>
 coordy grade-s0b-state --workspace .coordy/screening-s0 --batch-size 1 --workers 4
 coordy calibrate-s0b-state --workspace .coordy/screening-s0 --answers <human-answers.json>
 coordy prepare-s0b-causal --workspace .coordy/screening-s0
@@ -117,6 +117,9 @@ SHA-256 and consumes only that frozen file; it never authorizes the 472-case
 population. Once frozen, changing smoke size or control quota fails closed and
 requires a fresh workspace. `grade-s0b-state` is the separate full-population
 path and must not be used on smoke-only approval.
+Smoke approval binds both the immutable payload SHA-256 and the complete
+non-secret Judge configuration SHA-256; changing the prompt, schema, endpoint,
+model, effort, or timeout requires a new explicit approval.
 
 All State Diff opportunities receive a primary judge. Suspects, low-confidence
 cases, and a deterministic audit sample receive an independently identified
