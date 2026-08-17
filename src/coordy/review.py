@@ -10,6 +10,7 @@ from typing import Any, Iterable
 
 from .redaction import redact_text, redact_value
 from .screening import (
+    CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION,
     GOAL_CONTEXT,
     INTERNAL_MESSAGE_ENVELOPE,
     SCANNER_VERSION,
@@ -478,10 +479,12 @@ def prepare_s0_review(workspace: Path, *, max_reviews: int = 12) -> dict[str, An
     candidate_path = output / "candidate_decision_points.jsonl"
     session_path = output / "eligible_sessions.jsonl"
     opportunity_path = output / "opportunity_population.jsonl"
+    cross_session_path = output / "cross_session_opportunity_population.jsonl"
     rule_discovered_path = output / "rule_discovered_episodes.jsonl"
     candidates = _read_jsonl(candidate_path)
     session_rows = _read_jsonl(session_path)
     opportunity_rows = _read_jsonl(opportunity_path)
+    cross_session_rows = _read_jsonl(cross_session_path)
     rule_discovered_rows = _read_jsonl(rule_discovered_path)
     scan_run_id = screening_summary.get("scan_run_id")
     artifact_hashes = screening_summary.get("artifact_hashes")
@@ -494,10 +497,14 @@ def prepare_s0_review(workspace: Path, *, max_reviews: int = 12) -> dict[str, An
         or artifact_hashes.get("candidate_decision_points_jsonl") != _hash(candidate_path.read_bytes())
         or artifact_hashes.get("eligible_sessions_jsonl") != _hash(session_path.read_bytes())
         or artifact_hashes.get("opportunity_population_jsonl") != _hash(opportunity_path.read_bytes())
+        or artifact_hashes.get("cross_session_opportunity_population_jsonl") != _hash(cross_session_path.read_bytes())
         or artifact_hashes.get("rule_discovered_episodes_jsonl") != _hash(rule_discovered_path.read_bytes())
         or screening_summary.get("candidate_decision_points") != len(candidates)
         or screening_summary.get("eligible_sessions") != len(session_rows)
         or screening_summary.get("opportunity_population_count") != len(opportunity_rows)
+        or screening_summary.get("cross_session_opportunity_count") != len(cross_session_rows)
+        or screening_summary.get("cross_session_opportunity_schema_version")
+        != CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION
         or screening_summary.get("rule_discovered_episode_count") != len(rule_discovered_rows)
         or overflow_value != max(0, len(opportunity_rows) - len(candidates))
         or not isinstance(overflow_value, int)
@@ -505,7 +512,11 @@ def prepare_s0_review(workspace: Path, *, max_reviews: int = 12) -> dict[str, An
         or overflow_value < 0
         or any(
             row.get("scan_run_id") != scan_run_id
-            for row in candidates + session_rows + opportunity_rows + rule_discovered_rows
+            for row in candidates + session_rows + opportunity_rows + cross_session_rows + rule_discovered_rows
+        )
+        or any(
+            row.get("schema_version") != CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION
+            for row in cross_session_rows
         )
     ):
         raise RuntimeError("screening artifacts do not belong to one complete compatible scan run")
@@ -593,10 +604,13 @@ def prepare_s0_review(workspace: Path, *, max_reviews: int = 12) -> dict[str, An
         "scanner_version": SCANNER_VERSION,
         "candidate_episode_overflow": episode_overflow,
         "opportunity_population_count": len(opportunity_rows),
+        "cross_session_opportunity_count": len(cross_session_rows),
+        "cross_session_opportunity_schema_version": CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION,
         "structural_opportunity_count": structural_opportunity_count,
         "population_replayability_validated": population_replayability_validated,
         "cross_session_invalidation_mining_status": screening_summary.get("cross_session_invalidation_mining_status"),
         "opportunity_population_sha256": artifact_hashes["opportunity_population_jsonl"],
+        "cross_session_opportunity_population_sha256": artifact_hashes["cross_session_opportunity_population_jsonl"],
         "selection_stratum_targets": stratum_targets,
         "selection_stratum_actual": stratum_actual,
         "selection_stratum_shortfalls": stratum_shortfalls,
@@ -608,6 +622,7 @@ def prepare_s0_review(workspace: Path, *, max_reviews: int = 12) -> dict[str, An
         "evidence_cards": len(cards),
         "review_cards": len(selected),
         "opportunity_population_count": len(opportunity_rows),
+        "cross_session_opportunity_count": len(cross_session_rows),
         "structural_opportunity_count": structural_opportunity_count,
         "rule_discovered_episode_count": len(rule_discovered_rows),
         "candidate_episode_overflow": episode_overflow,
@@ -641,6 +656,7 @@ def adjudicate_s0(workspace: Path, answers_path: Path) -> dict[str, Any]:
     summary_path = output / "screening_summary.json"
     manifest_path = output / "s0_review_manifest.json"
     opportunity_path = output / "opportunity_population.jsonl"
+    cross_session_path = output / "cross_session_opportunity_population.jsonl"
     if not summary_path.is_file() or not manifest_path.is_file():
         raise RuntimeError("missing bound S0 review artifacts; rerun review-s0")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -653,6 +669,7 @@ def adjudicate_s0(workspace: Path, answers_path: Path) -> dict[str, Any]:
         or manifest.get("evidence_cards_sha256") != _hash(evidence_path.read_bytes())
         or manifest.get("user_review_queue_sha256") != _hash(queue_path.read_bytes())
         or manifest.get("opportunity_population_sha256") != _hash(opportunity_path.read_bytes())
+        or manifest.get("cross_session_opportunity_population_sha256") != _hash(cross_session_path.read_bytes())
         or not isinstance(overflow_value, int)
         or isinstance(overflow_value, bool)
         or overflow_value < 0
@@ -661,6 +678,9 @@ def adjudicate_s0(workspace: Path, answers_path: Path) -> dict[str, Any]:
         or population_count < 0
         or summary.get("candidate_episode_overflow") != overflow_value
         or summary.get("opportunity_population_count") != population_count
+        or summary.get("cross_session_opportunity_count") != manifest.get("cross_session_opportunity_count")
+        or summary.get("cross_session_opportunity_schema_version")
+        != manifest.get("cross_session_opportunity_schema_version")
         or summary.get("cross_session_invalidation_mining_status") != manifest.get("cross_session_invalidation_mining_status")
     ):
         raise RuntimeError("S0 review artifacts do not belong to the current screening run")
@@ -764,6 +784,7 @@ def adjudicate_s0(workspace: Path, answers_path: Path) -> dict[str, Any]:
         "evidence_cards_sha256": manifest["evidence_cards_sha256"],
         "user_review_queue_sha256": manifest["user_review_queue_sha256"],
         "opportunity_population_sha256": manifest["opportunity_population_sha256"],
+        "cross_session_opportunity_population_sha256": manifest["cross_session_opportunity_population_sha256"],
     }
     if missing:
         result = {

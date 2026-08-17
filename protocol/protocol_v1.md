@@ -43,4 +43,4 @@ The primary comparison is Structured State plus Minimal Retrieval versus the str
 
 ## Source-material status
 
-The named report `多人协作智能体：现有技术缺口分析与创业结论.md` was not present when this protocol was frozen. Execution continues, and the report is not treated as experimental ground truth.
+The local-only report `多人协作智能体：现有技术缺口分析与创业结论.md`, when supplied by the operator, guides scope toward Active Plan State and low-false-positive semantic invalidation. It is product/research context, not experimental ground truth, and is never included in repository artifacts.

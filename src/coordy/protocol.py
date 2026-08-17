@@ -126,6 +126,53 @@ SCREENING_SAMPLING_AMENDMENT = {
     "privacy": "Do not select or persist Goal objective text. Added lineage metadata uses a hashed Goal identity; the existing session_id remains solely for frozen source binding.",
 }
 
+SEMANTIC_GRADING_AMENDMENT = {
+    "version": "3",
+    "applies_to": "screening_v1.S0 semantic evidence grading",
+    "gate_changes": "none_until_human_calibration_and_causal_review_complete",
+    "S0a": {
+        "name": "evidence_infrastructure",
+        "rules_may_only": [
+            "parse deterministic event and tool facts",
+            "enumerate real compaction opportunities",
+            "rank candidates",
+        ],
+        "rules_must_not": [
+            "infer state loss or causality",
+            "assign Type A/B/C/D/U ground truth",
+            "estimate prevalence",
+        ],
+    },
+    "S0b": {
+        "name": "semantic_grading",
+        "state_diff_coverage": "every compaction opportunity",
+        "state_types": [
+            "goal", "constraint", "decision", "rejected_option", "plan",
+            "dependency", "acceptance_criteria",
+        ],
+        "state_diff_labels": ["missing", "contradicted", "stale_reactivated", "preserved"],
+        "outcome_blinding": "State Diff sees pre-state, compaction summary, and post-plan only.",
+        "state_window": "deterministic temporal coverage plus recency; not a last-N-only window",
+        "checkpoint_provenance": "scan, packet, model, effort, executable, timeout, prompt, and schema hashes",
+        "single_writer": "one workspace semantic lock with atomic fsynced checkpoint replacement",
+        "causal_judge_scope": "agreed high-confidence state-change suspects",
+        "causal_packet": "direct T0-T5 sections; T0/T1 are not reconstructed from derived State Diff output",
+        "causal_types": ["A", "B", "C", "D", "U"],
+        "engineering_consequence_sources": [
+            "structured tool result with exit code",
+            "patch_apply_end",
+            "bound Git/test/replay evidence",
+        ],
+        "prose_is_engineering_consequence": False,
+        "independent_second_judge": True,
+        "machine_judges_are_ground_truth": False,
+        "human_calibration_cases": {"minimum": 20, "maximum": 40, "target": 30},
+        "disagreement_or_low_confidence": "UNCERTAIN_and_human_review",
+        "causal_answer_ingestion": "hash-bound HUMAN_CONFIRMED answers required",
+        "classification_bridge": "a human causal YES plus two agreeing evidence-bound judges may write system Type A/B/C classification into re-hashed S0 evidence cards",
+    },
+}
+
 PROTOCOL_TEXT = """# Coordy Protocol v1
 
 Frozen before inspecting any locked-test result.
@@ -171,7 +218,7 @@ The primary comparison is Structured State plus Minimal Retrieval versus the str
 
 ## Source-material status
 
-The named report `多人协作智能体：现有技术缺口分析与创业结论.md` was not present when this protocol was frozen. Execution continues, and the report is not treated as experimental ground truth.
+The local-only report `多人协作智能体：现有技术缺口分析与创业结论.md`, when supplied by the operator, guides scope toward Active Plan State and low-false-positive semantic invalidation. It is product/research context, not experimental ground truth, and is never included in repository artifacts.
 """
 
 
@@ -187,6 +234,7 @@ def initialize(workspace: Path) -> None:
     (protocol / "protocol_v1.md").write_text(PROTOCOL_TEXT, encoding="utf-8")
     _write_json(protocol / "screening_v1.json", SCREENING)
     _write_json(protocol / "screening_sampling_amendment_v2.json", SCREENING_SAMPLING_AMENDMENT)
+    _write_json(protocol / "semantic_grading_amendment_v3.json", SEMANTIC_GRADING_AMENDMENT)
     _write_json(protocol / "hypotheses_v1.json", HYPOTHESES)
     _write_json(protocol / "metrics_v1.json", METRICS)
     _write_json(protocol / "decision_thresholds_v1.json", THRESHOLDS)

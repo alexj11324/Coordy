@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import json
+import fcntl
 import hashlib
+import json
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from coordy.cli import _judge_api_settings
 from coordy.ingest import ingest
 from coordy.discovery import discover_codex_environment
 from coordy.models import CanonicalEvent
@@ -15,6 +18,28 @@ from coordy.pipeline import run
 from coordy.protocol import initialize
 from coordy.redaction import redact_value
 from coordy.review import adjudicate_s0, prepare_s0_review
+from coordy.semantic import (
+    STATE_JUDGE_INSTRUCTIONS,
+    STATE_TYPES,
+    NonRetryableJudgeError,
+    ResponsesAPIStateJudge,
+    _evaluate_state_smoke,
+    _run_judge_batches,
+    _secure_write,
+    _state_diff_batch_schema,
+    _human_causal_chain,
+    _select_state_smoke_packets,
+    adjudicate_s0b_causal_review,
+    adjudicate_s0b_state_calibration,
+    prepare_s0b_causal_inputs,
+    prepare_s0b_state_inputs,
+    prepare_s0b_state_smoke,
+    run_s0b_causal_judges,
+    run_s0b_state_diff,
+    run_s0b_state_smoke,
+    validate_causal_result,
+    validate_state_diff_result,
+)
 from coordy.sources import JsonExportSource
 from coordy.screening import run_s0_screening
 from coordy.state import update_state
@@ -35,22 +60,26 @@ class CoordyTests(unittest.TestCase):
             "scan_run_id": "test-run",
             "candidate_episode_overflow": overflow,
             "opportunity_population_count": len(evidence.read_text().splitlines()) + overflow,
+            "cross_session_opportunity_count": 0,
             "cross_session_invalidation_mining_status": cross_status,
         }
         manifest = {
             "scan_run_id": "test-run",
-            "scanner_version": "s0-v7",
+            "scanner_version": "s0-v8",
             "candidate_episode_overflow": overflow,
             "opportunity_population_count": len(evidence.read_text().splitlines()) + overflow,
             "population_replayability_validated": overflow == 0,
             "cross_session_invalidation_mining_status": cross_status,
             "opportunity_population_sha256": hashlib.sha256(b"").hexdigest(),
+            "cross_session_opportunity_count": 0,
+            "cross_session_opportunity_population_sha256": hashlib.sha256(b"").hexdigest(),
             "evidence_cards_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
             "user_review_queue_sha256": hashlib.sha256(queue.read_bytes()).hexdigest(),
         }
         (output / "screening_summary.json").write_text(json.dumps(summary))
         (output / "s0_review_manifest.json").write_text(json.dumps(manifest))
         (output / "opportunity_population.jsonl").write_text("")
+        (output / "cross_session_opportunity_population.jsonl").write_text("")
 
     def write_bound_answers(
         self,
@@ -81,14 +110,19 @@ class CoordyTests(unittest.TestCase):
     def test_redacts_nested_secrets(self):
         clean, count = redact_value({
             "token": "abc",
+            "api_usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
             "body": "api_key=secret-value password=hunter2 AKIAABCDEFGHIJKLMNOP -----BEGIN PRIVATE KEY----- private-material -----END PRIVATE KEY-----",
         })
         self.assertEqual(clean["token"], "[REDACTED]")
         self.assertNotIn("secret-value", clean["body"])
+        self.assertEqual(clean["api_usage"]["total_tokens"], 15)
         self.assertNotIn("hunter2", clean["body"])
         self.assertNotIn("AKIAABCDEFGHIJKLMNOP", clean["body"])
         self.assertNotIn("private-material", clean["body"])
         self.assertGreaterEqual(count, 5)
+        hyphen_key, hyphen_count = redact_value("token sk-example0123456789abcdef")
+        self.assertEqual(hyphen_key, "token [REDACTED]")
+        self.assertEqual(hyphen_count, 1)
 
     def test_source_is_stable_and_lists_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -252,6 +286,7 @@ class CoordyTests(unittest.TestCase):
                     "decision_thresholds_v1.json",
                     "screening_v1.json",
                     "screening_sampling_amendment_v2.json",
+                    "semantic_grading_amendment_v3.json",
                 },
             )
             thresholds = json.loads((protocol / "decision_thresholds_v1.json").read_text())
@@ -268,6 +303,10 @@ class CoordyTests(unittest.TestCase):
             self.assertEqual(sampling["gate_changes"], "none")
             self.assertEqual(sampling["opportunity_population"]["keyword_rules"], "ranking_only_not_population_definition")
             self.assertIn("not a human-equivalent", sampling["duration_semantics"])
+            semantic = json.loads((protocol / "semantic_grading_amendment_v3.json").read_text())
+            self.assertEqual(semantic["S0a"]["name"], "evidence_infrastructure")
+            self.assertEqual(semantic["S0b"]["state_diff_coverage"], "every compaction opportunity")
+            self.assertFalse(semantic["S0b"]["machine_judges_are_ground_truth"])
             self.assertTrue((workspace / "data/manifests/capability_manifest.json").is_file())
 
     def test_s0_screening_keeps_candidates_uncertain_and_does_not_persist_content(self):
@@ -889,6 +928,134 @@ class CoordyTests(unittest.TestCase):
             self.assertNotIn("human", opportunity_text.lower())
             self.assertNotIn("goal-root", opportunity_text)
 
+    def test_s0_enumerates_cross_session_entity_change_opportunities_without_raw_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+
+            def patch(timestamp: str, call_id: str, path: str) -> dict:
+                return {
+                    "timestamp": timestamp,
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "patch_apply_end",
+                        "call_id": call_id,
+                        "turn_id": f"turn-{call_id}",
+                        "success": True,
+                        "status": "completed",
+                        "stdout": "",
+                        "stderr": "",
+                        "changes": {path: {"type": "update", "content": "private source"}},
+                    },
+                }
+
+            filler = [
+                {
+                    "timestamp": f"2026-08-16T00:00:{index:02d}Z",
+                    "type": "response_item",
+                    "payload": {"id": f"work-{index}", "type": "message", "role": "assistant", "content": "ordinary work"},
+                }
+                for index in range(60)
+            ]
+            filler += [
+                {
+                    "timestamp": f"2026-08-16T00:01:{index:02d}Z",
+                    "type": "response_item",
+                    "payload": {"id": f"more-{index}", "type": "message", "role": "assistant", "content": "ordinary work"},
+                }
+                for index in range(40)
+            ]
+            affected = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "affected-private-id", "cwd": "/private/shared-repo"}},
+                *filler,
+                patch("2026-08-16T00:02:00Z", "affected-before", "src/private_name.py"),
+                patch("2026-08-16T00:06:00Z", "affected-after", "src/private_name.py"),
+            ]
+            changer = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "changer-private-id", "cwd": "/private/shared-repo"}},
+                *filler,
+                patch("2026-08-16T00:04:00Z", "external-change", "src/private_name.py"),
+            ]
+            (sessions / "affected.jsonl").write_text("".join(json.dumps(row) + "\n" for row in affected))
+            (sessions / "changer.jsonl").write_text("".join(json.dumps(row) + "\n" for row in changer))
+
+            result = run_s0_screening(root / "out", [sessions], max_sessions=2)
+
+            path = root / "out/data/screening/cross_session_opportunity_population.jsonl"
+            opportunities = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(result["cross_session_opportunity_count"], 1)
+            self.assertEqual(result["cross_session_invalidation_mining_status"], "STRUCTURAL_ENTITY_JOIN_COMPLETE")
+            self.assertEqual(len(opportunities), 1)
+            opportunity = opportunities[0]
+            self.assertEqual(opportunity["schema_version"], 2)
+            self.assertTrue(opportunity["has_pre_change_entity_change"])
+            self.assertTrue(opportunity["has_external_change"])
+            self.assertTrue(opportunity["has_post_change_entity_change"])
+            self.assertNotIn("pre_change_dependency_event_id_hash", opportunity)
+            self.assertEqual(opportunity["affected_session_id_hash"], hashlib.sha256(b"affected-private-id").hexdigest())
+            persisted = path.read_text()
+            self.assertNotIn("affected-private-id", persisted)
+            self.assertNotIn("changer-private-id", persisted)
+            self.assertNotIn("private_name.py", persisted)
+            self.assertNotIn("/private/shared-repo", persisted)
+            self.assertNotIn("private source", persisted)
+
+            prepare_s0_review(root / "out")
+            manifest = json.loads((root / "out/data/screening/s0_review_manifest.json").read_text())
+            self.assertEqual(manifest["cross_session_opportunity_count"], 1)
+            self.assertEqual(
+                manifest["cross_session_opportunity_population_sha256"],
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+
+    def test_s0_cross_session_join_ignores_unrelated_entity_and_same_session_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+
+            def rows(session_id: str, path: str, times: list[str]) -> list[dict]:
+                result = [
+                    {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": session_id, "cwd": "/repo"}},
+                ]
+                result.extend(
+                    {
+                        "timestamp": f"2026-08-16T00:00:{index:02d}Z",
+                        "type": "response_item",
+                        "payload": {"id": f"{session_id}-{index}", "type": "message", "role": "assistant", "content": "ordinary work"},
+                    }
+                    for index in range(100)
+                )
+                result.extend(
+                    {
+                        "timestamp": timestamp,
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "patch_apply_end", "call_id": f"{session_id}-{timestamp}",
+                            "turn_id": "turn", "success": True, "status": "completed",
+                            "stdout": "", "stderr": "", "changes": {path: {"type": "update"}},
+                        },
+                    }
+                    for timestamp in times
+                )
+                return result
+
+            (sessions / "one.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows(
+                "one", "src/one.py", ["2026-08-16T00:02:00Z", "2026-08-16T00:06:00Z"]
+            )))
+            (sessions / "two.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows(
+                "two", "src/two.py", ["2026-08-16T00:04:00Z"]
+            )))
+
+            result = run_s0_screening(root / "out", [sessions], max_sessions=2)
+
+            self.assertEqual(result["cross_session_opportunity_count"], 0)
+            self.assertEqual(
+                (root / "out/data/screening/cross_session_opportunity_population.jsonl").read_text(),
+                "",
+            )
+
     def test_prepare_s0_review_separates_cutoff_evidence_from_outcome_and_redacts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -929,6 +1096,798 @@ class CoordyTests(unittest.TestCase):
             self.assertTrue(card["evidence_completeness"]["structural_opportunity"])
             template = json.loads((workspace / "data/screening/user_review_answers.json").read_text())
             self.assertEqual(len(template["answers"]), 1)
+
+    def test_prepare_s0b_state_inputs_covers_all_opportunities_and_blinds_outcomes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "private-session", "cwd": "/private/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "constraint", "type": "message", "role": "user", "content": "Constraint: keep the database in the host app"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "compact", "content": "Summary: keep the database in the host app"}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "plan", "type": "message", "role": "assistant", "content": "Plan: continue with the host-only database boundary"}},
+                {"timestamp": "2026-08-16T00:04:00Z", "type": "response_item", "payload": {"id": "tool", "type": "function_call", "name": "exec_command", "arguments": "{}"}},
+                {"timestamp": "2026-08-16T00:05:00Z", "type": "response_item", "payload": {"id": "failure", "type": "function_call_output", "output": "tests failed api_key=must-not-leak"}},
+                {"timestamp": "2026-08-16T00:06:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "you forgot the host-only constraint"}},
+            ]
+            (sessions / "rollout.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            workspace = root / "out"
+            screening = run_s0_screening(workspace, [sessions], max_sessions=1)
+
+            result = prepare_s0b_state_inputs(workspace)
+
+            self.assertEqual(result["state_diff_input_count"], screening["opportunity_population_count"])
+            packets = [
+                json.loads(line)
+                for line in (workspace / "data/screening/s0b_state_diff_inputs.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(len(packets), 1)
+            packet = packets[0]
+            self.assertEqual(packet["stage"], "S0b_SEMANTIC_GRADING")
+            self.assertTrue(packet["blinding"]["engineering_outcomes_hidden"])
+            text = json.dumps(packet)
+            self.assertIn("host app", text)
+            self.assertNotIn("tests failed", text)
+            self.assertNotIn("you forgot", text)
+            self.assertNotIn("must-not-leak", text)
+            self.assertNotIn("private-session", text)
+            self.assertNotIn("/private/repo", text)
+            self.assertEqual(
+                set(packet["allowed_evidence_ids"]),
+                {
+                    event["evidence_id"]
+                    for section in ("pre_compaction_events", "compaction_summary_events", "post_compaction_plan_events")
+                    for event in packet[section]
+                },
+            )
+
+    def test_state_diff_validation_requires_known_evidence_ids_and_complete_taxonomy(self):
+        packet = {
+            "opportunity_id_hash": "opportunity",
+            "allowed_evidence_ids": ["e1", "e2"],
+            "pre_compaction_events": [{"evidence_id": "e1"}],
+            "compaction_summary_events": [],
+            "post_compaction_plan_events": [{"evidence_id": "e2"}],
+        }
+        valid = {
+            "opportunity_id_hash": "opportunity",
+            "states": {
+                key: []
+                for key in ("goal", "constraint", "decision", "rejected_option", "plan", "dependency", "acceptance_criteria")
+            },
+            "diffs": [{
+                "state_type": "constraint",
+                "status": "preserved",
+                "downstream_relevance": "NONE",
+                "evidence_ids": ["e1", "e2"],
+                "rationale": "The constraint is present before and after compaction.",
+            }],
+            "assessment_status": "NO_MATERIAL_CHANGE",
+            "suspected_state_change": False,
+            "confidence": 0.9,
+        }
+        normalized = validate_state_diff_result(packet, valid)
+        self.assertEqual(normalized["diffs"][0]["status"], "preserved")
+
+        vacuous = json.loads(json.dumps(valid))
+        vacuous["diffs"] = []
+        with self.assertRaisesRegex(ValueError, "earlier-to-post evidence comparison"):
+            validate_state_diff_result(packet, vacuous)
+
+        invalid = json.loads(json.dumps(valid))
+        invalid["diffs"][0]["evidence_ids"] = ["future-event"]
+        with self.assertRaisesRegex(ValueError, "unknown evidence"):
+            validate_state_diff_result(packet, invalid)
+
+        duplicate = json.loads(json.dumps(valid))
+        duplicate["diffs"][0]["evidence_ids"] = ["e1", "e1", "e2"]
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            validate_state_diff_result(packet, duplicate)
+
+        no_post_packet = json.loads(json.dumps(packet))
+        no_post_packet["post_compaction_plan_events"] = []
+        no_post_packet["allowed_evidence_ids"] = ["e1"]
+        unassessable = json.loads(json.dumps(valid))
+        unassessable["diffs"] = []
+        unassessable["assessment_status"] = "UNASSESSABLE"
+        unassessable["suspected_state_change"] = False
+        validate_state_diff_result(no_post_packet, unassessable)
+        unassessable["assessment_status"] = "SUSPECT"
+        unassessable["suspected_state_change"] = True
+        with self.assertRaisesRegex(ValueError, "directly relevant state risk"):
+            validate_state_diff_result(no_post_packet, unassessable)
+
+    def test_s0b_state_diff_runs_primary_on_every_opportunity_and_binds_second_judge_audit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "goal", "type": "message", "role": "user", "content": "Goal: keep compatibility"}},
+            ]
+            for index in range(3):
+                rows.extend([
+                    {"timestamp": f"2026-08-16T00:{index * 2 + 2:02d}:00Z", "type": "compacted", "payload": {"id": f"compact-{index}", "content": "Goal: keep compatibility"}},
+                    {"timestamp": f"2026-08-16T00:{index * 2 + 3:02d}:00Z", "type": "response_item", "payload": {"id": f"plan-{index}", "type": "message", "role": "assistant", "content": "Plan: preserve compatibility"}},
+                ])
+            (sessions / "rollout.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions], max_sessions=1)
+            prepare_s0b_state_inputs(workspace)
+            smoke = prepare_s0b_state_smoke(workspace, sample_size=3, no_post_plan_quota=0)
+            smoke_again = prepare_s0b_state_smoke(workspace, sample_size=3, no_post_plan_quota=0)
+            self.assertEqual(smoke, smoke_again)
+            self.assertEqual(smoke["smoke_input_count"], 3)
+            self.assertFalse(smoke["external_transmission_completed"])
+            self.assertEqual(
+                smoke["smoke_inputs_sha256"],
+                hashlib.sha256(
+                    (workspace / "data/screening/s0b_state_smoke_inputs.jsonl").read_bytes()
+                ).hexdigest(),
+            )
+            with self.assertRaisesRegex(RuntimeError, "cannot be overwritten"):
+                prepare_s0b_state_smoke(workspace, sample_size=2, no_post_plan_quota=0)
+
+            class FakeJudge:
+                def __init__(self, judge_id: str, disagree: bool = False):
+                    self.judge_id = judge_id
+                    self.model = f"fake-{judge_id}"
+                    self.configuration_sha256 = f"config-{judge_id}-{disagree}"
+                    self.calls: list[list[str]] = []
+                    self.disagree = disagree
+
+                def grade(self, packets: list[dict]) -> list[dict]:
+                    self.calls.append([packet["opportunity_id_hash"] for packet in packets])
+                    results = []
+                    for packet in packets:
+                        earlier = packet["pre_compaction_events"][0]["evidence_id"]
+                        post = packet["post_compaction_plan_events"][0]["evidence_id"]
+                        results.append({
+                            "opportunity_id_hash": packet["opportunity_id_hash"],
+                            "states": {key: [] for key in packet["required_state_types"]},
+                            "diffs": [{
+                                "state_type": "goal",
+                                "status": "missing" if self.disagree else "preserved",
+                                "downstream_relevance": "DIRECT" if self.disagree else "NONE",
+                                "evidence_ids": [earlier, post],
+                                "rationale": "Independent semantic assessment.",
+                            }],
+                            "assessment_status": "SUSPECT" if self.disagree else "NO_MATERIAL_CHANGE",
+                            "suspected_state_change": self.disagree,
+                            "confidence": 0.9,
+                        })
+                    return results
+
+            primary = FakeJudge("primary")
+            secondary = FakeJudge("secondary", disagree=True)
+            class FlakySmokeJudge(FakeJudge):
+                def __init__(self):
+                    super().__init__("smoke")
+                    self.failed_once = False
+
+                def grade(self, packets: list[dict]) -> list[dict]:
+                    results = super().grade(packets)
+                    if not self.failed_once:
+                        self.failed_once = True
+                        results[0]["diffs"][0]["evidence_ids"] = ["unknown-evidence"]
+                    return results
+
+            smoke_judge = FlakySmokeJudge()
+            with self.assertRaisesRegex(RuntimeError, "approved smoke hash"):
+                run_s0b_state_smoke(workspace, smoke_judge, "wrong-hash")
+            smoke_report = run_s0b_state_smoke(
+                workspace, smoke_judge, smoke["smoke_inputs_sha256"]
+            )
+            self.assertEqual(smoke_report["smoke_input_count"], 3)
+            self.assertTrue(smoke_report["external_transmission_completed"])
+            self.assertFalse(smoke_report["full_population_authorized"])
+            self.assertEqual(sum(len(call) for call in smoke_judge.calls), 4)
+            lock_path = workspace / "data/screening/.s0b_semantic_writer.lock"
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "already owns"):
+                    run_s0b_state_diff(workspace, primary, secondary, batch_size=2)
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            result = run_s0b_state_diff(workspace, primary, secondary, batch_size=2)
+
+            self.assertEqual(sum(len(call) for call in primary.calls), 3)
+            self.assertGreaterEqual(sum(len(call) for call in secondary.calls), 1)
+            self.assertEqual(result["primary_state_diff_count"], 3)
+            self.assertEqual(result["calibration_queue_count"], 3)
+            self.assertEqual(result["status"], "PENDING_HUMAN_CALIBRATION")
+            manifest = json.loads((workspace / "data/screening/s0b_semantic_manifest.json").read_text())
+            self.assertEqual(manifest["primary_judge_id"], "primary")
+            self.assertEqual(manifest["secondary_judge_id"], "secondary")
+            self.assertEqual(
+                manifest["primary_state_diffs_sha256"],
+                hashlib.sha256((workspace / "data/screening/s0b_primary_state_diffs.jsonl").read_bytes()).hexdigest(),
+            )
+            queue = json.loads(
+                (workspace / "data/screening/s0b_semantic_calibration_queue.json").read_text()
+            )
+            self.assertEqual(len(queue), 3)
+            self.assertIn("deterministic_control", {row["selection_stratum"] for row in queue})
+
+            resumed_primary = FakeJudge("primary")
+            resumed_secondary = FakeJudge("secondary", disagree=True)
+            run_s0b_state_diff(
+                workspace, resumed_primary, resumed_secondary, batch_size=1, workers=2
+            )
+            self.assertEqual(resumed_primary.calls, [])
+            self.assertEqual(resumed_secondary.calls, [])
+
+            changed_config = FakeJudge("primary")
+            changed_config.configuration_sha256 = "changed-prompt-or-effort"
+            with self.assertRaisesRegex(RuntimeError, "stale or mixed semantic checkpoint"):
+                run_s0b_state_diff(
+                    workspace, changed_config, FakeJudge("secondary", disagree=True), batch_size=1
+                )
+
+            answers_path = workspace / "state_calibration_answers.json"
+            answers_path.write_text(json.dumps({
+                "scan_run_id": manifest["scan_run_id"],
+                "semantic_calibration_queue_sha256": manifest["semantic_calibration_queue_sha256"],
+                "reviewer_type": "HUMAN_CONFIRMED",
+                "answers": [
+                    {
+                        "opportunity_id_hash": row["opportunity_id_hash"],
+                        "answer": "NO",
+                    }
+                    for row in queue
+                ],
+            }))
+            calibration = adjudicate_s0b_state_calibration(workspace, answers_path)
+            self.assertEqual(calibration["human_decided_cases"], 3)
+            self.assertEqual(calibration["status"], "INSUFFICIENT_SEMANTIC_CALIBRATION")
+            self.assertFalse(calibration["machine_judges_are_ground_truth"])
+
+            primary_path = workspace / "data/screening/s0b_primary_state_diffs.jsonl"
+            saved = [json.loads(line) for line in primary_path.read_text().splitlines()]
+            saved[0]["input_packet_sha256"] = "tampered"
+            primary_path.write_text("".join(json.dumps(row) + "\n" for row in saved))
+            with self.assertRaisesRegex(RuntimeError, "stale or mixed semantic checkpoint"):
+                run_s0b_state_diff(
+                    workspace, FakeJudge("primary"), FakeJudge("secondary", disagree=True)
+                )
+
+    def test_s0b_causal_inputs_accept_only_program_verified_engineering_outcomes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            structured_result = [{
+                "type": "text",
+                "text": json.dumps({
+                    "exit_code": 1,
+                    "output": "test_preserves_constraint failed",
+                    "wall_time_seconds": 0.2,
+                }),
+            }]
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"id": "goal", "type": "message", "role": "user", "content": "Keep the compatibility constraint."}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"id": "compact", "content": "Continue implementation."}},
+                {"timestamp": "2026-08-16T00:03:00Z", "type": "response_item", "payload": {"id": "plan", "type": "message", "role": "assistant", "content": "Run the compatibility test."}},
+                {"timestamp": "2026-08-16T00:04:00Z", "type": "response_item", "payload": {"id": "claim", "type": "message", "role": "assistant", "content": "tests failed and I rolled back"}},
+                {"timestamp": "2026-08-16T00:05:00Z", "type": "response_item", "payload": {"id": "call", "call_id": "c1", "type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "python -m unittest test_preserves_constraint"})}},
+                {"timestamp": "2026-08-16T00:06:00Z", "type": "response_item", "payload": {"id": "result", "call_id": "c1", "type": "function_call_output", "output": structured_result}},
+                {"timestamp": "2026-08-16T00:07:00Z", "type": "event_msg", "payload": {"id": "patch", "type": "patch_apply_end", "success": True, "changes": [{"path": "/repo/private.py"}]}},
+                {"timestamp": "2026-08-16T00:08:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "Restore the compatibility constraint."}},
+            ]
+            (sessions / "rollout.jsonl").write_text(
+                "".join(json.dumps(row) + "\n" for row in rows)
+            )
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions], max_sessions=1)
+            prepare_s0_review(workspace, max_reviews=1)
+            prepare_s0b_state_inputs(workspace)
+
+            class SuspectJudge:
+                def __init__(self, judge_id: str):
+                    self.judge_id = judge_id
+                    self.model = f"fake-{judge_id}"
+                    self.configuration_sha256 = f"config-{judge_id}"
+
+                def grade(self, packets: list[dict]) -> list[dict]:
+                    results = []
+                    for packet in packets:
+                        earlier = packet["pre_compaction_events"][0]["evidence_id"]
+                        post = packet["post_compaction_plan_events"][0]["evidence_id"]
+                        results.append({
+                        "opportunity_id_hash": packet["opportunity_id_hash"],
+                        "states": {key: [] for key in packet["required_state_types"]},
+                        "diffs": [{
+                            "state_type": "constraint",
+                            "status": "missing",
+                            "downstream_relevance": "DIRECT",
+                            "evidence_ids": [earlier, post],
+                            "rationale": "The constraint is absent after compaction.",
+                        }],
+                        "assessment_status": "SUSPECT",
+                        "suspected_state_change": True,
+                        "confidence": 0.95,
+                        })
+                    return results
+
+            run_s0b_state_diff(
+                workspace, SuspectJudge("primary"), SuspectJudge("secondary"), batch_size=1
+            )
+            eligible_path = workspace / "data/screening/eligible_sessions.jsonl"
+            eligible_content = eligible_path.read_text()
+            eligible_path.write_text(eligible_content + "{}\n")
+            with self.assertRaisesRegex(RuntimeError, "eligible sessions"):
+                prepare_s0b_causal_inputs(workspace)
+            eligible_path.write_text(eligible_content)
+            manifest = prepare_s0b_causal_inputs(workspace)
+            self.assertEqual(manifest["causal_input_count"], 1)
+            causal_path = workspace / "data/screening/s0b_causal_inputs.jsonl"
+            packet = json.loads(causal_path.read_text().strip())
+            self.assertTrue(packet["pre_compaction_events"])
+            self.assertTrue(packet["compaction_summary_events"])
+            outcomes = packet["verified_engineering_outcomes"]
+            self.assertEqual(
+                {(row["verification_source"], row["operation_kind"]) for row in outcomes},
+                {("structured_tool_result", "test"), ("patch_apply_end", "patch")},
+            )
+            self.assertEqual(outcomes[0]["exit_code"], 1)
+            self.assertIn("test_preserves_constraint failed", outcomes[0]["result_excerpt"])
+            serialized = causal_path.read_text()
+            self.assertNotIn(
+                "tests failed and I rolled back", json.dumps(outcomes, sort_keys=True)
+            )
+            self.assertNotIn("/repo/private.py", serialized)
+            self.assertEqual(causal_path.stat().st_mode & 0o777, 0o600)
+
+            class CausalJudge:
+                def __init__(self, judge_id: str):
+                    self.judge_id = judge_id
+                    self.model = f"fake-{judge_id}"
+                    self.configuration_sha256 = f"config-{judge_id}"
+
+                def grade(self, packets: list[dict]) -> list[dict]:
+                    return [{
+                        "opportunity_id_hash": item["opportunity_id_hash"],
+                        "wrong_action": "YES",
+                        "engineering_consequence": "VERIFIED",
+                        "caused_by_state_loss": "YES",
+                        "ordinary_reasoning_alternative": "The implementation may independently be wrong.",
+                        "failure_type": "A",
+                        "counterfactual": "Replay with the missing constraint restored.",
+                        "evidence_ids": [item["verified_engineering_outcomes"][0]["evidence_id"]],
+                        "confidence": 0.9,
+                    } for item in packets]
+
+            result = run_s0b_causal_judges(
+                workspace, CausalJudge("primary-causal"), CausalJudge("secondary-causal")
+            )
+            self.assertEqual(result["machine_confirmed_causal_failure_count"], 1)
+            self.assertEqual(result["status"], "PENDING_HUMAN_CAUSAL_REVIEW")
+            self.assertFalse(result["machine_judges_are_ground_truth"])
+
+            queue_path = workspace / "data/screening/s0b_causal_human_review_queue.json"
+            queue = json.loads(queue_path.read_text())
+            causal_chain = queue[0]["causal_chain"]
+            self.assertTrue(causal_chain["T0_pre_compaction_state"])
+            self.assertTrue(causal_chain["T1_compaction_summary"])
+            self.assertTrue(causal_chain["T2_post_compaction_plan_or_judgment"])
+            self.assertTrue(causal_chain["T3_actual_action"])
+            self.assertTrue(causal_chain["T4_program_verified_outcome"])
+            self.assertIn("evidence_id", causal_chain["T1_compaction_summary"][0])
+            answers_path = workspace / "causal_answers.json"
+            answers_path.write_text(json.dumps({
+                "scan_run_id": result["scan_run_id"],
+                "causal_human_review_queue_sha256": result["causal_human_review_queue_sha256"],
+                "reviewer_type": "HUMAN_CONFIRMED",
+                "answers": [
+                    {"opportunity_id_hash": row["opportunity_id_hash"], "answer": "YES"}
+                    for row in queue
+                ],
+            }))
+            causal_calibration = adjudicate_s0b_causal_review(workspace, answers_path)
+            self.assertEqual(causal_calibration["human_confirmed_causal_failures"], 1)
+            self.assertEqual(causal_calibration["human_confirmed_type_abc"], 1)
+            self.assertEqual(causal_calibration["status"], "INSUFFICIENT_CAUSAL_CALIBRATION")
+            evidence_card = json.loads(
+                (workspace / "data/screening/evidence_cards.jsonl").read_text().strip()
+            )
+            self.assertEqual(evidence_card["system_classification"]["status"], "CLASSIFIED")
+            self.assertEqual(evidence_card["system_classification"]["failure_type"], "A")
+
+            invalid = CausalJudge("invalid").grade([packet])[0]
+            invalid["evidence_ids"] = [packet["action_events"][0]["evidence_id"]]
+            with self.assertRaisesRegex(ValueError, "program-verified outcome"):
+                validate_causal_result(packet, invalid)
+
+    def test_secure_write_preserves_previous_checkpoint_if_replace_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "checkpoint.jsonl"
+            _secure_write(path, "saved\n")
+            with patch("coordy.semantic.os.replace", side_effect=OSError("interrupted")):
+                with self.assertRaisesRegex(OSError, "interrupted"):
+                    _secure_write(path, "new\n")
+            self.assertEqual(path.read_text(), "saved\n")
+
+    def test_human_causal_chain_does_not_retruncate_bound_t0_t5_sections(self):
+        events = [{"evidence_id": f"event-{index}", "redacted_excerpt": str(index)} for index in range(20)]
+        packet = {
+            "pre_compaction_events": events,
+            "compaction_summary_events": events[:2],
+            "post_compaction_plan_events": events[:3],
+            "action_events": events,
+            "verified_engineering_outcomes": events,
+            "user_followup_events": events[:5],
+        }
+        chain = _human_causal_chain(packet)
+        self.assertEqual(len(chain["T0_pre_compaction_state"]), 20)
+        self.assertEqual(len(chain["T3_actual_action"]), 20)
+        self.assertEqual(len(chain["T4_program_verified_outcome"]), 20)
+        self.assertEqual(chain["T0_pre_compaction_state"][-1]["evidence_id"], "event-19")
+
+    def test_state_smoke_selection_is_reproducible_and_goal_root_balanced(self):
+        packets = []
+        for index in range(20):
+            packets.append({
+                "opportunity_id_hash": f"{index:064x}",
+                "goal_thread_id_hash": f"root-{index % 8}",
+                "post_compaction_plan_events": [] if index < 3 else [{"evidence_id": "post"}],
+            })
+        first = _select_state_smoke_packets(packets)
+        second = _select_state_smoke_packets(list(reversed(packets)))
+        self.assertEqual(
+            [row["opportunity_id_hash"] for row in first],
+            [row["opportunity_id_hash"] for row in second],
+        )
+        self.assertEqual(len(first), 12)
+        self.assertEqual(sum(not row["post_compaction_plan_events"] for row in first), 3)
+        self.assertEqual(len({row["goal_thread_id_hash"] for row in first}), 8)
+        with self.assertRaisesRegex(RuntimeError, "exact frozen quotas"):
+            _select_state_smoke_packets(packets[3:], no_post_plan_quota=3)
+        with self.assertRaisesRegex(RuntimeError, "exact frozen quotas"):
+            _select_state_smoke_packets(packets[:5], sample_size=12, no_post_plan_quota=3)
+
+    def test_all_semantic_mutations_share_one_workspace_writer_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            lock_path = workspace / "data/screening/.s0b_semantic_writer.lock"
+            lock_path.parent.mkdir(parents=True)
+            descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "already owns"):
+                    prepare_s0b_state_inputs(workspace)
+                with self.assertRaisesRegex(RuntimeError, "already owns"):
+                    prepare_s0b_causal_inputs(workspace)
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+
+    def test_state_judge_schema_is_singleton_and_evidence_bound(self):
+        packet = {
+            "opportunity_id_hash": "opportunity-1",
+            "allowed_evidence_ids": ["event-1", "event-2"],
+        }
+        schema = _state_diff_batch_schema([packet])
+        results = schema["properties"]["results"]
+        self.assertEqual(results["minItems"], 1)
+        self.assertEqual(results["maxItems"], 1)
+        item = results["items"]
+        self.assertEqual(
+            item["properties"]["opportunity_id_hash"]["enum"], ["opportunity-1"]
+        )
+        evidence_items = item["properties"]["diffs"]["items"]["properties"][
+            "evidence_ids"
+        ]["items"]
+        self.assertEqual(evidence_items["enum"], ["event-1", "event-2"])
+        with self.assertRaisesRegex(ValueError, "one isolated opportunity"):
+            _state_diff_batch_schema([packet, packet])
+
+    def test_responses_api_state_judge_binds_contract_without_persisting_key(self):
+        packet = {
+            "opportunity_id_hash": "opportunity",
+            "scan_run_id": "scan",
+            "allowed_evidence_ids": ["earlier", "post"],
+            "pre_compaction_events": [{"evidence_id": "earlier"}],
+            "compaction_summary_events": [],
+            "post_compaction_plan_events": [{"evidence_id": "post"}],
+            "required_state_types": list(STATE_TYPES),
+        }
+        result = {
+            "opportunity_id_hash": "opportunity",
+            "states": {key: [] for key in STATE_TYPES},
+            "diffs": [{
+                "state_type": "goal",
+                "status": "preserved",
+                "downstream_relevance": "NONE",
+                "rationale": "The goal remains active.",
+                "evidence_ids": ["earlier", "post"],
+            }],
+            "assessment_status": "NO_MATERIAL_CHANGE",
+            "suspected_state_change": False,
+            "confidence": 0.9,
+        }
+        schema = _state_diff_batch_schema([packet])
+        response_envelope = {
+            "id": "response-id",
+            "status": "completed",
+            "error": None,
+            "model": "gpt-5.6-luna",
+            "instructions": STATE_JUDGE_INSTRUCTIONS,
+            "tools": [],
+            "store": False,
+            "parallel_tool_calls": False,
+            "text": {"format": {
+                "type": "json_schema",
+                "name": "coordy_state_diff",
+                "strict": True,
+                "schema": schema,
+            }},
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps({"results": [result]}),
+                }],
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        }
+
+        class FakeResponse:
+            headers = {"X-Request-Id": "request-id"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return json.dumps(response_envelope).encode()
+
+        class FakeOpener:
+            request = None
+            calls = 0
+
+            def open(self, request, timeout):
+                self.calls += 1
+                self.request = request
+                self.timeout = timeout
+                return FakeResponse()
+
+        opener = FakeOpener()
+        dispatch_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(dispatch_tmp.cleanup)
+        dispatch_dir = Path(dispatch_tmp.name)
+        with patch("coordy.semantic.urllib.request.build_opener", return_value=opener):
+            judge = ResponsesAPIStateJudge(
+                judge_id="api-state",
+                api_key="fake-secret",
+                base_url="https://example.invalid",
+                dispatch_log_dir=dispatch_dir,
+            )
+            other_key_judge = ResponsesAPIStateJudge(
+                judge_id="api-state",
+                api_key="different-secret",
+                base_url="https://example.invalid",
+                dispatch_log_dir=dispatch_dir,
+            )
+            rows = judge.grade([packet])
+            with self.assertRaisesRegex(NonRetryableJudgeError, "automatic resend"):
+                judge.grade([packet])
+        self.assertEqual(rows[0]["api_request_id"], "request-id")
+        self.assertEqual(rows[0]["api_usage"]["total_tokens"], 15)
+        self.assertEqual(judge.configuration_sha256, other_key_judge.configuration_sha256)
+        request_body = json.loads(opener.request.data)
+        self.assertEqual(request_body["tools"], [])
+        self.assertFalse(request_body["store"])
+        self.assertFalse(request_body["parallel_tool_calls"])
+        self.assertNotIn("fake-secret", opener.request.data.decode())
+        self.assertEqual(opener.calls, 1)
+        self.assertEqual(judge.configuration["api_base_url"], "https://example.invalid")
+        self.assertNotIn("fake-secret", json.dumps(judge.configuration))
+
+        malformed_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(malformed_tmp.cleanup)
+        malformed_judge = ResponsesAPIStateJudge(
+            judge_id="api-state-malformed",
+            api_key="fake-secret",
+            base_url="https://example.invalid",
+            dispatch_log_dir=Path(malformed_tmp.name),
+        )
+        response_envelope["tools"] = ["unexpected"]
+        with patch("coordy.semantic.urllib.request.build_opener", return_value=FakeOpener()):
+            with self.assertRaisesRegex(NonRetryableJudgeError, "frozen response contract"):
+                malformed_judge.grade([packet])
+        response_envelope["tools"] = []
+        dispatch_records = list(Path(malformed_tmp.name).glob("*.json"))
+        self.assertEqual(len(dispatch_records), 1)
+        failed_dispatch = json.loads(dispatch_records[0].read_text())
+        self.assertEqual(failed_dispatch["status"], "HTTP_COMPLETED_UNVALIDATED")
+        self.assertEqual(failed_dispatch["api_request_id"], "request-id")
+        self.assertEqual(failed_dispatch["api_usage"]["total_tokens"], 15)
+
+        semantic_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(semantic_tmp.cleanup)
+        semantic_judge = ResponsesAPIStateJudge(
+            judge_id="api-state-semantic-invalid",
+            api_key="fake-secret",
+            base_url="https://example.invalid",
+            dispatch_log_dir=Path(semantic_tmp.name),
+        )
+        result["diffs"][0]["evidence_ids"] = ["post"]
+        response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
+        with patch("coordy.semantic.urllib.request.build_opener", return_value=FakeOpener()):
+            with self.assertRaisesRegex(NonRetryableJudgeError, "semantic validation"):
+                semantic_judge.grade([packet])
+        semantic_record = json.loads(next(Path(semantic_tmp.name).glob("*.json")).read_text())
+        self.assertEqual(semantic_record["status"], "SEMANTIC_VALIDATION_FAILED_NO_RETRY")
+        self.assertEqual(
+            semantic_record["rejected_result"][0]["diffs"][0]["evidence_ids"],
+            ["post"],
+        )
+        result["diffs"][0]["evidence_ids"] = ["earlier", "post"]
+        response_envelope["output"][0]["content"][0]["text"] = json.dumps({"results": [result]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "checkpoint.jsonl"
+            checkpoint_judge = ResponsesAPIStateJudge(
+                judge_id="api-state-checkpoint",
+                api_key="fake-secret",
+                base_url="https://example.invalid",
+                dispatch_log_dir=Path(tmp) / "dispatch",
+            )
+            with patch("coordy.semantic.urllib.request.build_opener", return_value=opener):
+                saved = _run_judge_batches(checkpoint_judge, [packet], 1, checkpoint, 1)
+            self.assertEqual(saved[0]["api_request_id"], "request-id")
+            self.assertNotIn("fake-secret", checkpoint.read_text())
+            damaged = json.loads(checkpoint.read_text())
+            damaged.pop("api_request_id")
+            checkpoint.write_text(json.dumps(damaged) + "\n")
+            with self.assertRaisesRegex(RuntimeError, "stale or mixed semantic checkpoint"):
+                _run_judge_batches(checkpoint_judge, [packet], 1, checkpoint, 1)
+
+    def test_judge_env_file_requires_private_exact_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env.local"
+            env_file.write_text(
+                "COORDY_JUDGE_API_KEY=fake-key\n"
+                "COORDY_JUDGE_BASE_URL=https://example.invalid\n"
+            )
+            os.chmod(env_file, 0o644)
+            with patch.dict(os.environ, {}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "0600"):
+                    _judge_api_settings(env_file)
+                os.chmod(env_file, 0o600)
+                self.assertEqual(
+                    _judge_api_settings(env_file),
+                    ("fake-key", "https://example.invalid"),
+                )
+
+    def test_state_smoke_gate_is_safety_only_and_fails_overbroad_judge(self):
+        packets = [
+            {
+                "opportunity_id_hash": "control",
+                "post_compaction_plan_events": [],
+            },
+            *[
+                {
+                    "opportunity_id_hash": f"post-{index}",
+                    "post_compaction_plan_events": [{"evidence_id": f"event-{index}"}],
+                }
+                for index in range(3)
+            ],
+        ]
+        results = [{
+            "opportunity_id_hash": "control",
+            "assessment_status": "UNASSESSABLE",
+            "suspected_state_change": False,
+        }]
+        results.extend({
+            "opportunity_id_hash": f"post-{index}",
+            "assessment_status": "SUSPECT",
+            "suspected_state_change": True,
+        } for index in range(3))
+        gate = _evaluate_state_smoke(packets, results)
+        self.assertFalse(gate["smoke_safety_gate_passed"])
+        self.assertFalse(gate["accuracy_claimed"])
+        self.assertEqual(gate["gate_scope"], "safety_and_evidence_binding_only")
+
+    def test_state_smoke_forbids_parallel_external_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "workers=1"):
+                run_s0b_state_smoke(
+                    Path(tmp),
+                    object(),
+                    "not-used",
+                    workers=2,
+                )
+
+    def test_parallel_state_failures_preserve_other_completed_checkpoints(self):
+        packets = []
+        for index in range(3):
+            packets.append({
+                "opportunity_id_hash": f"opportunity-{index}",
+                "scan_run_id": "scan",
+                "allowed_evidence_ids": [f"earlier-{index}", f"post-{index}"],
+                "pre_compaction_events": [{"evidence_id": f"earlier-{index}"}],
+                "compaction_summary_events": [],
+                "post_compaction_plan_events": [{"evidence_id": f"post-{index}"}],
+                "required_state_types": list(STATE_TYPES),
+            })
+
+        class PartialFailureJudge:
+            judge_id = "partial-failure"
+            model = "fake"
+            configuration_sha256 = "config"
+
+            def grade(self, batch):
+                packet = batch[0]
+                if packet["opportunity_id_hash"] == "opportunity-1":
+                    raise RuntimeError("expected isolated failure")
+                index = packet["opportunity_id_hash"].rsplit("-", 1)[1]
+                return [{
+                    "opportunity_id_hash": packet["opportunity_id_hash"],
+                    "states": {key: [] for key in STATE_TYPES},
+                    "diffs": [{
+                        "state_type": "goal",
+                        "status": "preserved",
+                        "downstream_relevance": "NONE",
+                        "rationale": "Bound comparison.",
+                        "evidence_ids": [f"earlier-{index}", f"post-{index}"],
+                    }],
+                    "assessment_status": "NO_MATERIAL_CHANGE",
+                    "suspected_state_change": False,
+                    "confidence": 0.9,
+                }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = Path(tmp) / "checkpoint.jsonl"
+            with self.assertRaisesRegex(RuntimeError, "successful concurrent results"):
+                _run_judge_batches(
+                    PartialFailureJudge(), packets, 1, checkpoint, workers=3
+                )
+            saved = [json.loads(line) for line in checkpoint.read_text().splitlines()]
+            self.assertEqual(
+                {row["opportunity_id_hash"] for row in saved},
+                {"opportunity-0", "opportunity-2"},
+            )
+
+    def test_nonretryable_judge_error_does_not_repeat_external_request(self):
+        packet = {
+            "opportunity_id_hash": "opportunity",
+            "scan_run_id": "scan",
+            "allowed_evidence_ids": ["earlier", "post"],
+            "pre_compaction_events": [{"evidence_id": "earlier"}],
+            "compaction_summary_events": [],
+            "post_compaction_plan_events": [{"evidence_id": "post"}],
+            "required_state_types": list(STATE_TYPES),
+        }
+
+        class RejectingJudge:
+            judge_id = "rejecting"
+            model = "test"
+            configuration_sha256 = "config"
+            calls = 0
+
+            def grade(self, _packets):
+                self.calls += 1
+                raise NonRetryableJudgeError("authentication rejected")
+
+        judge = RejectingJudge()
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(NonRetryableJudgeError, "authentication"):
+                _run_judge_batches(
+                    judge,
+                    [packet],
+                    1,
+                    Path(tmp) / "checkpoint.jsonl",
+                    1,
+                )
+        self.assertEqual(judge.calls, 1)
 
     def test_prepare_s0_review_withholds_goal_context_injected_into_rollout(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1371,6 +2330,25 @@ class CoordyTests(unittest.TestCase):
             run_s0_screening(workspace, [sessions], max_sessions=1)
             candidate_path = workspace / "data/screening/candidate_decision_points.jsonl"
             candidate_path.write_text(candidate_path.read_text() + "\n")
+
+            with self.assertRaisesRegex(RuntimeError, "one complete compatible scan run"):
+                prepare_s0_review(workspace)
+
+    def test_prepare_s0_review_rejects_tampered_cross_session_population(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            rollout = sessions / "rollout.jsonl"
+            rollout.write_text("".join(json.dumps(row) + "\n" for row in [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1", "cwd": "/repo"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {"id": "compact"}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "response_item", "payload": {"id": "action", "type": "message", "role": "assistant", "content": "continue"}},
+            ]))
+            workspace = root / "out"
+            run_s0_screening(workspace, [sessions], max_sessions=1)
+            cross_path = workspace / "data/screening/cross_session_opportunity_population.jsonl"
+            cross_path.write_text(json.dumps({"tampered": True}) + "\n")
 
             with self.assertRaisesRegex(RuntimeError, "one complete compatible scan run"):
                 prepare_s0_review(workspace)

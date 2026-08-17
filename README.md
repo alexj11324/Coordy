@@ -5,8 +5,9 @@ structured state reduce long-horizon agent drift, and can the same state detect
 when another session has invalidated an active plan?
 
 It is deliberately **not** an agent runtime, message bus, desktop client, or
-generic memory platform. Version 0.1.0 provides the smallest reproducible data
-and rule baseline needed before paying for model replays.
+generic memory platform. Version 0.1.0 separates deterministic evidence
+infrastructure (S0a) from model-assisted semantic grading (S0b); rules never
+stand in for a state-loss or causal judgment.
 
 ## What 0.1.0 does
 
@@ -18,6 +19,10 @@ and rule baseline needed before paying for model replays.
 - mines drift signals without treating keywords as ground truth;
 - detects cross-session changes that overlap active dependencies;
 - emits auditable candidates and `INSUFFICIENT_EVIDENCE` reports by default.
+- runs an outcome-blinded LLM State Diff over every compaction opportunity;
+- sends only agreed semantic suspects to stronger, outcome-aware causal judges;
+- requires independent judging and human calibration before machine prelabels
+  can contribute to a research conclusion.
 
 ## Quick start
 
@@ -25,11 +30,21 @@ and rule baseline needed before paying for model replays.
 python -m venv .venv
 . .venv/bin/activate
 python -m pip install -e .
+cp .env.example .env.local
+# Edit .env.local, then chmod 600 .env.local
 coordy init --workspace .
 coordy discover --workspace .coordy/discovery
 coordy screen --workspace .coordy/screening-s0 --max-sessions 100 --min-goal-seconds 7200
 coordy review-s0 --workspace .coordy/screening-s0 --max-reviews 12
 coordy adjudicate-s0 --workspace .coordy/screening-s0 --answers .coordy/screening-s0/data/screening/user_review_answers.json
+coordy prepare-s0b --workspace .coordy/screening-s0
+coordy prepare-s0b-smoke --workspace .coordy/screening-s0 --sample-size 12 --no-post-plan-controls 3
+coordy grade-s0b-smoke --workspace .coordy/screening-s0 --approved-smoke-sha256 <approved-sha256>
+coordy grade-s0b-state --workspace .coordy/screening-s0 --batch-size 1 --workers 4
+coordy calibrate-s0b-state --workspace .coordy/screening-s0 --answers <human-answers.json>
+coordy prepare-s0b-causal --workspace .coordy/screening-s0
+coordy grade-s0b-causal --workspace .coordy/screening-s0 --workers 2
+coordy calibrate-s0b-causal --workspace .coordy/screening-s0 --answers <human-causal-answers.json>
 coordy run --input examples/synthetic_sessions.jsonl --workspace .coordy/demo
 coordy summary --workspace .coordy/demo
 python -m unittest discover -s tests -v
@@ -82,6 +97,64 @@ whether or not a keyword matched. Opportunities are clustered by Goal root plus
 boundary; descendant sessions are observations inside that cluster, not
 independent long tasks. `rule_discovered_episodes.jsonl` is only a ranked subset
 of `opportunity_population.jsonl`, never a population estimate or upper bound.
+
+S0a ends there: it proves that complete, read-only, privacy-bound evidence can
+be enumerated. It does **not** prove that long-horizon drift occurred. In S0b,
+`prepare-s0b` creates a blinded packet for every opportunity containing only
+pre-compaction state, the compaction summary, and the first post-compaction
+plan. The lightweight State Diff Judge extracts Goal, Constraint, Decision,
+Rejected Option, Plan, Dependency, and Acceptance Criteria with evidence IDs,
+then labels each item `missing`, `contradicted`, `stale_reactivated`, or
+`preserved`. Final tool outcomes and user corrections are hidden at this stage
+to reduce hindsight bias.
+
+`prepare-s0b-smoke` freezes the exact external-evaluation payload before any
+model call. It records the source-input hash, payload hash and byte count,
+Goal-root coverage, control quota, destination, judge scope, and an explicit
+`external_transmission_completed=false` marker. Preparing this artifact does
+not authorize or perform transmission. `grade-s0b-smoke` requires the approved
+SHA-256 and consumes only that frozen file; it never authorizes the 472-case
+population. Once frozen, changing smoke size or control quota fails closed and
+requires a fresh workspace. `grade-s0b-state` is the separate full-population
+path and must not be used on smoke-only approval.
+
+All State Diff opportunities receive a primary judge. Suspects, low-confidence
+cases, and a deterministic audit sample receive an independently identified
+second judge. Each model call is one direct OpenAI-compatible Responses API
+request for one opportunity. The request fixes `instructions`, sends `tools=[]`,
+sets `store=false` and `parallel_tool_calls=false`, and supplies a strict schema
+that admits only the exact opportunity and evidence IDs in that packet. The
+client verifies those fields again in the server response before accepting any
+output. Malformed output and transport errors fail closed without an automatic
+retry; one attempt is allowed, and valid results are atomically checkpointed
+with input, schema,
+request/response IDs, token usage, and full judge-configuration hashes. API
+smoke dispatch is serial. Every grading path durably records dispatch before
+each POST, so an interrupted or otherwise uncertain dispatch blocks automatic
+resend. API credentials are read only from a private `0600` `.env.local` or process
+environment; `.env*` files are ignored except for `.env.example`.
+A reproducible 20–40 case human calibration queue includes disagreements,
+suspects, and deterministic controls. Bound `HUMAN_CONFIRMED` answers produce
+precision, recall, false-pause rate, primary/secondary agreement, and a
+missed-positive control-probe rate; fewer than 20 decided cases or failure of
+the frozen 0.80/0.70/0.10 quality floor remains insufficient evidence.
+
+Only agreed high-confidence suspects proceed to causal grading. The causal
+packet carries direct T0 pre-state, T1 compaction summary, T2 post-plan, T3
+actions, T4 program-verified outcomes, and T5 follow-up when available; it does
+not ask the causal judge to reconstruct T0/T1 from the derived State Diff.
+Assistant prose such as “tests failed” or “rolled back” is contextual text, not
+an engineering result. A consequence can be `VERIFIED` only by a structured
+tool result with an exit code, `patch_apply_end`, or later bound Git/test/replay
+evidence. Two stronger causal judges independently assess wrong action,
+engineering consequence, state-loss causality, the ordinary-reasoning
+alternative, Type A/B/C/D/U, and a distinguishing counterfactual. Their output
+remains a machine prelabel until a hash-bound `HUMAN_CONFIRMED` causal answer
+file is ingested by `calibrate-s0b-causal`.
+For a human `YES`, two agreeing evidence-bound causal judges may supply the
+system Type A/B/C classification. The classification is written into the S0
+evidence card, the card set is re-hashed, and any older S0 answer file therefore
+fails closed and must be reviewed against the updated evidence.
 
 `coordy review-s0` verifies frozen source hashes before writing local 0600 T0-T5
 evidence cards. The maximum-12 queue is stratified into six high-signal cases,

@@ -1,19 +1,20 @@
 {
   "applies_to": "screening_v1.S0 sampling only",
+  "duration_semantics": "goal_time_used_seconds is an observed Codex Goal selection attribute, not a human-equivalent task duration or METR time horizon.",
   "gate_changes": "none",
   "independence_units": {
     "goal_root": "An independently timed Goal from the read-only thread_goals catalog.",
     "lineage_session": "A root or descendant rollout associated through session_meta parent_thread_id; descendants are not independently multi-hour Goals."
   },
   "maximum_selected_lineage_sessions": 100,
-  "duration_semantics": "goal_time_used_seconds is an observed Codex Goal selection attribute, not a human-equivalent task duration or METR time horizon.",
-  "preferred_goal_minimum_seconds": 7200,
   "opportunity_population": {
     "keyword_rules": "ranking_only_not_population_definition",
     "prefix_truncation": "fail_closed",
     "required_artifact": "opportunity_population.jsonl",
     "unit": "goal_root_plus_real_compaction_boundary"
   },
+  "pivot_evidence": "Requires 1-4 confirmed classified failures, all in one explicit scenario, plus cases from at least three Goal roots or a separately recorded high-value rationale; repository concentration is not sufficient.",
+  "preferred_goal_minimum_seconds": 7200,
   "privacy": "Do not select or persist Goal objective text. Added lineage metadata uses a hashed Goal identity; the existing session_id remains solely for frozen source binding.",
   "reason": "Operator clarified that measured multi-hour Goal duration must take priority over transcript-size proxies.",
   "selection_order": [
@@ -27,8 +28,8 @@
       "NO",
       "UNCERTAIN"
     ],
-    "maximum_cases": 12,
     "machine_prelabels_are_terminal_evidence": false,
+    "maximum_cases": 12,
     "positive_probe_requires_candidate_expansion": true,
     "required_reviewer_types": [
       "HUMAN_CONFIRMED",
@@ -40,6 +41,5 @@
       "recall_probe": 3
     }
   },
-  "pivot_evidence": "Requires 1-4 confirmed classified failures, all in one explicit scenario, plus cases from at least three Goal roots or a separately recorded high-value rationale; repository concentration is not sufficient.",
   "version": "2"
 }

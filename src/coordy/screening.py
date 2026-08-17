@@ -9,12 +9,13 @@ import sqlite3
 import tempfile
 from contextlib import closing
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Iterable
 
 from .redaction import redact_text
 
-SCANNER_VERSION = "s0-v7"
+SCANNER_VERSION = "s0-v8"
+CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION = 2
 MAX_SCAN_BYTES_PER_SESSION = 2 * 1024 * 1024 * 1024
 MAX_SESSION_META_BYTES = 256 * 1024
 REQUIRED_GOAL_COLUMNS = {
@@ -145,6 +146,131 @@ def _is_engineering_consequence_event(
         record_type == "response_item" and payload_type == "message" and role == "user"
     ) or (record_type == "event_msg" and payload_type == "user_message")
     return actual_user_message and bool(signals & {"user_correction", "rollback_or_revert"})
+
+
+def _successful_patch_changes(
+    record_type: str,
+    payload: dict[str, Any],
+    timestamp: str | None,
+    source_offset: int,
+) -> list[dict[str, Any]]:
+    if (
+        record_type != "event_msg"
+        or payload.get("type") != "patch_apply_end"
+        or payload.get("success") is not True
+        or not isinstance(payload.get("changes"), dict)
+    ):
+        return []
+    event_basis = str(
+        payload.get("call_id")
+        or payload.get("turn_id")
+        or f"{source_offset}:{timestamp}"
+    )
+    event_id_hash = _hash(event_basis)
+    changes = []
+    for raw_path, raw_change in payload["changes"].items():
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            continue
+        paths = [raw_path]
+        if isinstance(raw_change, dict) and isinstance(raw_change.get("move_path"), str):
+            paths.append(raw_change["move_path"])
+        kind = str(raw_change.get("type") or "unknown") if isinstance(raw_change, dict) else "unknown"
+        if kind not in {"add", "create", "delete", "move", "update"}:
+            kind = "unknown"
+        for path in paths:
+            normalized = str(PurePath(path)).lower()
+            changes.append({
+                "change_event_id_hash": event_id_hash,
+                "change_timestamp": timestamp,
+                "entity_id_hash": _hash(normalized),
+                "entity_kind": "file",
+                "change_kind": kind,
+            })
+    return changes
+
+
+def _cross_session_opportunities(
+    events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    observations: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in events:
+        key = str(event["change_event_id_hash"]), str(event["entity_id_hash"])
+        observations.setdefault(key, []).append(event)
+
+    unambiguous = []
+    ambiguous = 0
+    for values in observations.values():
+        owners = {str(value["session_id"]) for value in values}
+        if len(owners) != 1:
+            ambiguous += 1
+            continue
+        unambiguous.append(min(values, key=lambda value: str(value["source_prefix_sha256"])))
+
+    by_entity: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for event in unambiguous:
+        repository = event.get("repository_identity_hash")
+        if not repository or not event.get("change_timestamp"):
+            continue
+        by_entity.setdefault((str(repository), str(event["entity_id_hash"])), []).append(event)
+
+    opportunities: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for (repository, entity), entity_events in by_entity.items():
+        ordered = sorted(
+            entity_events,
+            key=lambda event: (str(event["change_timestamp"]), str(event["change_event_id_hash"])),
+        )
+        sessions = {str(event["session_id"]) for event in ordered}
+        for change in ordered:
+            changed_by = str(change["session_id"])
+            for affected in sessions - {changed_by}:
+                before = [
+                    event for event in ordered
+                    if str(event["session_id"]) == affected
+                    and str(event["change_timestamp"]) < str(change["change_timestamp"])
+                ]
+                after = [
+                    event for event in ordered
+                    if str(event["session_id"]) == affected
+                    and str(event["change_timestamp"]) > str(change["change_timestamp"])
+                ]
+                if not before or not after:
+                    continue
+                prior_change = before[-1]
+                later_change = after[0]
+                key = affected, str(change["change_event_id_hash"]), entity
+                if key in seen:
+                    continue
+                seen.add(key)
+                affected_hash = _hash(affected)
+                changed_by_hash = _hash(changed_by)
+                opportunities.append({
+                    "schema_version": CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION,
+                    "episode_id_hash": _hash("\0".join(("type-b", affected_hash, key[1], entity))),
+                    "affected_goal_thread_id_hash": prior_change.get("goal_thread_id_hash"),
+                    "changed_by_goal_thread_id_hash": change.get("goal_thread_id_hash"),
+                    "affected_session_id_hash": affected_hash,
+                    "changed_by_session_id_hash": changed_by_hash,
+                    "repository_identity_hash": repository,
+                    "entity_id_hash": entity,
+                    "entity_kind": "file",
+                    "cutoff": {
+                        "timestamp": change["change_timestamp"],
+                        "external_change_event_id_hash": change["change_event_id_hash"],
+                    },
+                    "pre_change_entity_event_id_hash": prior_change["change_event_id_hash"],
+                    "post_change_entity_event_id_hash": later_change["change_event_id_hash"],
+                    "affected_source_prefix_sha256": prior_change["source_prefix_sha256"],
+                    "changed_by_source_prefix_sha256": change["source_prefix_sha256"],
+                    "has_pre_change_entity_change": True,
+                    "has_external_change": True,
+                    "has_post_change_entity_change": True,
+                    "structural_opportunity": True,
+                    "coverage": "successful_patch_apply_end_file_entities",
+                    "note": "A same-entity patch sequence is a review opportunity; it does not establish a plan dependency, invalidation, continued stale execution, or Type B/C ground truth.",
+                })
+    opportunities.sort(key=lambda row: (str(row["cutoff"]["timestamp"]), str(row["episode_id_hash"])))
+    return opportunities, ambiguous
 
 
 def _auxiliary_exclusion_reason(source: Any) -> str | None:
@@ -435,7 +561,7 @@ def _scan_rollout(
     path: Path,
     *,
     additional_eligibility_reason: str | None = None,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     stat_before = path.stat()
     if stat_before.st_size > MAX_SCAN_BYTES_PER_SESSION:
         raise RuntimeError(f"rollout exceeds fail-closed scan ceiling: {_hash(str(path))}")
@@ -447,6 +573,7 @@ def _scan_rollout(
     event_count = tool_calls = compactions = summaries = 0
     signals: list[dict[str, Any]] = []
     temporal_windows: list[dict[str, Any]] = []
+    patch_changes: list[dict[str, Any]] = []
     seen_compaction = False
     last_compaction_marker_offset: int | None = None
     last_compaction_marker_timestamp: str | None = None
@@ -536,6 +663,7 @@ def _scan_rollout(
                 summaries += int(record_type == "compacted")
                 seen_compaction = True
             matched = _matched_signals(record_type, payload)
+            patch_changes.extend(_successful_patch_changes(record_type, payload, timestamp, offset))
             payload_text = "\n".join(_strings(payload))
             assistant_message = (
                 (record_type == "response_item" and payload_type == "message" and payload.get("role") == "assistant")
@@ -606,9 +734,9 @@ def _scan_rollout(
         temporal_windows.append(current_window)
     stat_after = path.stat()
     if (stat_before.st_size, stat_before.st_mtime_ns) != (stat_after.st_size, stat_after.st_mtime_ns):
-        return None, [], []
+        return None, [], [], []
     if not session_id:
-        return None, [], []
+        return None, [], [], []
     eligible_reasons = []
     if compactions or summaries:
         eligible_reasons.append("compaction_or_summary")
@@ -617,7 +745,7 @@ def _scan_rollout(
     if additional_eligibility_reason:
         eligible_reasons.append(additional_eligibility_reason)
     if not eligible_reasons:
-        return None, [], []
+        return None, [], [], []
     session = {
         "session_id": session_id,
         "source_path": str(path),
@@ -654,7 +782,13 @@ def _scan_rollout(
             "repository_identity_hash": cwd_hash,
             "source_prefix_sha256": session["scanned_prefix_sha256"],
         })
-    return session, signals, temporal_windows
+    for change in patch_changes:
+        change.update({
+            "session_id": session_id,
+            "repository_identity_hash": cwd_hash,
+            "source_prefix_sha256": session["scanned_prefix_sha256"],
+        })
+    return session, signals, temporal_windows, patch_changes
 
 
 def run_s0_screening(
@@ -696,6 +830,7 @@ def run_s0_screening(
     sessions: list[dict[str, Any]] = []
     signals: list[dict[str, Any]] = []
     temporal_opportunities: list[dict[str, Any]] = []
+    patch_change_events: list[dict[str, Any]] = []
     inspected = 0
     auxiliary_excluded = 0
     duplicate_sessions_excluded = 0
@@ -705,7 +840,7 @@ def run_s0_screening(
             break
         inspected += 1
         lineage = goal_lineage.get(path)
-        session, found, found_windows = _scan_rollout(
+        session, found, found_windows, found_patch_changes = _scan_rollout(
             path,
             additional_eligibility_reason="multi_hour_goal_lineage" if lineage else None,
         )
@@ -724,15 +859,20 @@ def run_s0_screening(
                     signal.update({"goal_backed": True, **lineage})
                 for window in found_windows:
                     window.update({"goal_backed": True, **lineage})
+                for change in found_patch_changes:
+                    change.update({"goal_backed": True, **lineage})
             else:
                 session["goal_backed"] = False
                 for signal in found:
                     signal["goal_backed"] = False
                 for window in found_windows:
                     window["goal_backed"] = False
+                for change in found_patch_changes:
+                    change["goal_backed"] = False
             sessions.append(session)
             signals.extend(found)
             temporal_opportunities.extend(found_windows)
+            patch_change_events.extend(found_patch_changes)
             selected_session_ids.add(session["session_id"])
     opportunities: dict[tuple[str, ...], dict[str, Any]] = {}
     for row in temporal_opportunities:
@@ -796,6 +936,9 @@ def run_s0_screening(
             ):
                 existing[field] = opportunity[field]
     opportunity_rows = list(opportunities.values())
+    cross_session_rows, ambiguous_cross_session_change_events = _cross_session_opportunities(
+        patch_change_events
+    )
     rule_discovered_rows = [row for row in opportunity_rows if row["rule_signals"]]
     high_seed = _goal_balanced_candidates(
         [row for row in opportunity_rows if row["rule_signals"] and row["has_observable_outcome"]],
@@ -832,9 +975,11 @@ def run_s0_screening(
     consequence_count = sum(1 for row in candidate_rows if row["has_observable_outcome"])
     session_rows = [{**row, "scan_run_id": scan_run_id} for row in sessions]
     opportunity_rows = [{**row, "scan_run_id": scan_run_id} for row in opportunity_rows]
+    cross_session_rows = [{**row, "scan_run_id": scan_run_id} for row in cross_session_rows]
     rule_discovered_rows = [{**row, "scan_run_id": scan_run_id} for row in rule_discovered_rows]
     sessions_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in session_rows)
     opportunity_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in opportunity_rows)
+    cross_session_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in cross_session_rows)
     rule_discovered_content = "".join(
         json.dumps(row, sort_keys=True) + "\n" for row in rule_discovered_rows
     )
@@ -868,6 +1013,9 @@ def run_s0_screening(
         }),
         "raw_candidate_signals": len(signals),
         "opportunity_population_count": len(opportunity_rows),
+        "cross_session_opportunity_count": len(cross_session_rows),
+        "cross_session_opportunity_schema_version": CROSS_SESSION_OPPORTUNITY_SCHEMA_VERSION,
+        "ambiguous_cross_session_change_events_excluded": ambiguous_cross_session_change_events,
         "structural_opportunity_count": sum(1 for row in opportunity_rows if row["structural_opportunity"]),
         "rule_discovered_episode_count": len(rule_discovered_rows),
         "candidate_episode_overflow": max(0, len(opportunity_rows) - len(candidate_rows)),
@@ -875,12 +1023,14 @@ def run_s0_screening(
         "artifact_hashes": {
             "eligible_sessions_jsonl": _hash(sessions_content),
             "opportunity_population_jsonl": _hash(opportunity_content),
+            "cross_session_opportunity_population_jsonl": _hash(cross_session_content),
             "rule_discovered_episodes_jsonl": _hash(rule_discovered_content),
             "candidate_decision_points_jsonl": _hash(candidates_content),
         },
         "engineering_consequence_candidates": consequence_count,
         "recall_audit_status": "PENDING_STRATIFIED_REVIEW",
-        "cross_session_invalidation_mining_status": "NOT_EXECUTED",
+        "cross_session_invalidation_mining_status": "STRUCTURAL_ENTITY_JOIN_COMPLETE",
+        "cross_session_invalidation_coverage": "successful_patch_apply_end_file_entities_only",
         "confirmed_type_abc": 0,
         "user_review_queue_size": 0,
         "status": "PENDING_EVIDENCE_REVIEW",
@@ -892,6 +1042,7 @@ def run_s0_screening(
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     _secure_write(output / "eligible_sessions.jsonl", sessions_content)
     _secure_write(output / "opportunity_population.jsonl", opportunity_content)
+    _secure_write(output / "cross_session_opportunity_population.jsonl", cross_session_content)
     _secure_write(output / "rule_discovered_episodes.jsonl", rule_discovered_content)
     _secure_write(output / "candidate_decision_points.jsonl", candidates_content)
     _secure_write(output / "user_review_queue.json", "[]\n")

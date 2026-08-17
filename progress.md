@@ -2,10 +2,10 @@
 
 ## Current phase
 
-Low-cost Screening S0 is `PENDING_HUMAN_CALIBRATION`. No Screening decision has
-been emitted: the temporal compaction queue has only conservative machine
-prelabels, and the distinct Type B cross-session opportunity layer is not yet
-implemented.
+S0a evidence infrastructure is complete for the current frozen run. S0b
+semantic grading is in progress across the full compaction opportunity
+population. No Screening decision has been emitted: rule/keyword counts do not
+establish drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Completed
 
@@ -28,6 +28,11 @@ implemented.
 - Fixed paired compaction markers and excluded developer/system injections from post-compaction Agent actions.
 - Distinguished machine prelabels from human-confirmed review, bound the final adjudication to its scan/answer/evidence hashes, and made scenario-based PIVOT reachable without using repository concentration as a proxy.
 - Added a separate system A/B/C classification gate: a human `YES` without completed causal classification remains `INSUFFICIENT_EVIDENCE` and cannot be counted toward STOP or PIVOT.
+- Added a privacy-bound cross-session entity-change opportunity layer based on successful `patch_apply_end` facts; it is structural S0a evidence, not Type B ground truth.
+- Split S0 into deterministic S0a evidence infrastructure and S0b semantic grading. Every compaction opportunity receives an outcome-blinded State Diff; suspects later receive stronger causal judging against program-verified outcomes.
+- Added isolated, resumable LLM judge checkpoints, evidence-ID validation, an independent second judge, a reproducible 30-case human calibration sample, and readable one-question review cards.
+- Added a causal evidence policy that accepts structured tool exit codes and `patch_apply_end` facts while refusing to treat transcript prose as an engineering consequence.
+- Added a deterministic, hash-bound State Diff smoke artifact so external approval names an immutable payload rather than a moving workspace.
 
 ## Outputs
 
@@ -37,6 +42,7 @@ implemented.
 - `protocol/decision_thresholds_v1.json`
 - `protocol/screening_v1.json`
 - `protocol/screening_sampling_amendment_v2.json`
+- `protocol/semantic_grading_amendment_v3.json`
 - Runtime discovery manifests are written below an ignored workspace.
 
 ## Data counts
@@ -45,42 +51,50 @@ implemented.
 - Archived rollout JSONL: 696 files discovered.
 - Candidate source interfaces: 5.
 - Indexed sessions: 0 (Phase 0B not executed).
-- Goal catalog: 38 total Goals; 7 lasted at least 7,200 seconds, including 6 over 6 hours.
-- All 7 multi-hour Goal roots linked to rollout history, yielding 204 root/descendant rollout files.
-- S0 selected 100 Goal-lineage sessions using root-balanced sampling: 7 independent Goal roots and 93 descendants across 4 hashed repository identities.
-- The 7 Goal roots report 5.89-14.24 hours of observed Codex Goal time. Their selected lineage contains 212,142 scanned events, 28,793 tool calls, and 465 compaction observations; these context-pressure counts, not elapsed waiting time alone, justify treating them as long-run histories.
+- Goal catalog: 8 Goals lasted at least 7,200 seconds in the v26 snapshot.
+- S0 selected 100 Goal-lineage sessions using root-balanced sampling: 8 independent Goal roots and 92 descendants.
+- The selected lineage contains 217,182 scanned events, 29,709 tool calls, and 472 real compaction observations. The eight root Goals report 3.57–14.24 hours of observed Codex Goal time, which is only a selection attribute; tool calls, active turns, compactions, and other context pressure remain the relevant long-run evidence.
 - Full-file scan volume: 2.88 GB across 100 selected sessions; 0 sessions were prefix-truncated.
-- Opportunity population: 465 Goal-root-plus-compaction clusters, including 462 structural opportunities; 135 carry rule signals, but that subset is not an upper bound.
-- Candidate sample: 30 Goal-balanced opportunities across all 7 Goal roots; 435 opportunities remain outside the candidate cap.
+- Opportunity population: 472 Goal-root-plus-compaction clusters, including 469 structural opportunities; 142 carry rule signals, but that subset is not an upper bound.
+- Candidate sample: 30 Goal-balanced opportunities across all 8 Goal roots; 442 opportunities remain outside the candidate cap.
+- Cross-session S0a opportunity population: 197 hashed entity-change joins from successful patch events; these are not confirmed invalidations.
+- S0b blinded input population: 472/472 opportunities, SHA-256-bound to the v26 scan. The widened T0 window retains deterministic temporal coverage plus recency (up to 48 evidence events) rather than only the last 12 messages. The 16.7 MB artifact is mode 0600 and passed local path/objective/key/password/email probes.
 - Stratified audit queue: 6 high-signal, 3 no-keyword recall probes, and 1 suspicious-looking no-consequence hard-negative candidate across 6 Goal clusters. The hard-negative stratum reports a two-case shortfall instead of backfilling from another stratum.
 - Conservative machine prelabel: all 10 cases remain `UNCERTAIN`. These are preliminary labels, not completed human review, so no precision, missed-positive, or false-pause metric is claimed.
-- Current status is `PENDING_HUMAN_CALIBRATION`, `decision=null`; machine prelabels cannot emit STOP/PIVOT, and compaction opportunities also do not cover Type B cross-session invalidation.
-- Authoritative ignored runtime workspace: `.coordy/screening-s0-v24/data/screening/`.
+- Current status is `SMOKE_ABORTED_INVALID_OR_UNCERTAIN_JUDGE_RESULT`, `decision=null`; machine prelabels cannot emit STOP/PIVOT.
+- Authoritative ignored runtime workspace: `.coordy/screening-s0-v26/data/screening/`.
 
 ## Failures or missing evidence
 
 - This implementation itself experienced execution drift: it temporarily optimized for an early numeric STOP instead of preserving the Pro-level evidence contract of complete long-history traces, T0-T5 causality, replayable engineering consequences, and rules used only for ranking. The root causes were prefix truncation, a keyword-defined pseudo-population, premature upper-bound language, auxiliary-review noise, expected-red-test noise, and evidence cards that were not decision-readable.
+- The first v25 semantic run also exposed an orchestration defect in the retired `codex exec` transport: interrupting the terminal session did not terminate two underlying grader parents, so duplicate workers briefly competed for the same checkpoint and spent extra model calls. Its 132-row checkpoint (131 suspects, including all 3 cases without a visible post-plan) is preserved as `RETRACTED_INVALID_SEMANTIC_RUN`; it is not resumed or used for prevalence. The replacement uses one direct Responses API request per opportunity, one workspace writer lock, atomic checkpoints, and prompt/schema/model/effort/API-base/timeout provenance. Exact token/cost usage for the retired interrupted calls is unavailable and will not be estimated.
+- The first approved v26 smoke attempt used the retired transport, persisted one valid control result, then rejected a malformed cross-opportunity evidence citation. Its partial checkpoint is retired. The replacement sends no tools, stores no server-side response, disables parallel tool calls, binds an exact per-opportunity evidence schema, validates request/response IDs, and records API token usage. It runs serially, writes a durable pre-POST dispatch tombstone, never retries automatically, and blocks resending an uncertain dispatch; this infrastructure is not evidence about drift or judge accuracy.
 - That execution drift invalidates the old validation method and its STOP outputs; it does **not** falsify the Pro validation direction or the underlying temporal-state hypothesis. The corrected opportunity/audit pipeline must finish before the hypothesis can be judged.
-- Source report `多人协作智能体：现有技术缺口分析与创业结论.md` is absent.
+- The local-only source report `多人协作智能体：现有技术缺口分析与创业结论.md` is present under `.local-specs/`, mode 0600, SHA-256 `4ca0590e7c5cfea5be5bf1f1aa3d6915b2833afddb9cebd7dea764d401255965`, and excluded from Git. It guides scope but is not experimental ground truth.
 - No historical events have been ingested or indexed.
 - Official App Server v2 schema exposes `thread/list`, `thread/read`, and explicit compaction events, but a read-only runtime connection was not verified; starting a new server would initialize Codex state and was rejected for this phase.
-- No cases, replays, or independent model evaluations have run.
+- The approved v26 direct-API smoke ran serially and stopped after 5 dispatches, with no retry. Four results passed local validation: all 3 no-post-plan controls were correctly `UNASSESSABLE`, and the first post-plan case was `NO_MATERIAL_CHANGE`. The fifth API response was schema-valid but failed the minimum earlier-to-post evidence comparison, so the remaining 7 cases were not sent. The five calls used 153,491 input and 7,889 output tokens (161,380 total, including 603 reasoning tokens). The failure ledger retains request/response/token provenance, but this pre-diagnostic run did not retain the rejected semantic body; subsequent fresh runs will store a redacted rejected result. This is a Judge safety/evidence-binding failure, not evidence for or against long-term drift prevalence.
 - The earlier seven-case and four-case `STOP` attempts were invalid. The first capped raw signals before deduplication; the second scanned only 8 MiB prefixes and treated a keyword subset as a global upper bound. Both conclusions are explicitly retracted.
 - Structural cards are not yet confirmed causal Decision Points and do not replace complete repository cutoff manifests.
-- Only 7 independently timed multi-hour Goals exist locally; the other 93 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
+- Only 8 independently timed multi-hour Goals exist in the v26 snapshot; the other 92 selected rows are explicitly clustered lineage sessions and cannot be treated as 100 independent long tasks.
 - Repository concentration is no longer a PIVOT proxy; PIVOT requires an explicit scenario repeated across independent Goal roots or a separately recorded high-value rationale.
-- Type B cross-session invalidation opportunity enumeration has not run, so S0 cannot produce a terminal decision.
+- Type B structural opportunity enumeration has run, but semantic invalidation and causal confirmation have not, so S0 cannot produce a terminal decision.
 - S1–S3 and confirmatory validation have not run.
 
 ## Next
 
-Obtain human calibration of the readable temporal queue, implement the Type B
-cross-session invalidation opportunity layer, include it in the same bound
-stratified audit, and rerun adjudication. Do not infer STOP from machine
-prelabels or the temporal-compaction sample alone.
+Revise and refreeze the State Diff Judge contract before any new external call.
+The next smoke must retain rejected-result diagnostics, preserve the same three
+controls, and receive explicit approval for its new judge-configuration hash.
+Do not resend the failed opportunity automatically, do not continue the remaining
+seven cases from this aborted run, and do not authorize the 472-case population.
+Only a fresh safety/evidence-binding smoke may reopen human calibration and causal
+grading. Do not infer STOP from this Judge failure, machine prelabels, or structural
+opportunity counts alone.
 
 ## Early-stop status
 
-`PENDING_HUMAN_CALIBRATION` — the 10-case temporal queue has only machine
-prelabels, and Type B coverage is incomplete.
+`SMOKE_ABORTED_INVALID_OR_UNCERTAIN_JUDGE_RESULT` — the first direct-API S0b
+smoke failed its evidence-binding gate after 5/12 dispatches; human calibration
+is incomplete, and Type B has structural opportunity evidence only.
 Screening may later emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`.

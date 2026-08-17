@@ -1,0 +1,78 @@
+{
+  "S0a": {
+    "name": "evidence_infrastructure",
+    "rules_may_only": [
+      "parse deterministic event and tool facts",
+      "enumerate real compaction opportunities",
+      "rank candidates"
+    ],
+    "rules_must_not": [
+      "infer state loss or causality",
+      "assign Type A/B/C/D/U ground truth",
+      "estimate prevalence"
+    ]
+  },
+  "S0b": {
+    "causal_judge_scope": "agreed high-confidence state-change suspects",
+    "causal_packet": "direct T0-T5 sections; T0/T1 are not reconstructed from derived State Diff output",
+    "causal_answer_ingestion": "hash-bound HUMAN_CONFIRMED answers required",
+    "classification_bridge": "a human causal YES plus two agreeing evidence-bound judges may write system Type A/B/C classification into re-hashed S0 evidence cards",
+    "causal_types": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "U"
+    ],
+    "disagreement_or_low_confidence": "UNCERTAIN_and_human_review",
+    "engineering_consequence_sources": [
+      "structured tool result with exit code",
+      "patch_apply_end",
+      "bound Git/test/replay evidence"
+    ],
+    "human_calibration_cases": {
+      "maximum": 40,
+      "minimum": 20,
+      "target": 30
+    },
+    "independent_second_judge": true,
+    "machine_judges_are_ground_truth": false,
+    "name": "semantic_grading",
+    "outcome_blinding": "State Diff sees pre-state, compaction summary, and post-plan only.",
+    "checkpoint_provenance": "scan, packet, model, effort, API base, timeout, prompt, schema, request/response IDs, and token usage",
+    "prose_is_engineering_consequence": false,
+    "state_diff_coverage": "every compaction opportunity",
+    "state_diff_isolation": "one opportunity per API request; output schema binds the exact opportunity and allowed evidence IDs",
+    "judge_transport": "direct OpenAI-compatible Responses API; no codex exec subprocess",
+    "judge_tool_policy": "request and response both require tools=[]; store=false and parallel_tool_calls=false",
+    "maximum_judge_attempts_per_opportunity": 1,
+    "dispatch_recovery": "serial pre-POST durable tombstone; uncertain outcome forbids automatic resend",
+    "smoke_gate": {
+      "scope": "safety_and_evidence_binding_only; no accuracy or recall claim",
+      "no_post_plan_controls": "all must be UNASSESSABLE and not suspected",
+      "post_plan_cases": "all must be assessable",
+      "maximum_post_plan_suspect_rate": 0.6666666666666666,
+      "full_population_requires_separate_approval": true
+    },
+    "state_diff_labels": [
+      "missing",
+      "contradicted",
+      "stale_reactivated",
+      "preserved"
+    ],
+    "state_types": [
+      "goal",
+      "constraint",
+      "decision",
+      "rejected_option",
+      "plan",
+      "dependency",
+      "acceptance_criteria"
+    ],
+    "state_window": "deterministic temporal coverage plus recency; not a last-N-only window",
+    "single_writer": "one workspace semantic lock with atomic fsynced checkpoint replacement"
+  },
+  "applies_to": "screening_v1.S0 semantic evidence grading",
+  "gate_changes": "none_until_human_calibration_and_causal_review_complete",
+  "version": "3"
+}
