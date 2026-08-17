@@ -9,9 +9,11 @@ path preserves complete textual messages and marks embedded screenshots as
 visually unassessed instead of transmitting their bytes. Its targeted repair
 completed all 123 actually affected packets. Five responses lost during a local
 client exit were server-confirmed HTTP 200, unrecoverable because `store=false`,
-and explicitly re-dispatched in a separate recovery ledger. No Screening decision has been
-emitted: rule/keyword counts and retracted semantic labels do not establish
-drift, causality, Type A/B/C/D/U, or prevalence.
+and explicitly re-dispatched in a separate recovery ledger. The pragmatic S0
+Screening decision for **Temporal State Consistency is `STOP`**: the corrected
+history review did not produce a confirmed compaction-caused wrong action with
+an observable engineering loss. This is a startup-direction screening result,
+not a prevalence estimate or an academic claim that drift never occurs.
 
 ## Completed
 
@@ -79,10 +81,12 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 - Conservative machine prelabel: all 10 cases remain `UNCERTAIN`. These are preliminary labels, not completed human review, so no precision, missed-positive, or false-pause metric is claimed.
 - The v29 multimodal smoke completed 12/12 using Luna low: 3 controls were `UNASSESSABLE`, all 9 post-plan cases were assessable, and 1 was a suspect. It used 391,163 input and 25,547 output tokens (416,710 total). This is a transport/evidence-contract result, not accuracy evidence.
 - Of the 123 packets affected by the old excerpt bug, the superseded multimodal run completed 87 before its inline-image ceiling stopped it. The replacement v32 text-evidence run completed all 123: 13 suspects, 105 `NO_MATERIAL_CHANGE`, and 5 `UNASSESSABLE`, using 4,339,078 input and 293,882 output tokens. Five lost-response cases were re-dispatched in a separate recovery ledger after server logs proved their original HTTP 200 responses were unrecoverable. Request bodies contained no screenshot bytes and produced no context-window 502.
-- Complete text changed the old primary label in 26/123 affected cases: 13 moved from `SUSPECT` to `NO_MATERIAL_CHANGE`, and 13 moved in the opposite direction. This is a material screening signal, but the 26 changed labels remain machine prelabels until the small human calibration step.
-- A targeted independent Luna-low rejudge covered 10 changed-label cases across 5 Goal roots and agreed with the corrected primary binary label in only 5/10 cases (383,337 tokens). It supported 4/5 removed suspects but only 1/5 newly surfaced suspects. It also mislabeled the user-confirmed current-book case as suspect. Therefore a single machine `SUSPECT` is not reliable Ground Truth; the small human calibration is a real Screening gate, not academic polish.
+- Complete text changed the old primary label in 26/123 affected cases: 13 moved from `SUSPECT` to `NO_MATERIAL_CHANGE`, and 13 moved in the opposite direction. This is a material screening signal, but the 26 changed labels remain machine prelabels rather than Ground Truth.
+- A targeted independent Luna-low rejudge covered 10 changed-label cases across 5 Goal roots and agreed with the corrected primary binary label in only 5/10 cases (383,337 tokens). It supported 4/5 removed suspects but only 1/5 newly surfaced suspects. It also mislabeled the user-confirmed current-book case as suspect. Therefore a single machine `SUSPECT` is not reliable Ground Truth. Human calibration would remain mandatory before promoting any such label to a causal positive, but no-consequence disagreements need not be exhaustively calibrated after they can no longer change the pragmatic Screening decision.
 - The user-audited current-book-search case is `NO_MATERIAL_CHANGE` at 0.98 confidence under the complete-text contract: its pre-compaction state explicitly rejects cross-book full-library search, and the post-compaction plan preserves current-book-only search. The earlier drift label was caused by the truncated evidence, not by that task's actual conversation.
-- Current status is `PENDING_HUMAN_CALIBRATION`, `decision=null`; the 123 defect-affected opportunities are fully regraded, while the unaffected 349 retain their original provenance for Screening.
+- A final consequence-focused audit covered the only two unaffected opportunities that combined a primary `SUSPECT` label with a deterministic outcome signal. In the June case the scanner matched the literal summary `0 failed`; all 22 tests passed. In the August case the failures were ordinary UI-test/flow iteration (an unsupported XCUITest predicate and an incomplete photo-selection path), the no-foreground-focus constraint remained preserved, and the complete real flow subsequently passed. Neither case supports compaction-caused engineering loss.
+- Across the targeted independent review, 11 two-Judge `SUSPECT` agreements had no deterministic observable outcome. The only two primary-suspect cases with an outcome were rejected by the second Judge and by the focused consequence audit above. No confirmed Type A/B/C causal failure with engineering loss remains in the screened Temporal cohort.
+- Current Temporal Screening status is `STOP`; the 123 defect-affected opportunities are fully regraded, while the unaffected 349 retain their original provenance for Screening. Cross-Agent/Type B remains a separate unvalidated technical proposition and is not silently folded into this Temporal result.
 - Authoritative corrected ignored runtime workspace: `.coordy/screening-s0-v32-text-evidence/data/screening/`. The v26/v8, v27, v29, v30, and v31 workspaces are retracted historical evidence only.
 
 ## Failures or missing evidence
@@ -112,18 +116,19 @@ drift, causality, Type A/B/C/D/U, or prevalence.
 
 ## Next
 
-Build a small readable human calibration queue from the 26 labels changed by
-complete-text evidence, balanced between removed and newly surfaced suspects.
-Then run the targeted secondary review only where it can change the Screening
-direction. Only after the corrected queue is
-human-reviewed may state-change suspects proceed to outcome-aware causal
-grading. Do not infer STOP, PIVOT, or prevalence from the retracted v8 labels.
+Stop further Temporal State Consistency calls and implementation under the
+low-cost falsification rule. The remaining machine disagreements and
+no-consequence cases cannot change this Screening direction and are recorded,
+not expanded into paper-level calibration. If work continues, treat Cross-Agent
+plan invalidation as a separate proposition with its own evidence and decision;
+do not reuse this Temporal `STOP` as its conclusion.
 
 ## Early-stop status
 
-`PENDING_HUMAN_CALIBRATION` — the actually affected 123-opportunity cohort is
-complete, and the unaffected 349 do not require an academic-style uniform rerun.
-The 26 changed machine labels still require a small human calibration sample. The
-v8/v27 human queues are retracted. Type B still has
-structural opportunity evidence only.
-Screening may later emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`.
+`STOP` for **Temporal State Consistency** — complete-text regrading materially
+changed machine labels, the targeted second Judge showed those labels were
+unstable, and focused inspection found no remaining case where compaction-caused
+state loss led to an observable engineering loss. Further calibration of
+no-consequence disagreements would not change the startup-direction decision.
+Type B/Cross-Agent still has structural opportunity evidence only and remains
+unvalidated rather than being assigned the same result.
