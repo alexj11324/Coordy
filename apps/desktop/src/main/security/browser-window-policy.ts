@@ -19,3 +19,10 @@ export const BROWSER_WINDOW_POLICY = {
 
 export const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'";
+
+export const DEV_CSP =
+  "default-src 'self' http://localhost:* ws://localhost:*; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:* ws://localhost:*";
+
+export function contentSecurityPolicy(): string {
+  return process.env.ELECTRON_RENDERER_URL ? DEV_CSP : CSP;
+}

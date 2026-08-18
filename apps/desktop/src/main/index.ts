@@ -2,8 +2,13 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { join } from "path";
 import { exec } from "child_process";
 import { IPC } from "../shared/ipc-channels";
-import { BROWSER_WINDOW_POLICY, CSP, validateIpcSender } from "./security/browser-window-policy";
+import {
+  BROWSER_WINDOW_POLICY,
+  contentSecurityPolicy,
+  validateIpcSender,
+} from "./security/browser-window-policy";
 import { DaemonManager } from "./daemon/daemon-manager";
+import { resolvePreloadPath } from "./preload-path";
 
 const daemon = new DaemonManager();
 
@@ -13,14 +18,14 @@ function createWindow() {
     height: 840,
     webPreferences: {
       ...BROWSER_WINDOW_POLICY,
-      preload: join(__dirname, "../preload/index.js"),
+      preload: resolvePreloadPath(__dirname),
     },
   });
   window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        "Content-Security-Policy": [CSP],
+        "Content-Security-Policy": [contentSecurityPolicy()],
       },
     });
   });

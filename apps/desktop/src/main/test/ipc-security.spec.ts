@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { validateIpcSender } from "../security/browser-window-policy";
+import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterEach, describe, expect, it } from "vitest";
+import { CSP, DEV_CSP, contentSecurityPolicy, validateIpcSender } from "../security/browser-window-policy";
+import { resolvePreloadPath } from "../preload-path";
 
 describe("ipc sender policy", () => {
   it("accepts localhost renderer urls", () => {
@@ -12,3 +16,48 @@ describe("ipc sender policy", () => {
     expect(validateIpcSender(fake)).toBe(false);
   });
 });
+
+describe("content security policy", () => {
+  const original = process.env.ELECTRON_RENDERER_URL;
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.ELECTRON_RENDERER_URL;
+    else process.env.ELECTRON_RENDERER_URL = original;
+  });
+
+  it("allows the Vite renderer in development", () => {
+    process.env.ELECTRON_RENDERER_URL = "http://localhost:5173/";
+    expect(contentSecurityPolicy()).toBe(DEV_CSP);
+    expect(contentSecurityPolicy()).toContain("unsafe-eval");
+  });
+
+  it("keeps the production policy strict", () => {
+    delete process.env.ELECTRON_RENDERER_URL;
+    expect(contentSecurityPolicy()).toBe(CSP);
+    expect(contentSecurityPolicy()).not.toContain("unsafe-eval");
+  });
+});
+
+describe("preload path", () => {
+  it("prefers a CommonJS preload over missing files", () => {
+    const root = mkdtempSync(join(tmpdir(), "coordy-preload-"));
+    const mainDir = join(root, "out", "main");
+    const preloadDir = join(root, "out", "preload");
+    mkdirSync(mainDir, { recursive: true });
+    mkdirSync(preloadDir, { recursive: true });
+    const cjs = join(preloadDir, "index.cjs");
+    writeFileSync(cjs, "module.exports = {}");
+    expect(resolvePreloadPath(mainDir)).toBe(cjs);
+  });
+
+  it("does not fall back to ESM preload", () => {
+    const root = mkdtempSync(join(tmpdir(), "coordy-preload-"));
+    const mainDir = join(root, "out", "main");
+    const preloadDir = join(root, "out", "preload");
+    mkdirSync(mainDir, { recursive: true });
+    mkdirSync(preloadDir, { recursive: true });
+    writeFileSync(join(preloadDir, "index.mjs"), "export {}");
+    expect(() => resolvePreloadPath(mainDir)).toThrow(/preload script not found/);
+  });
+});
+
