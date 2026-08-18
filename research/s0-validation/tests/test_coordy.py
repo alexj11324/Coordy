@@ -2853,7 +2853,7 @@ class CoordyTests(unittest.TestCase):
             ]
             (sessions / "guardian.jsonl").write_text("".join(json.dumps(row) + "\n" for row in guardian_rows))
 
-            result = run_s0_screening(root / "out", [sessions], max_sessions=1)
+            result = run_s0_screening(root / "out", [sessions], max_sessions=2)
 
             self.assertEqual(result["eligible_sessions"], 1)
             self.assertEqual(result["auxiliary_sessions_excluded"], 1)

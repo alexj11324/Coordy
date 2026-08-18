@@ -14,3 +14,18 @@ data/raw/
 data/snapshots/
 data/index.sqlite
 data/manifests/
+
+# Rust
+target/
+**/*.rs.bk
+
+# Node / Electron
+node_modules/
+apps/desktop/out/
+apps/desktop/release/
+apps/desktop/resources/native/
+.turbo
+*.log
+
+# Generated protocol check copies
+packages/protocol-ts/.generated-stamp

@@ -1,0 +1,13 @@
+{
+  "files": ["out/**/*", "resources/**/*"],
+  "extraResources": [
+    {
+      "from": "resources/native/${os}-${arch}/coordyd",
+      "to": "bin/coordyd"
+    },
+    {
+      "from": "resources/native/${os}-${arch}/coordy",
+      "to": "bin/coordy"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+[package]
+name = "coordy-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "coordy-server"
+path = "src/main.rs"
+
+[dependencies]
+coordy-control-plane.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 - 2026-08-18
+
+- Relocate the Python S0 harness to `research/s0-validation/`.
+- Add the Electron desktop, Rust kernel/daemon, local SQLite runtime, harness adapters, advisor, and optional control plane.
+
 ## 0.1.0 - 2026-08-16
 
 - Add a standard-library-only command-line validation harness.

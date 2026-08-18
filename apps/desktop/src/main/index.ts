@@ -1,0 +1,102 @@
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { join } from "path";
+import { exec } from "child_process";
+import { IPC } from "../shared/ipc-channels";
+import { BROWSER_WINDOW_POLICY, CSP, validateIpcSender } from "./security/browser-window-policy";
+import { DaemonManager } from "./daemon/daemon-manager";
+
+const daemon = new DaemonManager();
+
+function createWindow() {
+  const window = new BrowserWindow({
+    width: 1280,
+    height: 840,
+    webPreferences: {
+      ...BROWSER_WINDOW_POLICY,
+      preload: join(__dirname, "../preload/index.js"),
+    },
+  });
+  window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [CSP],
+      },
+    });
+  });
+  window.webContents.on("will-navigate", (event, url) => {
+    if (!url.startsWith("http://localhost") && !url.startsWith("file:")) {
+      event.preventDefault();
+    }
+  });
+  if (process.env.ELECTRON_RENDERER_URL) {
+    window.loadURL(process.env.ELECTRON_RENDERER_URL);
+  } else {
+    window.loadFile(join(__dirname, "../renderer/index.html"));
+  }
+}
+
+function guard(event: Electron.IpcMainInvokeEvent) {
+  if (!validateIpcSender(event.sender)) {
+    throw new Error("invalid ipc sender");
+  }
+}
+
+app.whenReady().then(async () => {
+  await daemon.start();
+  ipcMain.handle(IPC.submit, (event, command) => {
+    guard(event);
+    return daemon.client!.submit(command);
+  });
+  ipcMain.handle(IPC.view, (event, query) => {
+    guard(event);
+    return daemon.client!.view(query);
+  });
+  ipcMain.handle(IPC.getAppInfo, (event) => {
+    guard(event);
+    return {
+      version: app.getVersion(),
+      os: process.platform,
+    };
+  });
+  ipcMain.handle(IPC.chooseRepository, async (event) => {
+    guard(event);
+    const result = await dialog.showOpenDialog({ properties: ["openDirectory"] });
+    return result.canceled ? null : result.filePaths[0];
+  });
+  ipcMain.handle(IPC.revealFile, async (event, path: string) => {
+    guard(event);
+    shell.showItemInFolder(path);
+  });
+  ipcMain.handle(IPC.openTerminal, async (event, path: string) => {
+    guard(event);
+    if (process.platform === "darwin") exec(`open -a Terminal "${path}"`);
+    else if (process.platform === "win32") exec(`start cmd /K cd /d "${path}"`);
+    else exec(`x-terminal-emulator --working-directory="${path}"`);
+  });
+  ipcMain.handle(IPC.installCli, async (event) => {
+    guard(event);
+    return { ok: true, message: "Use the bundled coordy binary next to coordyd" };
+  });
+  createWindow();
+  let cursor = 0;
+  const timer = setInterval(async () => {
+    if (!daemon.client) return;
+    try {
+      const effects = (await daemon.client.subscribe(cursor)) as unknown;
+      if (!Array.isArray(effects) || effects.length === 0) return;
+      cursor += effects.length;
+      for (const win of BrowserWindow.getAllWindows()) {
+        for (const effect of effects) {
+          win.webContents.send(IPC.effect, effect);
+        }
+      }
+    } catch {
+      /* daemon may be restarting */
+    }
+  }, 400);
+  app.on("before-quit", () => {
+    clearInterval(timer);
+    daemon.stop();
+  });
+});
