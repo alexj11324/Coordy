@@ -18,6 +18,7 @@ import {
   Bot,
   FileText,
   GitBranch,
+  Home,
   Inbox,
   LayoutDashboard,
   Play,
@@ -31,18 +32,22 @@ import { viewAsDaemon } from "../lib/coordy/client";
 import { asAgents, asPrincipals } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 
-const links = [
-  ["/board", "Board", LayoutDashboard],
-  ["/principals", "Principals", Users],
-  ["/agents", "Agents", Bot],
-  ["/authority", "Authority", Shield],
-  ["/memory", "Memory", StickyNote],
-  ["/contracts", "Contracts", FileText],
-  ["/dependencies", "Dependencies", GitBranch],
-  ["/conflicts", "Conflicts", AlertTriangle],
-  ["/runs", "Runs", Play],
-  ["/inbox", "Inbox", Inbox],
-  ["/settings", "Settings", Settings],
+const primary = [
+  ["/", "开始", Home],
+  ["/board", "任务", LayoutDashboard],
+  ["/agents", "助手", Bot],
+  ["/runs", "运行", Play],
+  ["/settings", "设置", Settings],
+] as const;
+
+const more = [
+  ["/principals", "成员", Users],
+  ["/authority", "权限", Shield],
+  ["/memory", "记忆", StickyNote],
+  ["/contracts", "契约", FileText],
+  ["/dependencies", "依赖", GitBranch],
+  ["/conflicts", "冲突", AlertTriangle],
+  ["/inbox", "收件箱", Inbox],
 ] as const;
 
 export function DesktopShell() {
@@ -86,7 +91,7 @@ export function DesktopShell() {
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold tracking-tight">Coordy</div>
-            <div className="text-xs text-muted-foreground">Local kernel</div>
+            <div className="text-xs text-muted-foreground">本机助手协调</div>
           </div>
           <Badge variant={status === "ok" ? "outline" : "secondary"} className="capitalize">
             <span
@@ -98,7 +103,7 @@ export function DesktopShell() {
           </Badge>
         </div>
         <div className="px-3 pb-3">
-          <Label className="mb-1.5 px-1 text-xs font-normal text-muted-foreground">Acting as</Label>
+          <Label className="mb-1.5 px-1 text-xs font-normal text-muted-foreground">当前身份</Label>
           <Select
             value={actorValue}
             items={actorItems}
@@ -117,13 +122,13 @@ export function DesktopShell() {
               <SelectValue>
                 {(value: string | null) => {
                   const match = actorItems.find((item) => item.value === value);
-                  return match?.label ?? value ?? "Choose actor";
+                  return match?.label ?? value ?? "选择身份";
                 }}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectLabel>Principals</SelectLabel>
+                <SelectLabel>成员</SelectLabel>
                 {people.map((person) => (
                   <SelectItem key={person.id} value={`principal:${person.id}`}>
                     {person.name}
@@ -132,7 +137,7 @@ export function DesktopShell() {
               </SelectGroup>
               {agentList.length > 0 ? (
                 <SelectGroup>
-                  <SelectLabel>Agents</SelectLabel>
+                  <SelectLabel>助手</SelectLabel>
                   {agentList.map((agent) => (
                     <SelectItem key={agent.id} value={`agent:${agent.id}`}>
                       {agent.name}
@@ -146,7 +151,28 @@ export function DesktopShell() {
         <Separator />
         <ScrollArea className="flex-1 px-2 py-3">
           <nav className="flex flex-col gap-0.5">
-            {links.map(([to, label, Icon]) => (
+            {primary.map(([to, label, Icon]) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === "/"}
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
+                    isActive
+                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                      : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
+                  ].join(" ")
+                }
+              >
+                <Icon className="size-4" />
+                {label}
+              </NavLink>
+            ))}
+            <p className="mt-3 px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              更多
+            </p>
+            {more.map(([to, label, Icon]) => (
               <NavLink
                 key={to}
                 to={to}

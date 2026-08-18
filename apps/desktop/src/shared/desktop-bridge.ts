@@ -6,6 +6,8 @@ import type {
   View,
   AppInfo,
   InstallCliResult,
+  SecretStatus,
+  SetSecretInput,
 } from "@coordy/protocol";
 
 export interface CoordyDesktopBridge {
@@ -17,4 +19,7 @@ export interface CoordyDesktopBridge {
   openTerminal(path: string): Promise<void>;
   getAppInfo(): Promise<AppInfo>;
   installCli(): Promise<InstallCliResult>;
+  secretsStatus(): Promise<SecretStatus>;
+  setSecret(input: SetSecretInput): Promise<SecretStatus>;
+  clearSecret(): Promise<SecretStatus>;
 }

@@ -12,7 +12,13 @@ pub trait Ports: Send + Sync {
     fn create_worktree(&self, repo: &str, task_id: &str) -> Result<String, CoordyError>;
     fn apply_patch(&self, worktree: &str, patch: &str) -> Result<(), CoordyError>;
     fn read_jsonl(&self, path: &str) -> Result<Vec<HarnessEvent>, CoordyError>;
-    fn spawn_harness(&self, kind: &str, worktree: &str, prompt: &str) -> Result<(), CoordyError>;
+    fn spawn_harness(
+        &self,
+        kind: &str,
+        worktree: &str,
+        prompt: &str,
+        run_id: &str,
+    ) -> Result<(), CoordyError>;
 }
 
 #[derive(Default)]
@@ -31,8 +37,14 @@ impl Ports for NoopPorts {
         crate::jsonl::read_jsonl(path)
     }
 
-    fn spawn_harness(&self, kind: &str, _worktree: &str, _prompt: &str) -> Result<(), CoordyError> {
-        if kind == "codex" || kind == "claude_code" || kind == "opencode" {
+    fn spawn_harness(
+        &self,
+        kind: &str,
+        _worktree: &str,
+        _prompt: &str,
+        _run_id: &str,
+    ) -> Result<(), CoordyError> {
+        if kind == "codex" || kind == "claude_code" || kind == "opencode" || kind == "acp" {
             return Err(CoordyError::unavailable(format!(
                 "harness {kind} is not available in this test port"
             )));
@@ -45,6 +57,7 @@ impl Ports for NoopPorts {
 pub struct RecordingPorts {
     pub worktrees: std::sync::Mutex<Vec<String>>,
     pub patches: std::sync::Mutex<Vec<String>>,
+    pub spawns: std::sync::Mutex<Vec<(String, String, String, String)>>,
 }
 
 impl Ports for RecordingPorts {
@@ -63,9 +76,19 @@ impl Ports for RecordingPorts {
         crate::jsonl::read_jsonl(path)
     }
 
-    fn spawn_harness(&self, kind: &str, _worktree: &str, _prompt: &str) -> Result<(), CoordyError> {
-        Err(CoordyError::unavailable(format!(
-            "harness {kind} is not connected"
-        )))
+    fn spawn_harness(
+        &self,
+        kind: &str,
+        worktree: &str,
+        prompt: &str,
+        run_id: &str,
+    ) -> Result<(), CoordyError> {
+        self.spawns.lock().unwrap().push((
+            kind.to_string(),
+            worktree.to_string(),
+            prompt.to_string(),
+            run_id.to_string(),
+        ));
+        Ok(())
     }
 }

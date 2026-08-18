@@ -68,4 +68,14 @@ async function bootstrap() {
     principalId = String(created.ids.principal_id);
   }
   useSession.getState().setPrincipal(principalId);
+  const agents = await viewAsDaemon({ type: "Agents", workspace_id: workspaceId });
+  if (agents.type === "Agents" && agents.items.length === 0) {
+    await submitAsDaemon({
+      type: "CreateAgent",
+      workspace_id: workspaceId,
+      principal_id: principalId,
+      name: "助手",
+      harness: "acp",
+    });
+  }
 }

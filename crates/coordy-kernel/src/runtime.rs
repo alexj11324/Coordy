@@ -668,6 +668,7 @@ impl Kernel {
                     RunSource::Codex { .. } => "codex".into(),
                     RunSource::ClaudeCode { .. } => "claude_code".into(),
                     RunSource::OpenCode { .. } => "opencode".into(),
+                    RunSource::Acp { .. } => "acp".into(),
                 };
                 world.runs.push(Run {
                     id: run_id.clone(),
@@ -692,10 +693,22 @@ impl Kernel {
                     }
                     RunSource::Codex { prompt }
                     | RunSource::ClaudeCode { prompt }
-                    | RunSource::OpenCode { prompt } => {
-                        let worktree = task.worktree_path.clone().unwrap_or_default();
+                    | RunSource::OpenCode { prompt }
+                    | RunSource::Acp { prompt } => {
+                        let worktree = task
+                            .worktree_path
+                            .clone()
+                            .filter(|path| !path.is_empty())
+                            .or_else(|| {
+                                world
+                                    .workspace(&task.workspace_id)
+                                    .and_then(|ws| ws.repo_path.clone())
+                                    .filter(|path| !path.is_empty())
+                            })
+                            .unwrap_or_else(|| ".".into());
                         drop(world);
-                        self.ports.spawn_harness(&harness, &worktree, &prompt)?;
+                        self.ports
+                            .spawn_harness(&harness, &worktree, &prompt, &run_id)?;
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }
                 };

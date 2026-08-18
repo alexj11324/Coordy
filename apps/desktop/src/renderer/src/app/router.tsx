@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { DesktopShell } from "../shell/desktop-shell";
+import { HomePage } from "../features/home";
 import {
   AgentsPage,
   AuthorityPage,
@@ -18,7 +19,8 @@ export function AppRouter() {
   return (
     <Routes>
       <Route element={<DesktopShell />}>
-        <Route path="/" element={<Navigate to="/board" replace />} />
+        <Route path="/" element={<HomePage />} />
+        <Route path="/home" element={<Navigate to="/" replace />} />
         <Route path="/board" element={<BoardPage />} />
         <Route path="/principals" element={<PrincipalsPage />} />
         <Route path="/agents" element={<AgentsPage />} />

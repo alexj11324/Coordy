@@ -50,6 +50,7 @@ export type RunSource =
   | { type: "Codex"; prompt: string }
   | { type: "ClaudeCode"; prompt: string }
   | { type: "OpenCode"; prompt: string }
+  | { type: "Acp"; prompt: string }
   | { type: "Fixture"; events: HarnessEvent[] };
 
 export type HarnessEvent =
@@ -183,5 +184,20 @@ export type Effect =
 
 export type CoordyError = { code: string; message: string };
 
-export type AppInfo = { version: string; os: string };
+export type AppInfo = { version: string; os: string; cliPath?: string };
 export type InstallCliResult = { ok: boolean; message: string };
+export type DetectedHarnessView = { kind: string; binary: string };
+export type SecretStatus = {
+  provider: string;
+  key_configured: boolean;
+  base_url?: string | null;
+  acp_command?: string | null;
+  suggested_acp_command?: string | null;
+  detected: DetectedHarnessView[];
+};
+export type SetSecretInput = {
+  provider: string;
+  api_key?: string | null;
+  base_url?: string | null;
+  acp_command?: string | null;
+};

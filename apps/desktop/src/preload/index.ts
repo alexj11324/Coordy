@@ -15,6 +15,9 @@ const bridge: CoordyDesktopBridge = {
   openTerminal: (path) => ipcRenderer.invoke(IPC.openTerminal, path),
   getAppInfo: () => ipcRenderer.invoke(IPC.getAppInfo),
   installCli: () => ipcRenderer.invoke(IPC.installCli),
+  secretsStatus: () => ipcRenderer.invoke(IPC.secretsStatus),
+  setSecret: (input) => ipcRenderer.invoke(IPC.setSecret, input),
+  clearSecret: () => ipcRenderer.invoke(IPC.clearSecret),
 };
 
 contextBridge.exposeInMainWorld("coordy", bridge);

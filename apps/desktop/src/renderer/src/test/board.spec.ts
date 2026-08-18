@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { acpRunSource } from "../lib/coordy/start-task";
 import { asTasks, outcomeId } from "../lib/coordy/views";
 import type { View } from "@coordy/protocol";
 
@@ -21,5 +22,9 @@ describe("board view helpers", () => {
 
   it("extracts outcome ids", () => {
     expect(outcomeId({ task_id: "task_1" }, "task_id")).toBe("task_1");
+  });
+
+  it("builds an ACP run source instead of a JSONL fixture", () => {
+    expect(acpRunSource("hello")).toEqual({ type: "Acp", prompt: "hello" });
   });
 });

@@ -8,6 +8,7 @@ import {
   validateIpcSender,
 } from "./security/browser-window-policy";
 import { DaemonManager } from "./daemon/daemon-manager";
+import { cliBinaryPath } from "./daemon/daemon-binary-path";
 import { resolvePreloadPath } from "./preload-path";
 
 const daemon = new DaemonManager();
@@ -68,6 +69,7 @@ app.whenReady().then(async () => {
     return {
       version: app.getVersion(),
       os: process.platform,
+      cliPath: cliBinaryPath(),
     };
   });
   ipcMain.handle(IPC.chooseRepository, async (event) => {
@@ -88,6 +90,23 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.installCli, async (event) => {
     guard(event);
     return { ok: true, message: "Use the bundled coordy binary next to coordyd" };
+  });
+  ipcMain.handle(IPC.secretsStatus, (event) => {
+    guard(event);
+    return daemon.client!.secretsStatus();
+  });
+  ipcMain.handle(IPC.setSecret, (event, input: unknown) => {
+    guard(event);
+    return daemon.client!.setSecret(input as {
+      provider: string;
+      api_key?: string | null;
+      base_url?: string | null;
+      acp_command?: string | null;
+    });
+  });
+  ipcMain.handle(IPC.clearSecret, (event) => {
+    guard(event);
+    return daemon.client!.clearSecret();
   });
   createWindow();
   let cursor = 0;

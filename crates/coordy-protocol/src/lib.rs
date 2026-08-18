@@ -162,6 +162,7 @@ pub enum RunSource {
     Codex { prompt: String },
     ClaudeCode { prompt: String },
     OpenCode { prompt: String },
+    Acp { prompt: String },
     Fixture { events: Vec<HarnessEvent> },
 }
 
@@ -491,6 +492,35 @@ pub enum RpcRequest {
     Shutdown {
         id: String,
     },
+    SecretsStatus {
+        id: String,
+    },
+    SetSecret {
+        id: String,
+        provider: String,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        acp_command: Option<String>,
+    },
+    ClearSecret {
+        id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretStatus {
+    pub provider: String,
+    pub key_configured: bool,
+    pub base_url: Option<String>,
+    pub acp_command: Option<String>,
+    pub suggested_acp_command: Option<String>,
+    pub detected: Vec<DetectedHarnessView>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DetectedHarnessView {
+    pub kind: String,
+    pub binary: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

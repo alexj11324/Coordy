@@ -63,7 +63,13 @@ impl Ports for GitPorts {
         read_jsonl(path)
     }
 
-    fn spawn_harness(&self, kind: &str, worktree: &str, prompt: &str) -> Result<(), CoordyError> {
+    fn spawn_harness(
+        &self,
+        kind: &str,
+        worktree: &str,
+        prompt: &str,
+        _run_id: &str,
+    ) -> Result<(), CoordyError> {
         if detect_on_path().iter().all(|d| d.kind != kind) {
             return Err(CoordyError::unavailable(format!(
                 "{kind} is not installed; use JSONL replay or install the harness"

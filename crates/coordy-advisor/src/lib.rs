@@ -86,14 +86,16 @@ pub struct LlmAdvisor {
 
 impl LlmAdvisor {
     pub fn from_env() -> Self {
-        let api_key = std::env::var("COORDY_ADVISOR_API_KEY")
-            .ok()
-            .filter(|v| !v.is_empty());
-        let base_url = std::env::var("COORDY_ADVISOR_BASE_URL").ok();
-        let enabled = std::env::var("COORDY_ADVISOR_ENABLED")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-            && api_key.is_some();
+        Self::from_key(
+            std::env::var("COORDY_ADVISOR_API_KEY")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            std::env::var("COORDY_ADVISOR_BASE_URL").ok(),
+        )
+    }
+
+    pub fn from_key(api_key: Option<String>, base_url: Option<String>) -> Self {
+        let enabled = api_key.is_some();
         Self {
             enabled,
             api_key,

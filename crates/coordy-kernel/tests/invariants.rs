@@ -1,4 +1,5 @@
-use coordy_kernel::{sync_batch, sync_omits_private_memory, Kernel};
+use coordy_advisor::DeterministicAdvisor;
+use coordy_kernel::{sync_batch, sync_omits_private_memory, Kernel, RecordingPorts};
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, HarnessEvent, Query, RunSource, View,
 };
@@ -872,4 +873,102 @@ fn health_view_works() {
         View::Health(h) => assert_eq!(h.status, "ok"),
         _ => panic!("health"),
     }
+}
+
+#[test]
+fn start_run_acp_spawns_against_bound_repo() {
+    let ports = std::sync::Arc::new(RecordingPorts::default());
+    let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));
+    let workspace_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace { name: "acp".into() },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::BindRepository {
+                workspace_id: workspace_id.clone(),
+                path: "/tmp/coordy-acp-repo".into(),
+            },
+        ))
+        .unwrap();
+    let principal_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "ACP".into(),
+                harness: "acp".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let task_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateTask {
+                workspace_id,
+                title: "talk".into(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    let outcome = kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "hello acp".into(),
+                },
+            },
+        ))
+        .unwrap();
+    assert!(!outcome.blocked);
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0].0, "acp");
+    assert_eq!(spawns[0].1, "/tmp/coordy-acp-repo");
+    assert_eq!(spawns[0].2, "hello acp");
 }

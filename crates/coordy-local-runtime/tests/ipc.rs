@@ -31,6 +31,21 @@ async fn ipc_roundtrip_health() {
         .await
         .unwrap();
     assert!(view.ok);
+    let secrets = client
+        .request(coordy_protocol::RpcRequest::SetSecret {
+            id: "secret-1".into(),
+            provider: "openai".into(),
+            api_key: Some("sk-ipc-only".into()),
+            base_url: None,
+            acp_command: Some("codex acp".into()),
+        })
+        .await
+        .unwrap();
+    assert!(secrets.ok);
+    let status = secrets.result.expect("secret status");
+    assert_eq!(status["key_configured"], true);
+    assert_eq!(status["acp_command"], "codex acp");
+    assert!(!status.to_string().contains("sk-ipc-only"));
     server.abort();
 }
 

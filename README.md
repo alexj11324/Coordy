@@ -8,6 +8,8 @@ Electron renderer  →  preload bridge  →  Electron main  →  Unix socket / n
 
 The Python S0 research harness is archived at [`research/s0-validation/`](research/s0-validation/).
 
+Product path: paste your own API key on Home (BYOK, 0600 file, never SQLite), then start a task over [ACP](https://agentclientprotocol.com/) stdio. If Codex/Claude is not installed, `coordy acp-stub` is the demo agent.
+
 ## Develop
 
 ```bash

@@ -1,7 +1,40 @@
 //! Agent harness adapters. The kernel consumes `HarnessEvent` only.
 
+mod acp;
+
+pub use acp::{
+    drive_session, map_session_update, resolve_acp_command, serve_fake_acp, spawn_acp_session,
+    suggested_acp_stub_command, ACP_STUB_REPLY,
+};
+
 use coordy_protocol::{CoordyError, HarnessEvent, RunSource};
 use serde::Deserialize;
+
+#[derive(Clone, Debug, Default)]
+pub struct SecretEnv {
+    pub provider: String,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub acp_command: Option<String>,
+}
+
+impl SecretEnv {
+    pub fn env_pairs(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(key) = &self.api_key {
+            out.push(("COORDY_ADVISOR_API_KEY".into(), key.clone()));
+            match self.provider.as_str() {
+                "anthropic" => out.push(("ANTHROPIC_API_KEY".into(), key.clone())),
+                _ => out.push(("OPENAI_API_KEY".into(), key.clone())),
+            }
+        }
+        if let Some(url) = &self.base_url {
+            out.push(("COORDY_ADVISOR_BASE_URL".into(), url.clone()));
+            out.push(("OPENAI_BASE_URL".into(), url.clone()));
+        }
+        out
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DetectedHarness {
@@ -12,6 +45,7 @@ pub struct DetectedHarness {
 pub fn detect_on_path() -> Vec<DetectedHarness> {
     let mut found = Vec::new();
     for (kind, names) in [
+        ("acp", &["codex", "claude", "gemini", "copilot"][..]),
         ("codex", &["codex"][..]),
         ("claude_code", &["claude", "claude-code"][..]),
         ("opencode", &["opencode"][..]),
@@ -117,5 +151,6 @@ pub fn source_kind(source: &RunSource) -> &'static str {
         RunSource::Codex { .. } => "codex",
         RunSource::ClaudeCode { .. } => "claude_code",
         RunSource::OpenCode { .. } => "opencode",
+        RunSource::Acp { .. } => "acp",
     }
 }

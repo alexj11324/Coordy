@@ -79,4 +79,21 @@ export class DaemonClient {
   async subscribe(cursor: number | null = 0) {
     return this.request({ type: "Subscribe", cursor });
   }
+
+  async secretsStatus() {
+    return this.request({ type: "SecretsStatus" });
+  }
+
+  async setSecret(input: {
+    provider: string;
+    api_key?: string | null;
+    base_url?: string | null;
+    acp_command?: string | null;
+  }) {
+    return this.request({ type: "SetSecret", ...input });
+  }
+
+  async clearSecret() {
+    return this.request({ type: "ClearSecret" });
+  }
 }

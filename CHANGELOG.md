@@ -4,6 +4,7 @@
 
 - Relocate the Python S0 harness to `research/s0-validation/`.
 - Add the Electron desktop, Rust kernel/daemon, local SQLite runtime, harness adapters, advisor, and optional control plane.
+- Wire BYOK secrets (0600 files, never SQLite) and Agent Client Protocol stdio sessions into Start Run.
 
 ## 0.1.0 - 2026-08-16
 

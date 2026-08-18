@@ -1,6 +1,8 @@
+use std::io::{stdin, stdout};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use coordy_harness::{serve_fake_acp, ACP_STUB_REPLY};
 use coordy_local_runtime::{connect, default_paths};
 use coordy_protocol::{Actor, AuthenticatedCommand, AuthorizedQuery, Command, Query};
 
@@ -23,11 +25,21 @@ enum Cmd {
         #[arg(long)]
         name: String,
     },
+    /// Speak Agent Client Protocol on stdio. Used when no Codex/Claude ACP binary is installed.
+    AcpStub {
+        #[arg(long)]
+        reply: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Cmd::AcpStub { reply } = args.command {
+        let text = reply.unwrap_or_else(|| ACP_STUB_REPLY.to_string());
+        serve_fake_acp(stdin().lock(), stdout().lock(), &text).map_err(|e| anyhow::anyhow!(e))?;
+        return Ok(());
+    }
     let (_data, default_sock) = default_paths().map_err(|e| anyhow::anyhow!(e))?;
     let socket = args.socket.unwrap_or(default_sock);
     let token = match args.token {
@@ -68,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e))?;
             println!("{}", serde_json::to_string_pretty(&resp)?);
         }
+        Cmd::AcpStub { .. } => unreachable!("handled before connecting"),
     }
     Ok(())
 }

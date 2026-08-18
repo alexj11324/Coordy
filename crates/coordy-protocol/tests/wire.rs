@@ -33,3 +33,38 @@ fn settings_view_includes_advisor_flag() {
     assert_eq!(value["type"], "Settings");
     assert_eq!(value["llm_advisor_enabled"], json!(false));
 }
+
+#[test]
+fn run_source_acp_keeps_pascal_variant() {
+    let value = serde_json::to_value(coordy_protocol::RunSource::Acp {
+        prompt: "hello".into(),
+    })
+    .unwrap();
+    assert_eq!(value["type"], "Acp");
+    assert_eq!(value["prompt"], "hello");
+}
+
+#[test]
+fn byok_is_local_rpc_not_a_kernel_command() {
+    let src = include_str!("../src/lib.rs");
+    let command_start = src.find("pub enum Command").expect("Command");
+    let command_end = src.find("pub enum RunSource").expect("RunSource");
+    let command_body = &src[command_start..command_end];
+    assert!(
+        !command_body.contains("SetSecret"),
+        "API keys must not become kernel Command variants"
+    );
+    assert!(
+        !command_body.contains("api_key"),
+        "API keys must not travel on kernel Command"
+    );
+    let req = serde_json::to_value(coordy_protocol::RpcRequest::SetSecret {
+        id: "1".into(),
+        provider: "openai".into(),
+        api_key: Some("sk-test".into()),
+        base_url: None,
+        acp_command: Some("codex acp".into()),
+    })
+    .unwrap();
+    assert_eq!(req["type"], "SetSecret");
+}

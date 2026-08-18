@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CSP, DEV_CSP, contentSecurityPolicy, validateIpcSender } from "../security/browser-window-policy";
 import { resolvePreloadPath } from "../preload-path";
+import { IPC } from "../../shared/ipc-channels";
 
 describe("ipc sender policy", () => {
   it("accepts localhost renderer urls", () => {
@@ -58,6 +59,14 @@ describe("preload path", () => {
     mkdirSync(preloadDir, { recursive: true });
     writeFileSync(join(preloadDir, "index.mjs"), "export {}");
     expect(() => resolvePreloadPath(mainDir)).toThrow(/preload script not found/);
+  });
+});
+
+describe("product ipc channels", () => {
+  it("exposes secret RPCs on the desktop bridge", () => {
+    expect(IPC.secretsStatus).toBe("coordy:secrets-status");
+    expect(IPC.setSecret).toBe("coordy:set-secret");
+    expect(IPC.clearSecret).toBe("coordy:clear-secret");
   });
 });
 

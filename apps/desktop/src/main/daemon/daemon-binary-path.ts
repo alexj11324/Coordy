@@ -8,3 +8,7 @@ export function daemonBinaryPath(): string {
   }
   return join(app.getAppPath(), "..", "..", "target", "debug", name);
 }
+
+export function cliBinaryPath(): string {
+  return daemonBinaryPath().replace(/coordyd\.exe$/i, "coordy.exe").replace(/coordyd$/, "coordy");
+}

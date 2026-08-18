@@ -150,6 +150,31 @@ async fn dispatch(runtime: &Runtime, req: RpcRequest) -> RpcResponse {
             ok(id, serde_json::to_value(effects).unwrap())
         }
         RpcRequest::Shutdown { id } => err(id, CoordyError::new("shutdown", "daemon stopping")),
+        RpcRequest::SecretsStatus { id } => {
+            let status = crate::SecretStore::open(&runtime.data_dir).status();
+            ok(id, serde_json::to_value(status).unwrap())
+        }
+        RpcRequest::SetSecret {
+            id,
+            provider,
+            api_key,
+            base_url,
+            acp_command,
+        } => match crate::SecretStore::open(&runtime.data_dir).set(
+            provider,
+            api_key,
+            base_url,
+            acp_command,
+        ) {
+            Ok(status) => ok(id, serde_json::to_value(status).unwrap()),
+            Err(e) => err(id, e),
+        },
+        RpcRequest::ClearSecret { id } => {
+            match crate::SecretStore::open(&runtime.data_dir).clear() {
+                Ok(status) => ok(id, serde_json::to_value(status).unwrap()),
+                Err(e) => err(id, e),
+            }
+        }
     }
 }
 

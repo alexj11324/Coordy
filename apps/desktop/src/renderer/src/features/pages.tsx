@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { submit, view } from "../lib/coordy/client";
+import { startAcpOnTask } from "../lib/coordy/start-task";
 import { useSession } from "../state/session-store";
 import type { Command, Query } from "@coordy/protocol";
 import {
@@ -111,13 +112,15 @@ export function BoardPage() {
   const title = useForm("");
   const claim = useForm("never-deploy-without-approval");
   const patch = useForm("");
+  const prompt = useForm("继续做这件事，用中文汇报进度。");
   const command = useCommand();
+  const qc = useQueryClient();
   const tasks = asTasks(q.data);
   const workspaceId = useSession((s) => s.workspaceId);
   const agentList = asAgents(agents.data);
   return (
     <section>
-      <PageHeader title="Board" description="Tasks, worktrees, and the commitments that bind them." />
+      <PageHeader title="任务" description="把一句话交给 ACP 助手。承诺和补丁还在下面，但不挡开始。" />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(event: FormEvent) => {
@@ -129,20 +132,28 @@ export function BoardPage() {
         }}
       >
         <Input
-          placeholder="New task"
+          placeholder="新任务"
           value={title.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => title.set(event.target.value)}
         />
         <Button type="submit">
           <Plus data-icon="inline-start" />
-          Create
+          创建
         </Button>
       </form>
+      <div className="mb-4 space-y-1.5">
+        <Label htmlFor="board-prompt">对助手说</Label>
+        <Textarea
+          id="board-prompt"
+          value={prompt.value}
+          onChange={(event: ChangeEvent<HTMLTextAreaElement>) => prompt.set(event.target.value)}
+        />
+      </div>
       {tasks.length === 0 ? (
         <EmptyList
           icon={LayoutDashboard}
-          title="No tasks yet"
-          description="Create a task to assign an agent, write a commitment, or open a worktree."
+          title="还没有任务"
+          description="创建一个任务，或回到「开始」页直接说一句话。"
         />
       ) : (
         <div className="grid gap-3">
@@ -151,7 +162,7 @@ export function BoardPage() {
               <CardHeader>
                 <CardTitle>{task.title}</CardTitle>
                 <CardDescription>
-                  {task.assignee_agent_id ? `Assigned to ${task.assignee_agent_id}` : "Unassigned"}
+                  {task.assignee_agent_id ? `已指派 ${task.assignee_agent_id}` : "未指派"}
                   {task.worktree_path ? ` · ${task.worktree_path}` : ""}
                 </CardDescription>
                 <CardAction>
@@ -166,13 +177,28 @@ export function BoardPage() {
               <CardFooter className="flex-col items-stretch gap-2">
                 <div className="flex flex-wrap gap-2">
                   <Button
+                    onClick={() => {
+                      const agent = agentList[0];
+                      void (async () => {
+                        if (agent && !task.assignee_agent_id) {
+                          await submit({ type: "AssignTask", task_id: task.id, agent_id: agent.id });
+                        }
+                        await startAcpOnTask(task.id, prompt.value || task.title);
+                        await qc.invalidateQueries();
+                      })();
+                    }}
+                  >
+                    <Play data-icon="inline-start" />
+                    开始
+                  </Button>
+                  <Button
                     variant="secondary"
                     onClick={() => {
                       const agent = agentList[0];
                       if (agent) command.mutate({ type: "AssignTask", task_id: task.id, agent_id: agent.id });
                     }}
                   >
-                    Assign agent
+                    指派助手
                   </Button>
                   <Button
                     variant="secondary"
@@ -190,15 +216,15 @@ export function BoardPage() {
                       });
                     }}
                   >
-                    Write commitment
+                    写下承诺
                   </Button>
                   <Button variant="secondary" onClick={() => command.mutate({ type: "CreateWorktree", task_id: task.id })}>
-                    Create worktree
+                    创建 worktree
                   </Button>
                 </div>
                 <div className="flex gap-2">
                   <Input
-                    placeholder="Patch to apply"
+                    placeholder="要应用的补丁"
                     value={patch.value}
                     onChange={(event: ChangeEvent<HTMLInputElement>) => patch.set(event.target.value)}
                   />
@@ -206,7 +232,7 @@ export function BoardPage() {
                     variant="destructive"
                     onClick={() => command.mutate({ type: "ApplyPatch", task_id: task.id, patch: patch.value })}
                   >
-                    Apply
+                    应用
                   </Button>
                 </div>
               </CardFooter>
@@ -299,14 +325,15 @@ export function AgentsPage() {
   const items = asAgents(q.data);
   const people = asPrincipals(principals.data);
   const name = useForm("");
+  const harness = useForm("acp");
   const command = useCommand();
   const workspaceId = useSession((s) => s.workspaceId);
   const session = useSession();
   return (
     <section>
-      <PageHeader title="Agents" description="Harness-backed workers. They cannot outrank their principal." />
+      <PageHeader title="助手" description="默认走 ACP。没有 Codex/Claude 时，到「开始」页用内置演示助手。" />
       <form
-        className="mb-4 flex gap-2"
+        className="mb-4 flex flex-wrap gap-2"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
           const principal = people[0];
@@ -316,33 +343,49 @@ export function AgentsPage() {
               workspace_id: workspaceId,
               principal_id: principal.id,
               name: name.value,
-              harness: "jsonl",
+              harness: harness.value,
             });
             name.set("");
           }
         }}
       >
         <Input
-          placeholder="Agent name"
+          placeholder="助手名字"
           value={name.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => name.set(event.target.value)}
         />
+        <Select
+          value={harness.value}
+          items={{ acp: "ACP", codex: "Codex CLI", claude_code: "Claude Code", opencode: "OpenCode", jsonl: "JSONL 回放" }}
+          onValueChange={(value) => value && harness.set(value)}
+        >
+          <SelectTrigger className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="acp">ACP</SelectItem>
+            <SelectItem value="codex">Codex CLI</SelectItem>
+            <SelectItem value="claude_code">Claude Code</SelectItem>
+            <SelectItem value="opencode">OpenCode</SelectItem>
+            <SelectItem value="jsonl">JSONL 回放</SelectItem>
+          </SelectContent>
+        </Select>
         <Button type="submit">
           <Plus data-icon="inline-start" />
-          Add
+          添加
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={Bot} title="No agents" description="Add an agent owned by the first principal, then act as it from the sidebar." />
+        <EmptyList icon={Bot} title="还没有助手" description="添加一个 ACP 助手，然后回到「开始」说一句话。" />
       ) : (
         items.map((agent) => (
           <Card key={agent.id} size="sm" className="mb-2">
             <CardHeader>
               <CardTitle>{agent.name}</CardTitle>
-              <CardDescription>Harness {agent.harness}</CardDescription>
+              <CardDescription>接入 {agent.harness}</CardDescription>
               <CardAction>
                 <Button variant="ghost" size="sm" onClick={() => session.setAgent(agent.id, agent.principal_id)}>
-                  Act as
+                  以它的身份
                 </Button>
               </CardAction>
             </CardHeader>
@@ -693,7 +736,7 @@ export function RunsPage() {
   const events = asRunDetail(detail.data)?.events ?? [];
   return (
     <section>
-      <PageHeader title="Runs" description="JSONL and fixture harness traces, including compaction snapshots.">
+      <PageHeader title="运行" description="ACP 会话事件会进这里。下面的夹具只给研究回放用。">
         <Button
           onClick={() => {
             const task = tasks[0];
@@ -788,33 +831,144 @@ export function InboxPage() {
 
 export function SettingsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
+  const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["settings", workspaceId],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Settings", workspace_id: workspaceId! }),
   });
+  const secrets = useQuery({
+    queryKey: ["secrets"],
+    queryFn: () => window.coordy.secretsStatus(),
+  });
   const command = useCommand();
   const [appInfo, setAppInfo] = useState<string>("");
+  const [provider, setProvider] = useState("openai");
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [acpCommand, setAcpCommand] = useState("");
   const enabled = q.data?.type === "Settings" ? q.data.llm_advisor_enabled : false;
+  const status = secrets.data;
   return (
-    <section>
-      <PageHeader title="Settings" description="This machine stays useful with the advisor off." />
+    <section className="space-y-4">
+      <PageHeader title="设置" description="密钥只留在这台电脑。没有助手二进制时，用内置 `coordy acp-stub`。" />
       <Card>
         <CardHeader>
-          <CardTitle>Workspace</CardTitle>
-          <CardDescription>Bind a git repository and keep deterministic gates on.</CardDescription>
+          <CardTitle>BYOK 与 ACP</CardTitle>
+          <CardDescription>密钥写 0600 文件，不进数据库。启动子进程时注入 OPENAI_API_KEY / ANTHROPIC_API_KEY。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex items-center gap-2 text-sm">
+            {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
+            {status?.acp_command ? (
+              <Badge variant="outline">{status.acp_command}</Badge>
+            ) : (
+              <Badge variant="secondary">未指定 ACP 命令</Badge>
+            )}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>服务商</Label>
+              <Select
+                value={provider}
+                items={{ openai: "OpenAI 兼容", anthropic: "Anthropic", custom: "自定义" }}
+                onValueChange={(value) => value && setProvider(value)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openai">OpenAI 兼容</SelectItem>
+                  <SelectItem value="anthropic">Anthropic</SelectItem>
+                  <SelectItem value="custom">自定义</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="settings-key">API 密钥</Label>
+              <Input
+                id="settings-key"
+                type="password"
+                autoComplete="off"
+                placeholder={status?.key_configured ? "已保存，留空则保持" : "sk-…"}
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="settings-base">Base URL</Label>
+              <Input
+                id="settings-base"
+                placeholder={status?.base_url ?? "https://api.openai.com/v1"}
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5 md:col-span-2">
+              <Label htmlFor="settings-acp">ACP 启动命令</Label>
+              <Input
+                id="settings-acp"
+                placeholder={status?.acp_command ?? status?.suggested_acp_command ?? "codex acp"}
+                value={acpCommand}
+                onChange={(event) => setAcpCommand(event.target.value)}
+              />
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter className="flex-wrap gap-2">
+          <Button
+            onClick={async () => {
+              await window.coordy.setSecret({
+                provider,
+                api_key: apiKey.trim() ? apiKey.trim() : null,
+                base_url: baseUrl.trim() ? baseUrl.trim() : null,
+                acp_command: acpCommand.trim() ? acpCommand.trim() : null,
+              });
+              setApiKey("");
+              await qc.invalidateQueries({ queryKey: ["secrets"] });
+            }}
+          >
+            保存
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              const info = await window.coordy.getAppInfo();
+              const stub = status?.suggested_acp_command ?? (info.cliPath ? `${info.cliPath} acp-stub` : "coordy acp-stub");
+              setAcpCommand(stub);
+              await window.coordy.setSecret({ provider, acp_command: stub });
+              await qc.invalidateQueries({ queryKey: ["secrets"] });
+            }}
+          >
+            使用内置演示助手
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              await window.coordy.clearSecret();
+              await qc.invalidateQueries({ queryKey: ["secrets"] });
+            }}
+          >
+            清除密钥
+          </Button>
+        </CardFooter>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>工作区</CardTitle>
+          <CardDescription>绑定仓库后，开始任务会把这个目录交给助手。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label>Repository</Label>
+            <Label>仓库</Label>
             <p className="mt-1 text-sm text-muted-foreground">
-              {q.data?.type === "Settings" ? q.data.repo_path ?? "none" : "…"}
+              {q.data?.type === "Settings" ? q.data.repo_path ?? "未绑定" : "…"}
             </p>
           </div>
           <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
             <div>
-              <Label htmlFor="llm-advisor">Optional LLM advisor</Label>
-              <p className="text-sm text-muted-foreground">Deterministic gates stay on either way.</p>
+              <Label htmlFor="llm-advisor">可选 LLM 顾问</Label>
+              <p className="text-sm text-muted-foreground">顾问不能提交状态；确定性门禁始终开着。</p>
             </div>
             <Switch
               id="llm-advisor"
@@ -837,10 +991,11 @@ export function SettingsPage() {
               const path = await window.coordy.chooseRepository();
               if (path && workspaceId) {
                 await submit({ type: "BindRepository", workspace_id: workspaceId, path });
+                await qc.invalidateQueries();
               }
             }}
           >
-            Bind repository
+            绑定仓库
           </Button>
           <Button
             variant="secondary"
@@ -849,7 +1004,7 @@ export function SettingsPage() {
               setAppInfo(`${info.version} / ${info.os}`);
             }}
           >
-            App info
+            应用信息
           </Button>
           <Button
             variant="secondary"
@@ -858,7 +1013,7 @@ export function SettingsPage() {
               setAppInfo(result.message);
             }}
           >
-            Install CLI
+            安装 CLI
           </Button>
           {appInfo ? <span className="text-xs text-muted-foreground">{appInfo}</span> : null}
         </CardFooter>
