@@ -53,6 +53,7 @@ import {
   asWorkspace,
   asWorkspaces,
 } from "../lib/coordy/views";
+import { StatusLamp } from "./status-lamp";
 import { useSession } from "../state/session-store";
 import { applyTheme, useThemeStore, type ThemePreference } from "../state/theme-store";
 
