@@ -45,6 +45,9 @@ describe("tabs", () => {
     const second = upsertTab(first.tabs, "/board/task_1");
     expect(second.tabs).toHaveLength(2);
     expect(titleFromPath("/agents/new")).toBe("创建智能体");
+    expect(titleFromPath("/agents/new/blank")).toBe("创建智能体");
+    expect(titleFromPath("/agents/new/ai")).toBe("创建智能体");
+    expect(titleFromPath("/agents/new/ai/session-1")).toBe("创建智能体");
     const reused = upsertTab(second.tabs, "/board");
     expect(reused.tabs).toHaveLength(2);
     expect(reused.activeId).toBe("/board");
@@ -63,6 +66,7 @@ describe("sidebar nav", () => {
     expect(personalNav.map((item) => item.to)).toEqual(["/inbox", "/chat", "/mine"]);
     expect(workspaceNav.map((item) => item.label)).toContain("智能体");
     expect(navItemActive("/agents/new", { to: "/agents" })).toBe(true);
+    expect(navItemActive("/agents/new/ai", { to: "/agents" })).toBe(true);
     expect(navItemActive("/board", { to: "/inbox" })).toBe(false);
   });
 });

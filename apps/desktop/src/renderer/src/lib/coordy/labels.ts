@@ -146,6 +146,25 @@ export function pickerRuntimes(
   return extra ? [extra, ...installed] : installed;
 }
 
+export function osShortLabel(os?: string | null): string {
+  if (os === "darwin") return "Mac";
+  if (os === "win32") return "Windows";
+  if (os === "linux") return "Linux";
+  return os?.trim() || "";
+}
+
+/** Chip / dropdown title: "Claude Code (Mac)". */
+export function runtimeChipLabel(item: { id: string; name: string }, os?: string | null): string {
+  const host = osShortLabel(os);
+  const name = item.name.trim() || harnessLabel(item.id);
+  return host ? `${name} (${host})` : name;
+}
+
+export function runtimeSubtitle(item: { command?: string }): string {
+  const command = item.command?.trim();
+  return command ? `这台电脑 · ${command}` : "这台电脑";
+}
+
 export function healthLabel(status: string): string {
   if (status === "ok") return "在线";
   if (status === "connecting") return "正在连接";
