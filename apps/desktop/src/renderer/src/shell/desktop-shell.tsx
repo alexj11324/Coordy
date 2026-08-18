@@ -1,5 +1,5 @@
 import { Outlet, useLocation } from "react-router-dom";
-import { SidebarInset, SidebarProvider } from "@coordy/ui";
+import { SidebarInset, SidebarProvider, TooltipProvider } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useLayoutEffect } from "react";
 import { FloatingChat } from "../features/floating-chat";
@@ -28,6 +28,7 @@ export function DesktopShell() {
   }, [path]);
 
   return (
+    <TooltipProvider>
     <SidebarProvider
       className="relative h-svh overflow-hidden"
       open={!collapsed}
@@ -45,5 +46,6 @@ export function DesktopShell() {
       <IssueCreateDialog os={appInfo.data?.os} />
       <CommandPalette os={appInfo.data?.os} />
     </SidebarProvider>
+    </TooltipProvider>
   );
 }

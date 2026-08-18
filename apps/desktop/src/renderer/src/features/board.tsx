@@ -33,11 +33,12 @@ import {
 import { agentDisplayName, listableAgents, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { useSession } from "../state/session-store";
 import { useLayoutStore } from "../state/layout-store";
-import { asAgents, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views";
-import type { AgentView, DiscoveredAgentView, Query, TaskView } from "@coordy/protocol";
+import { asAgents, asProjects, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views";
+import type { AgentView, DiscoveredAgentView, ProjectView, Query, TaskView } from "@coordy/protocol";
 import { NamedWithLogo, ProviderLogo } from "./provider-logo";
 import { StatusGlyph } from "./issue-status";
 import { ColumnMenu, IssueComposerButton } from "./issue-create-dialog";
+import { priorityTone } from "../lib/coordy/issues";
 
 function useWorkspaceQuery(make: (workspace_id: string) => Query) {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -51,6 +52,7 @@ function useWorkspaceQuery(make: (workspace_id: string) => Query) {
 export function BoardPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
   const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
+  const projects = useWorkspaceQuery((workspace_id) => ({ type: "Projects", workspace_id }));
   const runsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Runs", workspace_id }));
   const catalog = useQuery({
     queryKey: ["discover-agents"],
@@ -59,7 +61,9 @@ export function BoardPage() {
   const qc = useQueryClient();
   const tasks = boardIssues(asTasks(q.data));
   const agentList = listableAgents(asAgents(agents.data));
+  const projectList = asProjects(projects.data);
   const runList = asRuns(runsQuery.data);
+  const workingAgents = new Set(runList.filter((run) => run.status === "running").map((run) => run.agent_id)).size;
   const [mode, setMode] = useState<IssueViewMode>(readIssueViewMode);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -84,7 +88,7 @@ export function BoardPage() {
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
         <h1 className="mr-1 text-sm font-semibold">任务</h1>
-        <div className="flex items-center rounded-lg border border-border p-0.5">
+        <div className="flex items-center rounded-lg p-0.5">
           {scopeItems.map((item) => (
             <Button
               key={item.id}
@@ -97,19 +101,29 @@ export function BoardPage() {
             </Button>
           ))}
         </div>
-        <Input
-          value={query}
-          placeholder="筛选标题或编号"
-          className="h-7 w-44"
-          onChange={(event) => setQuery(event.target.value)}
-        />
         <div className="ml-auto flex items-center gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={status === "running" ? "secondary" : "ghost"}
+            className="text-muted-foreground"
+            onClick={() => setStatus((value) => (value === "running" ? "all" : "running"))}
+          >
+            {workingAgents} 个智能体工作中
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger render={<Button type="button" size="sm" variant="outline" />}>
               <Filter data-icon="inline-start" />
               筛选
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
+            <DropdownMenuContent align="end" className="min-w-56 p-2">
+              <Input
+                value={query}
+                placeholder="筛选标题或编号"
+                className="mb-2 h-7"
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => event.stopPropagation()}
+              />
               <DropdownMenuRadioGroup value={status} onValueChange={(value) => value && setStatus(value)}>
                 <DropdownMenuRadioItem value="all">全部状态</DropdownMenuRadioItem>
                 {Object.entries(TASK_STATUS_ITEMS).map(([value, label]) => (
@@ -141,6 +155,15 @@ export function BoardPage() {
               </DropdownMenuRadioGroup>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            type="button"
+            size="sm"
+            variant={mode === "board" ? "secondary" : "outline"}
+            onClick={() => setView(mode === "board" ? "list" : "board")}
+          >
+            <Columns3 data-icon="inline-start" />
+            {mode === "board" ? "看板" : "列表"}
+          </Button>
           <IssueComposerButton />
         </div>
       </header>
@@ -163,6 +186,7 @@ export function BoardPage() {
         <IssueBoard
           tasks={visible}
           agents={agentList}
+          projects={projectList}
           catalog={catalog.data}
           runningIds={new Set(runList.filter((run) => run.status === "running").map((run) => run.task_id))}
           onMoved={() => qc.invalidateQueries()}
@@ -182,12 +206,14 @@ export function BoardPage() {
 function IssueBoard({
   tasks,
   agents,
+  projects,
   catalog,
   runningIds,
   onMoved,
 }: {
   tasks: TaskView[];
   agents: AgentView[];
+  projects: ProjectView[];
   catalog: DiscoveredAgentView[] | undefined;
   runningIds: Set<string>;
   onMoved: () => void;
@@ -203,6 +229,7 @@ function IssueBoard({
             title={column.title}
             tasks={items}
             agents={agents}
+            projects={projects}
             catalog={catalog}
             runningIds={runningIds}
             onMoved={onMoved}
@@ -218,6 +245,7 @@ function BoardColumn({
   title,
   tasks,
   agents,
+  projects,
   catalog,
   runningIds,
   onMoved,
@@ -226,6 +254,7 @@ function BoardColumn({
   title: string;
   tasks: TaskView[];
   agents: AgentView[];
+  projects: ProjectView[];
   catalog: DiscoveredAgentView[] | undefined;
   runningIds: Set<string>;
   onMoved: () => void;
@@ -280,6 +309,7 @@ function BoardColumn({
               key={task.id}
               task={task}
               agent={agents.find((item) => item.id === task.assignee_agent_id)}
+              project={projects.find((item) => item.id === task.project_id)}
               catalog={catalog}
               running={runningIds.has(task.id)}
             />
@@ -293,11 +323,13 @@ function BoardColumn({
 function IssueCard({
   task,
   agent,
+  project,
   catalog,
   running,
 }: {
   task: TaskView;
   agent?: AgentView;
+  project?: ProjectView;
   catalog: DiscoveredAgentView[] | undefined;
   running: boolean;
 }) {
@@ -306,6 +338,7 @@ function IssueCard({
     event.dataTransfer.setData("text/coordy-task", task.id);
     event.dataTransfer.effectAllowed = "move";
   };
+  const priority = task.priority && task.priority !== "none" ? task.priority : "";
   return (
     <button
       type="button"
@@ -314,20 +347,35 @@ function IssueCard({
       onClick={() => navigate(`/board/${task.id}`)}
       className="w-full rounded-lg border border-border bg-background p-2.5 text-left shadow-sm transition-colors hover:bg-muted/50"
     >
-      <p className="line-clamp-2 text-sm font-medium">{task.title}</p>
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        {priority ? (
+          <span className={cn("font-semibold", priorityTone(priority))}>
+            {priority === "urgent" || priority === "high" ? "!" : "–"}
+          </span>
+        ) : null}
+        <span className="font-mono">{taskIdentifier(task)}</span>
+        {running ? <span className="size-1.5 rounded-full bg-sky-500" title="进行中" /> : null}
+      </div>
+      <p className="mt-1 line-clamp-2 text-sm font-medium">{task.title}</p>
+      {task.description?.trim() ? (
+        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.description.trim()}</p>
+      ) : null}
       <div className="mt-2 flex items-center justify-between gap-2">
-        <span className="font-mono text-[11px] text-muted-foreground">{taskIdentifier(task.id)}</span>
-        <div className="flex min-w-0 items-center gap-1.5">
-          {running ? <span className="size-1.5 rounded-full bg-sky-500" title="进行中" /> : null}
-          {agent ? (
-            <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
-              <ProviderLogo provider={agent.harness} className="size-3.5" />
-              <span className="max-w-[7rem] truncate">{agentDisplayName(agent, catalog)}</span>
-            </span>
-          ) : (
-            <span className="text-[11px] text-muted-foreground">未指派</span>
-          )}
-        </div>
+        {project ? (
+          <span className="max-w-[9rem] truncate rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {project.name}
+          </span>
+        ) : (
+          <span />
+        )}
+        {agent ? (
+          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+            <ProviderLogo provider={agent.harness} className="size-3.5" />
+            <span className="max-w-[7rem] truncate">{agentDisplayName(agent, catalog)}</span>
+          </span>
+        ) : (
+          <span className="text-[11px] text-muted-foreground">未指派</span>
+        )}
       </div>
     </button>
   );

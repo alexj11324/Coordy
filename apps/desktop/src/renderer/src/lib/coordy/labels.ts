@@ -1,4 +1,5 @@
 import type { AgentView, DiscoveredAgentView } from "@coordy/protocol";
+import { describeActivity } from "./activity";
 import { isPlaceholderHarness } from "./views";
 
 /** Status words follow Multica's issue status meanings. */
@@ -197,21 +198,11 @@ export function eventKindLabel(kind: string): string {
 }
 
 export function formatActivity(event: { kind: string; payload: string }): { label: string; body: string } {
-  if (event.kind === "message") {
-    const idx = event.payload.indexOf(": ");
-    if (idx > 0) {
-      const role = event.payload.slice(0, idx);
-      const body = event.payload.slice(idx + 2);
-      if (role === "user") return { label: "你", body };
-      if (role === "assistant") return { label: "智能体", body };
-      if (role === "system") return { label: "系统", body };
-      return { label: role, body };
-    }
+  const described = describeActivity(event);
+  if (described.tone === "message") {
+    return { label: described.label, body: described.body };
   }
-  if (event.kind === "tool" && event.payload.startsWith("coordy.session")) {
-    return { label: "系统", body: "这一轮结束了" };
-  }
-  return { label: eventKindLabel(event.kind), body: event.payload };
+  return { label: described.title, body: described.detail ?? "" };
 }
 
 export function memoryVisibilityLabel(value: string): string {

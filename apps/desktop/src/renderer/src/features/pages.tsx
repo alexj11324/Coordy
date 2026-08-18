@@ -71,6 +71,7 @@ import {
   asTasks,
   outcomeId,
 } from "../lib/coordy/views";
+import { ActivityLine } from "./activity-marker";
 
 export function useWorkspaceQuery(make: (workspace_id: string) => Query) {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -935,10 +936,7 @@ export function RunsPage() {
           </CardHeader>
           <CardContent className="space-y-2">
             {events.map((event) => (
-              <p key={event.seq} className="whitespace-pre-wrap text-sm">
-                <Badge className="mr-2">{event.kind}</Badge>
-                {event.payload}
-              </p>
+              <ActivityLine key={event.seq} event={event} />
             ))}
           </CardContent>
         </Card>

@@ -7,18 +7,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Input,
-  ScrollArea,
+  cn,
 } from "@coordy/ui";
-import { ChevronDown, Maximize2, MessageSquare, Minus, Plus, SendHorizonal, X } from "lucide-react";
+import { ChevronDown, Maximize2, MessageCircle, Minimize2, Minus, Plus, SendHorizonal } from "lucide-react";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
+import { chatTimeline } from "../lib/coordy/activity";
 import { submit, view } from "../lib/coordy/client";
-import { agentDisplayName, formatActivity, listableAgents } from "../lib/coordy/labels";
+import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
 import { startChatTurn } from "../lib/coordy/start-task";
 import { asAgents, asChatDetail, asChats, asRunDetail, asRuns, latestRunForTask, outcomeId } from "../lib/coordy/views";
 import { useLayoutStore } from "../state/layout-store";
 import { useSession } from "../state/session-store";
-import { useTabStore } from "../state/tab-store";
+import { ActivityLine } from "./activity-marker";
+import { ProviderLogo } from "./provider-logo";
 
 const SUGGESTIONS = [
   "按优先级列出我未完成的任务",
@@ -28,6 +31,7 @@ const SUGGESTIONS = [
 
 export function FloatingChat() {
   const dock = useLayoutStore((s) => s.chatDock);
+  const expanded = useLayoutStore((s) => s.chatExpanded);
   const activeChatId = useLayoutStore((s) => s.activeChatId);
   const workspaceId = useSession((s) => s.workspaceId);
   const qc = useQueryClient();
@@ -47,20 +51,21 @@ export function FloatingChat() {
   });
   const agentList = listableAgents(asAgents(agents.data));
   const chatList = asChats(chats.data).filter((chat) => !chat.archived);
-  const current = chatList.find((chat) => chat.id === activeChatId) ?? chatList[0] ?? null;
+  const current = chatList.find((chat) => chat.id === activeChatId) ?? null;
   const chatId = current?.id ?? null;
+  const open = dock === "open";
 
   const detail = useQuery({
     queryKey: ["view", { type: "Chat", chat_id: chatId }, chatId],
-    enabled: Boolean(chatId),
+    enabled: Boolean(chatId) && open,
     queryFn: () => view({ type: "Chat", chat_id: chatId! }),
-    refetchInterval: dock === "open" ? 1000 : false,
+    refetchInterval: open ? 1000 : false,
   });
   const runs = useQuery({
     queryKey: ["view", { type: "Runs", workspace_id: workspaceId }, workspaceId],
-    enabled: Boolean(workspaceId) && dock === "open",
+    enabled: Boolean(workspaceId) && open,
     queryFn: () => view({ type: "Runs", workspace_id: workspaceId! }),
-    refetchInterval: dock === "open" ? 1000 : false,
+    refetchInterval: open ? 1000 : false,
   });
   const chatDetail = asChatDetail(detail.data);
   const agent = agentList.find((item) => item.id === current?.agent_id) ?? agentList[0];
@@ -68,31 +73,17 @@ export function FloatingChat() {
   const latestRun = current?.task_id ? latestRunForTask(runList, current.task_id) : undefined;
   const runDetail = useQuery({
     queryKey: ["run", latestRun?.id],
-    enabled: Boolean(latestRun?.id) && dock === "open",
+    enabled: Boolean(latestRun?.id) && open,
     queryFn: () => view({ type: "Run", run_id: latestRun!.id }),
     refetchInterval: latestRun?.status === "running" ? 800 : false,
   });
   const runEvents = asRunDetail(runDetail.data)?.events ?? [];
   const agentName = agent ? agentDisplayName(agent) : "智能体";
 
-  const messages = useMemo(() => {
-    const stored = chatDetail?.messages ?? [];
-    const extras = runEvents
-      .filter((event) => event.kind === "message")
-      .map((event) => {
-        const parsed = formatActivity(event);
-        return {
-          id: `run-${latestRun?.id}-${event.seq}`,
-          role: parsed.label === "你" ? "user" : "assistant",
-          body: parsed.body,
-        };
-      });
-    const seen = new Set(stored.map((item) => item.body));
-    return [
-      ...stored.map((item) => ({ id: item.id, role: item.role, body: item.body })),
-      ...extras.filter((item) => !seen.has(item.body)),
-    ];
-  }, [chatDetail?.messages, latestRun?.id, runEvents]);
+  const timeline = useMemo(
+    () => chatTimeline(chatDetail?.messages ?? [], runEvents, latestRun?.id),
+    [chatDetail?.messages, latestRun?.id, runEvents],
+  );
 
   const ensureChat = async () => {
     if (!workspaceId) throw new Error("还没准备好，请稍等一下");
@@ -145,68 +136,86 @@ export function FloatingChat() {
     onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
   });
 
-  const expand = () => {
-    useTabStore.getState().ensure("/chat");
-    navigate("/chat");
-  };
+  if (typeof document === "undefined") return null;
 
-  if (dock === "closed" || dock === "minimized") {
-    return (
-      <Button
-        type="button"
-        size="icon-lg"
-        className="absolute right-5 bottom-5 z-20 rounded-full shadow-lg"
-        aria-label="打开聊天"
-        title="打开聊天"
-        onClick={() => useLayoutStore.getState().openChatDock()}
-      >
-        <MessageSquare />
-      </Button>
-    );
-  }
+  const fab = dock !== "open" ? (
+    <button
+      type="button"
+      id="coordy-chat-fab"
+      className="fixed right-5 bottom-5 z-[80] flex size-12 items-center justify-center rounded-full bg-background text-muted-foreground shadow-[0_8px_24px_rgba(15,23,42,0.12)] ring-1 ring-border transition-colors hover:bg-muted hover:text-foreground"
+      aria-label="打开聊天"
+      title="打开聊天"
+      onClick={() => useLayoutStore.getState().openChatDock()}
+    >
+      <MessageCircle className="size-5" />
+    </button>
+  ) : null;
 
-  return (
-    <section className="absolute right-5 bottom-5 z-30 flex h-[min(32rem,calc(100%-3rem))] w-[min(24rem,calc(100%-2.5rem))] flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl">
-      <header className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-        <DropdownMenu>
-          <DropdownMenuTrigger render={<Button type="button" size="sm" variant="ghost" className="min-w-0 flex-1 justify-start" />}>
-            <Plus className="size-3.5" />
-            <span className="truncate">{current?.title?.trim() || "新对话"}</span>
-            <ChevronDown className="ml-auto size-3.5 text-muted-foreground" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-48">
-            <DropdownMenuItem onClick={() => startNew.mutate()}>+ 新对话</DropdownMenuItem>
-            {chatList.length > 0 ? <DropdownMenuSeparator /> : null}
-            {chatList.map((chat) => (
-              <DropdownMenuItem key={chat.id} onClick={() => useLayoutStore.getState().setActiveChatId(chat.id)}>
-                {chat.title?.trim() || "对话"}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button type="button" size="icon-sm" variant="ghost" aria-label="展开聊天" onClick={expand}>
-          <Maximize2 />
-        </Button>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label="最小化"
-          onClick={() => useLayoutStore.getState().minimizeChatDock()}
-        >
-          <Minus />
-        </Button>
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label="关闭聊天"
-          onClick={() => useLayoutStore.getState().closeChatDock()}
-        >
-          <X />
-        </Button>
+  const windowNode = open ? (
+    <section
+      id="coordy-chat-window"
+      className={cn(
+        "fixed z-[85] flex flex-col overflow-hidden rounded-xl bg-background shadow-[0_18px_50px_rgba(15,23,42,0.18)] ring-1 ring-border",
+        expanded
+          ? "inset-3"
+          : "right-2 bottom-2 h-[min(36rem,calc(100vh-1rem))] w-[min(24rem,calc(100vw-1rem))]",
+      )}
+    >
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="flex min-w-0 items-center gap-1">
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="rounded-full text-muted-foreground"
+            aria-label="新对话"
+            title="新对话"
+            onClick={() => startNew.mutate()}
+          >
+            <Plus />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button type="button" size="sm" variant="ghost" className="min-w-0 max-w-48 justify-start" />}>
+              <span className="truncate">{current?.title?.trim() || "新对话"}</span>
+              <ChevronDown className="size-3.5 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-48">
+              <DropdownMenuItem onClick={() => startNew.mutate()}>新对话</DropdownMenuItem>
+              {chatList.length > 0 ? <DropdownMenuSeparator /> : null}
+              {chatList.map((chat) => (
+                <DropdownMenuItem key={chat.id} onClick={() => useLayoutStore.getState().setActiveChatId(chat.id)}>
+                  {chat.title?.trim() || "对话"}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        <div className="flex shrink-0 items-center">
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="text-muted-foreground"
+            aria-label={expanded ? "还原聊天窗" : "放大聊天窗"}
+            title={expanded ? "还原" : "放大"}
+            onClick={() => useLayoutStore.getState().toggleChatExpanded()}
+          >
+            {expanded ? <Minimize2 /> : <Maximize2 />}
+          </Button>
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            className="text-muted-foreground"
+            aria-label="收起聊天"
+            title="收起"
+            onClick={() => useLayoutStore.getState().minimizeChatDock()}
+          >
+            <Minus />
+          </Button>
+        </div>
       </header>
-      <ScrollArea className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="space-y-3 p-4">
           {!agent ? (
             <div className="space-y-2 text-sm">
@@ -215,7 +224,7 @@ export function FloatingChat() {
                 新建智能体
               </Button>
             </div>
-          ) : messages.length === 0 ? (
+          ) : timeline.length === 0 ? (
             <div className="space-y-3">
               <div>
                 <p className="text-sm font-medium">你好，我是 {agentName}</p>
@@ -223,48 +232,69 @@ export function FloatingChat() {
               </div>
               <div className="flex flex-col items-start gap-2">
                 {SUGGESTIONS.map((item) => (
-                  <Button
+                  <button
                     key={item}
                     type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-auto max-w-full whitespace-normal py-1.5 text-left"
+                    className="max-w-full rounded-full border border-border bg-background px-3 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                     onClick={() => send.mutate(item)}
                   >
                     {item}
-                  </Button>
+                  </button>
                 ))}
               </div>
             </div>
           ) : (
-            messages.map((message) => (
-              <div key={message.id} className="space-y-1">
-                <p className="text-[11px] text-muted-foreground">{message.role === "user" ? "你" : agentName}</p>
-                <p className="whitespace-pre-wrap text-sm">{message.body}</p>
-              </div>
-            ))
+            timeline.map((item) =>
+              item.type === "marker" ? (
+                <ActivityLine key={item.id} event={item.event} />
+              ) : (
+                <div key={item.id} className="animate-in fade-in-0 fill-mode-both space-y-1 duration-300">
+                  <p className="text-[11px] text-muted-foreground">{item.role === "user" ? "你" : agentName}</p>
+                  <p className="whitespace-pre-wrap text-sm">{item.body}</p>
+                </div>
+              ),
+            )
           )}
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
-      </ScrollArea>
+      </div>
       <form
-        className="flex shrink-0 items-end gap-1 border-t border-border p-2"
+        className="flex shrink-0 items-center gap-1 border-t border-border p-2"
         onSubmit={(event) => {
           event.preventDefault();
           send.mutate(draft);
         }}
       >
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="text-muted-foreground"
+          aria-label="新对话"
+          onClick={() => startNew.mutate()}
+        >
+          <Plus />
+        </Button>
         <Input
           value={draft}
           placeholder={`给 ${agentName} 发消息...`}
-          className="min-h-9"
+          className="h-9 min-w-0 flex-1 border-0 shadow-none focus-visible:ring-0"
           disabled={!agent}
           onChange={(event) => setDraft(event.target.value)}
         />
-        <Button type="submit" size="icon" disabled={!agent || send.isPending || !draft.trim()} aria-label="发送">
+        {agent ? <ProviderLogo provider={agent.harness} className="size-6 shrink-0" /> : null}
+        <Button type="submit" size="icon-sm" disabled={!agent || send.isPending || !draft.trim()} aria-label="发送">
           <SendHorizonal />
         </Button>
       </form>
     </section>
+  ) : null;
+
+  return createPortal(
+    <>
+      {fab}
+      {windowNode}
+    </>,
+    document.body,
   );
 }

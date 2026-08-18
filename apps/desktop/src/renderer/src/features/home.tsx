@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Badge,
   Button,
   Card,
   CardContent,
@@ -29,9 +28,10 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { startAcpRun } from "../lib/coordy/start-task";
-import { agentDisplayName, formatActivity, listableAgents, runStatusLabel } from "../lib/coordy/labels";
+import { agentDisplayName, listableAgents, runStatusLabel } from "../lib/coordy/labels";
 import { asAgents, asRunDetail, asRuns } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { ActivityLine } from "./activity-marker";
 import { NamedWithLogo } from "./provider-logo";
 
 export function HomePage() {
@@ -203,17 +203,7 @@ export function HomePage() {
           {events.length === 0 ? (
             <p className="text-sm text-muted-foreground">还没有记录。</p>
           ) : (
-            events.map((event) => {
-              const line = formatActivity(event);
-              return (
-                <p key={event.seq} className="whitespace-pre-wrap text-sm">
-                  <Badge className="mr-2" variant="outline">
-                    {line.label}
-                  </Badge>
-                  {line.body}
-                </p>
-              );
-            })
+            events.map((event) => <ActivityLine key={event.seq} event={event} />)
           )}
         </CardContent>
         {latestRun ? (

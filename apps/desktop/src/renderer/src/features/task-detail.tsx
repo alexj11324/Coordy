@@ -1,6 +1,5 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Badge,
   Button,
   Input,
   Label,
@@ -18,7 +17,6 @@ import { submit, view } from "../lib/coordy/client";
 import { taskIdentifier } from "../lib/coordy/issues";
 import {
   agentDisplayName,
-  formatActivity,
   listableAgents,
   runStatusLabel,
   TASK_STATUS_ITEMS,
@@ -28,6 +26,7 @@ import { startAcpOnTask } from "../lib/coordy/start-task";
 import { asAgents, asRunDetail, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { useTabTitle } from "../shell/use-tab-title";
+import { ActivityLine } from "./activity-marker";
 import { NamedWithLogo } from "./provider-logo";
 import { StatusGlyph } from "./issue-status";
 
@@ -161,18 +160,11 @@ export function TaskDetailPage() {
           {activity.length === 0 ? (
             <p className="text-sm text-muted-foreground">还没有记录。指派智能体或写一条评论就会出现。</p>
           ) : (
-            activity.map((event) => {
-              const line = formatActivity(event);
-              return (
-                <div key={`${event.runId}-${event.seq}`} className="border-b border-border/70 pb-3 last:border-0">
-                  <p className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="outline">{line.label}</Badge>
-                    {event.runStatus ? <span>{runStatusLabel(event.runStatus)}</span> : null}
-                  </p>
-                  <p className="whitespace-pre-wrap text-sm">{line.body}</p>
-                </div>
-              );
-            })
+            activity.map((event) => (
+              <div key={`${event.runId}-${event.seq}`} className="border-b border-border/70 pb-3 last:border-0">
+                <ActivityLine event={event} />
+              </div>
+            ))
           )}
         </div>
         <form

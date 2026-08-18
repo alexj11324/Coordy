@@ -24,6 +24,7 @@ type LayoutState = {
   issueComposerOpen: boolean;
   issueComposerStatus: string;
   chatDock: ChatDock;
+  chatExpanded: boolean;
   activeChatId: string | null;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
@@ -37,6 +38,7 @@ type LayoutState = {
   closeChatDock: () => void;
   minimizeChatDock: () => void;
   toggleChatDock: () => void;
+  toggleChatExpanded: () => void;
   setActiveChatId: (chatId: string | null) => void;
 };
 
@@ -47,6 +49,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   issueComposerOpen: false,
   issueComposerStatus: "open",
   chatDock: "closed",
+  chatExpanded: false,
   activeChatId: null,
   setSidebarCollapsed: (collapsed) => {
     if (typeof window !== "undefined") {
@@ -75,12 +78,17 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   openChatDock: (chatId) =>
     set({
       chatDock: "open",
+      chatExpanded: false,
       activeChatId: chatId === undefined ? get().activeChatId : chatId,
     }),
-  closeChatDock: () => set({ chatDock: "closed" }),
-  minimizeChatDock: () => set({ chatDock: "minimized" }),
+  closeChatDock: () => set({ chatDock: "closed", chatExpanded: false }),
+  minimizeChatDock: () => set({ chatDock: "minimized", chatExpanded: false }),
   toggleChatDock: () =>
-    set({ chatDock: get().chatDock === "open" ? "closed" : "open" }),
+    set({
+      chatDock: get().chatDock === "open" ? "closed" : "open",
+      chatExpanded: get().chatDock === "open" ? false : get().chatExpanded,
+    }),
+  toggleChatExpanded: () => set({ chatExpanded: !get().chatExpanded }),
   setActiveChatId: (chatId) => set({ activeChatId: chatId }),
   consumePendingFocus: () => {
     const next = get().pendingFocus;
