@@ -2,6 +2,7 @@ export type ShortcutAction =
   | "search"
   | "new-task"
   | "toggle-sidebar"
+  | "toggle-chat"
   | "new-tab"
   | "close-tab";
 
@@ -32,6 +33,7 @@ export function matchShortcut(event: {
   if (event.altKey) return null;
   if (mod && key === "k") return "search";
   if (mod && key === "b") return "toggle-sidebar";
+  if (mod && key === "j") return "toggle-chat";
   if (mod && key === "t") return "new-tab";
   if (mod && key === "w") return "close-tab";
   if (mod) return null;

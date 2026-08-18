@@ -80,3 +80,35 @@ export async function startAcpOnTask(taskId: string, prompt: string, agentId?: s
     source: acpRunSource(prompt),
   });
 }
+
+export function chatTurnCommands(input: {
+  chatId: string;
+  taskId: string;
+  agentId: string;
+  prompt: string;
+}) {
+  return [
+    { type: "SetTaskStatus" as const, task_id: input.taskId, status: "open" },
+    { type: "AssignTask" as const, task_id: input.taskId, agent_id: input.agentId },
+    {
+      type: "StartRun" as const,
+      task_id: input.taskId,
+      source: acpRunSource(input.prompt),
+      agent_id: input.agentId,
+      chat_id: input.chatId,
+      trigger: "chat" as const,
+    },
+  ] as const;
+}
+
+export async function startChatTurn(input: {
+  chatId: string;
+  taskId: string;
+  agentId: string;
+  prompt: string;
+}): Promise<Outcome> {
+  const [status, assign, run] = chatTurnCommands(input);
+  await submit(status);
+  await submit(assign);
+  return submit(run);
+}

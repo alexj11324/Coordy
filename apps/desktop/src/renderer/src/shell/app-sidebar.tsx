@@ -1,4 +1,4 @@
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   Sidebar,
   SidebarContent,
@@ -16,7 +16,6 @@ import { useQuery } from "@tanstack/react-query";
 import { MessageCircle, Plus, Search } from "lucide-react";
 import { modifierSymbol } from "../lib/coordy/shortcuts";
 import { useLayoutStore } from "../state/layout-store";
-import { useTabStore } from "../state/tab-store";
 import { SidebarHelp } from "./nav-user";
 import { configNav, navItemActive, personalNav, workspaceNav, type NavItem } from "./nav";
 import { WorkspaceSwitcher } from "./workspace-switcher";
@@ -67,7 +66,6 @@ function SearchTrigger({ os }: { os?: string }) {
 }
 
 export function AppSidebar({ os }: { os?: string }) {
-  const navigate = useNavigate();
   const appInfo = useQuery({
     queryKey: ["app-info"],
     queryFn: () => window.coordy.getAppInfo(),
@@ -76,8 +74,6 @@ export function AppSidebar({ os }: { os?: string }) {
 
   const openNewTask = () => {
     useLayoutStore.getState().requestNewTaskFocus();
-    useTabStore.getState().ensure("/board");
-    navigate("/board");
   };
 
   return (

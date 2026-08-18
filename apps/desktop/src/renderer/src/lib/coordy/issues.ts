@@ -2,10 +2,10 @@ import type { TaskView } from "@coordy/protocol";
 import { boardColumn } from "./views";
 
 export const ISSUE_BOARD_COLUMNS = [
-  { id: "backlog", title: "待办箱" },
+  { id: "backlog", title: "待规划" },
   { id: "open", title: "待办" },
   { id: "running", title: "进行中" },
-  { id: "review", title: "待验收" },
+  { id: "review", title: "审核中" },
   { id: "blocked", title: "暂时做不了" },
   { id: "done", title: "已完成" },
 ] as const;
@@ -22,6 +22,14 @@ export const PRIORITY_ITEMS: Record<string, string> = {
   low: "低",
   none: "无",
 };
+
+export function isChatIssue(task: TaskView): boolean {
+  return task.stage === "chat" || (task.labels ?? []).includes("chat");
+}
+
+export function boardIssues(tasks: TaskView[]): TaskView[] {
+  return tasks.filter((task) => !isChatIssue(task));
+}
 
 export function taskIdentifier(task: string | { id: string; identifier?: string | null }): string {
   if (typeof task === "string") return taskIdentifier({ id: task });
@@ -87,7 +95,11 @@ export function filterIssues(tasks: TaskView[], filters: IssueFilters | string, 
       if (parsed.assignee === "none" && (task.assignee_agent_id || task.assignee_principal_id || task.assignee_squad_id)) {
         return false;
       }
-      if (
+      if (parsed.assignee === "members") {
+        if (!task.assignee_principal_id) return false;
+      } else if (parsed.assignee === "agents") {
+        if (!task.assignee_agent_id) return false;
+      } else if (
         parsed.assignee !== "none" &&
         task.assignee_agent_id !== parsed.assignee &&
         task.assignee_principal_id !== parsed.assignee &&

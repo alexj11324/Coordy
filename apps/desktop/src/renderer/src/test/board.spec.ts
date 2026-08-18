@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { acpRunSource } from "../lib/coordy/start-task";
+import { acpRunSource, chatTurnCommands } from "../lib/coordy/start-task";
 import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
 import { agentDisplayName, createActionLabel, emptyCreateHint, listableAgents, providerKey, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
-import { tasksAssignedToMe } from "../lib/coordy/issues";
+import { boardIssues, isChatIssue, tasksAssignedToMe } from "../lib/coordy/issues";
 import { asTasks, boardColumn, isPlaceholderHarness, latestRunForTask, outcomeId } from "../lib/coordy/views";
 import type { AgentView, RunView, TaskView, View } from "@coordy/protocol";
 
@@ -85,7 +85,8 @@ describe("board view helpers", () => {
   });
 
   it("uses Multica status words for issue columns", () => {
-    expect(taskStatusLabel("review")).toBe("待验收");
+    expect(taskStatusLabel("review")).toBe("审核中");
+    expect(taskStatusLabel("backlog")).toBe("待规划");
     expect(boardColumn("done")).toBe("done");
     expect(boardColumn("cancelled")).toBe("done");
   });
@@ -115,5 +116,36 @@ describe("board view helpers", () => {
       "task_2",
     ]);
     expect(tasksAssignedToMe(tasks, { principalId: null, agentId: null })).toEqual([]);
+  });
+
+  it("keeps chat-backed tasks off the issue board", () => {
+    const tasks: TaskView[] = [
+      { id: "task_1", workspace_id: "ws", title: "修登录", status: "open" },
+      { id: "task_2", workspace_id: "ws", title: "对话", status: "backlog", stage: "chat", labels: ["chat"] },
+    ];
+    expect(isChatIssue(tasks[1]!)).toBe(true);
+    expect(boardIssues(tasks).map((task) => task.id)).toEqual(["task_1"]);
+  });
+
+  it("opens a chat turn by leaving backlog before StartRun", () => {
+    expect(
+      chatTurnCommands({
+        chatId: "chat_1",
+        taskId: "task_2",
+        agentId: "agent_1",
+        prompt: "你好",
+      }),
+    ).toEqual([
+      { type: "SetTaskStatus", task_id: "task_2", status: "open" },
+      { type: "AssignTask", task_id: "task_2", agent_id: "agent_1" },
+      {
+        type: "StartRun",
+        task_id: "task_2",
+        source: acpRunSource("你好"),
+        agent_id: "agent_1",
+        chat_id: "chat_1",
+        trigger: "chat",
+      },
+    ]);
   });
 });

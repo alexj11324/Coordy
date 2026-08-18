@@ -26,8 +26,11 @@ export function GlobalShortcuts() {
       if (action === "new-task") {
         event.preventDefault();
         useLayoutStore.getState().requestNewTaskFocus();
-        useTabStore.getState().ensure("/board");
-        navigate("/board");
+        return;
+      }
+      if (action === "toggle-chat") {
+        event.preventDefault();
+        useLayoutStore.getState().toggleChatDock();
         return;
       }
       if (action === "new-tab") {

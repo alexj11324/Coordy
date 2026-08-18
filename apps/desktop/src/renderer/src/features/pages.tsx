@@ -69,6 +69,7 @@ import {
   asSkills,
   asSquads,
   asTasks,
+  outcomeId,
 } from "../lib/coordy/views";
 
 export function useWorkspaceQuery(make: (workspace_id: string) => Query) {
@@ -1021,8 +1022,10 @@ export function ChatPage() {
               command.mutate(
                 { type: "CreateChat", workspace_id: workspaceId, agent_id: selectedAgentId },
                 {
-                  onSuccess: () => {
+                  onSuccess: (outcome) => {
                     setCreating(false);
+                    const id = outcomeId(outcome.ids, "chat_id");
+                    useLayoutStore.getState().openChatDock(id);
                   },
                 },
               );
@@ -1068,8 +1071,14 @@ export function ChatPage() {
         return (
           <Card key={chat.id} size="sm" className="mb-2">
             <CardHeader>
-              <CardTitle>{chat.title?.trim() || "对话"}</CardTitle>
-              <CardDescription>{agent ? agentDisplayName(agent) : chat.agent_id}</CardDescription>
+              <button
+                type="button"
+                className="text-left"
+                onClick={() => useLayoutStore.getState().openChatDock(chat.id)}
+              >
+                <CardTitle>{chat.title?.trim() || "对话"}</CardTitle>
+                <CardDescription>{agent ? agentDisplayName(agent) : chat.agent_id}</CardDescription>
+              </button>
             </CardHeader>
           </Card>
         );
@@ -1087,7 +1096,6 @@ export function MyIssuesPage() {
   const createLabel = createActionLabel("任务");
   const openNewTask = () => {
     useLayoutStore.getState().requestNewTaskFocus();
-    navigate("/board");
   };
   return (
     <CatalogShell

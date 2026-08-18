@@ -30,6 +30,16 @@ describe("issue identifiers and filters", () => {
     expect(filterIssues(tasks, "COOR-AAA", "all")).toHaveLength(1);
   });
 
+  it("filters board scope by members or agents", () => {
+    const tasks = [
+      task({ id: "task_1", title: "人", status: "open", assignee_principal_id: "p1" }),
+      task({ id: "task_2", title: "机", status: "open", assignee_agent_id: "a1" }),
+      task({ id: "task_3", title: "空", status: "open" }),
+    ];
+    expect(filterIssues(tasks, { query: "", status: "all", assignee: "members", project: "all", priority: "all" }).map((item) => item.id)).toEqual(["task_1"]);
+    expect(filterIssues(tasks, { query: "", status: "all", assignee: "agents", project: "all", priority: "all" }).map((item) => item.id)).toEqual(["task_2"]);
+  });
+
   it("puts cancelled tasks into the done board column", () => {
     const tasks = [task({ id: "task_x", title: "旧", status: "cancelled" })];
     expect(issuesInColumn(tasks, "done")).toHaveLength(1);
@@ -72,6 +82,8 @@ describe("shortcuts", () => {
     expect(matchShortcut({ key: "k", metaKey: true, ctrlKey: false, altKey: false })).toBe("search");
     expect(matchShortcut({ key: "k", metaKey: false, ctrlKey: true, altKey: false })).toBe("search");
     expect(matchShortcut({ key: "c", metaKey: false, ctrlKey: false, altKey: false })).toBe("new-task");
+    expect(matchShortcut({ key: "j", metaKey: true, ctrlKey: false, altKey: false })).toBe("toggle-chat");
+    expect(matchShortcut({ key: "j", metaKey: false, ctrlKey: true, altKey: false })).toBe("toggle-chat");
     expect(matchShortcut({ key: "b", metaKey: true, ctrlKey: false, altKey: false })).toBe("toggle-sidebar");
     expect(matchShortcut({ key: "w", metaKey: true, ctrlKey: false, altKey: false })).toBe("close-tab");
     expect(modifierSymbol("darwin")).toBe("⌘");

@@ -3,10 +3,10 @@ import { isPlaceholderHarness } from "./views";
 
 /** Status words follow Multica's issue status meanings. */
 export const TASK_STATUS_ITEMS: Record<string, string> = {
-  backlog: "待办箱",
+  backlog: "待规划",
   open: "待办",
   running: "进行中",
-  review: "待验收",
+  review: "审核中",
   blocked: "暂时做不了",
   done: "已完成",
   cancelled: "不做了",

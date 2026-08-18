@@ -1,25 +1,26 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
   Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   cn,
 } from "@coordy/ui";
-import { Columns3, LayoutDashboard, List, Plus } from "lucide-react";
-import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
+import { Columns3, Filter, LayoutDashboard, List, Plus, SlidersHorizontal } from "lucide-react";
+import { useMemo, useState, type DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import {
+  boardIssues,
   filterIssues,
   ISSUE_BOARD_COLUMNS,
   ISSUE_LIST_GROUPS,
@@ -36,6 +37,7 @@ import { asAgents, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views
 import type { AgentView, DiscoveredAgentView, Query, TaskView } from "@coordy/protocol";
 import { NamedWithLogo, ProviderLogo } from "./provider-logo";
 import { StatusGlyph } from "./issue-status";
+import { ColumnMenu, IssueComposerButton } from "./issue-create-dialog";
 
 function useWorkspaceQuery(make: (workspace_id: string) => Query) {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -55,69 +57,45 @@ export function BoardPage() {
     queryFn: () => window.coordy.discoverAgents(false),
   });
   const qc = useQueryClient();
-  const workspaceId = useSession((s) => s.workspaceId);
-  const tasks = asTasks(q.data);
+  const tasks = boardIssues(asTasks(q.data));
   const agentList = listableAgents(asAgents(agents.data));
   const runList = asRuns(runsQuery.data);
   const [mode, setMode] = useState<IssueViewMode>(readIssueViewMode);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [composerOpen, setComposerOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-  const pendingFocus = useLayoutStore((s) => s.pendingFocus);
-  const visible = useMemo(() => filterIssues(tasks, query, status), [tasks, query, status]);
-
-  useEffect(() => {
-    if (pendingFocus !== "new-task") return;
-    useLayoutStore.getState().consumePendingFocus();
-    setComposerOpen(true);
-  }, [pendingFocus]);
-
-  useEffect(() => {
-    if (!composerOpen) return;
-    document.getElementById("board-new-title")?.focus();
-  }, [composerOpen]);
-
-  const create = useMutation({
-    mutationFn: async (title: string) => {
-      if (!workspaceId) throw new Error("还没准备好，请稍等一下");
-      return submit({ type: "CreateTask", workspace_id: workspaceId, title });
-    },
-    onSuccess: async () => {
-      setDraft("");
-      setComposerOpen(false);
-      await qc.invalidateQueries();
-    },
-  });
+  const [assignee, setAssignee] = useState("all");
+  const visible = useMemo(
+    () => filterIssues(tasks, { query, status, assignee, project: "all", priority: "all" }),
+    [tasks, query, status, assignee],
+  );
 
   const setView = (next: IssueViewMode) => {
     setMode(next);
     writeIssueViewMode(next);
   };
 
+  const scopeItems = [
+    { id: "all", label: "全部" },
+    { id: "members", label: "成员" },
+    { id: "agents", label: "智能体" },
+  ] as const;
+
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
-        <h1 className="mr-2 text-sm font-semibold">任务</h1>
+        <h1 className="mr-1 text-sm font-semibold">任务</h1>
         <div className="flex items-center rounded-lg border border-border p-0.5">
-          <Button
-            type="button"
-            size="xs"
-            variant={mode === "board" ? "secondary" : "ghost"}
-            onClick={() => setView("board")}
-          >
-            <Columns3 data-icon="inline-start" />
-            看板
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant={mode === "list" ? "secondary" : "ghost"}
-            onClick={() => setView("list")}
-          >
-            <List data-icon="inline-start" />
-            列表
-          </Button>
+          {scopeItems.map((item) => (
+            <Button
+              key={item.id}
+              type="button"
+              size="xs"
+              variant={assignee === item.id ? "secondary" : "ghost"}
+              onClick={() => setAssignee(item.id)}
+            >
+              {item.label}
+            </Button>
+          ))}
         </div>
         <Input
           value={query}
@@ -125,73 +103,49 @@ export function BoardPage() {
           className="h-7 w-44"
           onChange={(event) => setQuery(event.target.value)}
         />
-        <Select
-          value={status}
-          items={{ all: "全部状态", ...TASK_STATUS_ITEMS }}
-          onValueChange={(value) => value && setStatus(value)}
-        >
-          <SelectTrigger size="sm" className="w-36">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            {Object.entries(TASK_STATUS_ITEMS).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="ml-auto">
-          <Button size="sm" onClick={() => setComposerOpen(true)}>
-            <Plus data-icon="inline-start" />
-            新建
-          </Button>
+        <div className="ml-auto flex items-center gap-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button type="button" size="sm" variant="outline" />}>
+              <Filter data-icon="inline-start" />
+              筛选
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-40">
+              <DropdownMenuRadioGroup value={status} onValueChange={(value) => value && setStatus(value)}>
+                <DropdownMenuRadioItem value="all">全部状态</DropdownMenuRadioItem>
+                {Object.entries(TASK_STATUS_ITEMS).map(([value, label]) => (
+                  <DropdownMenuRadioItem key={value} value={value}>
+                    {label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button type="button" size="sm" variant="outline" />}>
+              <SlidersHorizontal data-icon="inline-start" />
+              显示
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-36">
+              <DropdownMenuRadioGroup
+                value={mode === "list" ? "list" : "board"}
+                onValueChange={(value) => setView(value === "list" ? "list" : "board")}
+              >
+                <DropdownMenuRadioItem value="board">
+                  <Columns3 />
+                  看板
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="list">
+                  <List />
+                  列表
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <IssueComposerButton />
         </div>
       </header>
 
-      {composerOpen ? (
-        <form
-          className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2"
-          onSubmit={(event: FormEvent) => {
-            event.preventDefault();
-            const title = draft.trim();
-            if (!title) return;
-            create.mutate(title);
-          }}
-        >
-          <StatusGlyph status="open" />
-          <Input
-            id="board-new-title"
-            value={draft}
-            placeholder="事项标题"
-            className="h-8 border-0 shadow-none focus-visible:ring-0"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setComposerOpen(false);
-                setDraft("");
-              }
-            }}
-          />
-          <Button type="submit" size="sm" disabled={create.isPending || !draft.trim()}>
-            创建
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setComposerOpen(false);
-              setDraft("");
-            }}
-          >
-            取消
-          </Button>
-        </form>
-      ) : null}
-
-      {visible.length === 0 ? (
+      {visible.length === 0 && mode !== "board" ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <Empty>
             <EmptyHeader>
@@ -297,16 +251,29 @@ function BoardColumn({
         void submit({ type: "SetTaskStatus", task_id: taskId, status: dropStatus }).then(onMoved);
       }}
     >
-      <div className="flex h-10 shrink-0 items-center justify-between px-3">
-        <div className="flex items-center gap-2 text-sm font-medium">
+      <div className="flex h-10 shrink-0 items-center justify-between px-2">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
           <StatusGlyph status={dropStatus} />
           {title}
+          <Badge variant="secondary">{tasks.length}</Badge>
         </div>
-        <Badge variant="secondary">{tasks.length}</Badge>
+        <div className="flex items-center">
+          <ColumnMenu status={dropStatus} />
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="ghost"
+            aria-label="在此列新建"
+            title="新建任务"
+            onClick={() => useLayoutStore.getState().openIssueComposer(dropStatus)}
+          >
+            <Plus />
+          </Button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto px-2 pb-2">
         {tasks.length === 0 ? (
-          <p className="px-1 py-6 text-center text-xs text-muted-foreground">空</p>
+          <p className="px-1 py-6 text-center text-xs text-muted-foreground">无任务</p>
         ) : (
           tasks.map((task) => (
             <IssueCard
@@ -393,7 +360,7 @@ function IssueList({
               <span className="text-xs font-normal text-muted-foreground">{items.length}</span>
             </div>
             {items.length === 0 ? (
-              <p className="px-4 py-3 text-xs text-muted-foreground">空</p>
+              <p className="px-4 py-3 text-xs text-muted-foreground">无任务</p>
             ) : (
               items.map((task) => {
                 const agent = agents.find((item) => item.id === task.assignee_agent_id);
