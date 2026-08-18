@@ -35,8 +35,8 @@ export function GlobalShortcuts() {
       }
       if (action === "new-tab") {
         event.preventDefault();
-        useTabStore.getState().ensure("/board");
-        navigate("/board");
+        const path = useTabStore.getState().openNew("/");
+        navigate(path);
         return;
       }
       if (action === "close-tab") {

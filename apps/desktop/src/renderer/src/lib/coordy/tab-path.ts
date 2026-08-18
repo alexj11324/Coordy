@@ -67,15 +67,43 @@ export function titleFromPath(path: string): string {
   return pathname;
 }
 
-export function upsertTab(tabs: AppTab[], path: string): { tabs: AppTab[]; activeId: string } {
+function makeTab(path: string, id?: string): AppTab {
   const normalized = normalizePath(path);
-  const existing = tabs.find((tab) => tab.path === normalized);
-  if (existing) return { tabs, activeId: existing.id };
-  const tab: AppTab = {
-    id: normalized,
+  return {
+    id: id ?? normalized,
     path: normalized,
     title: titleFromPath(normalized),
   };
+}
+
+function newTabId(): string {
+  return `tab:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Sidebar / in-app navigation: keep tab count, rewrite the active tab. */
+export function replaceActiveTab(
+  tabs: AppTab[],
+  activeId: string,
+  path: string,
+): { tabs: AppTab[]; activeId: string } {
+  const normalized = normalizePath(path);
+  if (tabs.length === 0) {
+    const tab = makeTab(normalized);
+    return { tabs: [tab], activeId: tab.id };
+  }
+  const active = tabs.find((tab) => tab.id === activeId) ?? tabs[0]!;
+  if (active.path === normalized) return { tabs, activeId: active.id };
+  return {
+    tabs: tabs.map((tab) =>
+      tab.id === active.id ? { ...tab, path: normalized, title: titleFromPath(normalized) } : tab,
+    ),
+    activeId: active.id,
+  };
+}
+
+/** Only the + control and Mod+T create a tab. */
+export function openNewTab(tabs: AppTab[], path = "/"): { tabs: AppTab[]; activeId: string } {
+  const tab = makeTab(path, newTabId());
   return { tabs: [...tabs, tab], activeId: tab.id };
 }
 
@@ -96,11 +124,15 @@ export function closeTab(
   return { tabs: next, activeId: neighbor?.id ?? "/" };
 }
 
-export function renameTab(tabs: AppTab[], path: string, title: string): AppTab[] {
+export function renameTab(tabs: AppTab[], path: string, title: string, activeId?: string): AppTab[] {
   const normalized = normalizePath(path);
   const nextTitle = title.trim();
   if (!nextTitle) return tabs;
-  return tabs.map((tab) => (tab.path === normalized ? { ...tab, title: nextTitle } : tab));
+  const target =
+    (activeId ? tabs.find((tab) => tab.id === activeId && tab.path === normalized) : undefined) ??
+    tabs.find((tab) => tab.path === normalized);
+  if (!target) return tabs;
+  return tabs.map((tab) => (tab.id === target.id ? { ...tab, title: nextTitle } : tab));
 }
 
 export function activePath(tabs: AppTab[], activeId: string): string {

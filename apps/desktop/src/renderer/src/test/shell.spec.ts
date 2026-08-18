@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closeTab, titleFromPath, upsertTab } from "../lib/coordy/tab-path";
+import { closeTab, openNewTab, replaceActiveTab, titleFromPath } from "../lib/coordy/tab-path";
 import { matchShortcut, modifierSymbol } from "../lib/coordy/shortcuts";
 import { filterIssues, issuesInColumn, taskIdentifier } from "../lib/coordy/issues";
 import { canGoBack, canGoForward, emptyHistory, historyBack, historyForward, recordVisit } from "../lib/coordy/nav-history";
@@ -48,23 +48,31 @@ describe("issue identifiers and filters", () => {
 });
 
 describe("tabs", () => {
-  it("opens a new tab for a new path and reuses an existing one", () => {
-    const first = upsertTab([], "/board");
+  it("rewrites the active tab instead of stacking sidebar destinations", () => {
+    const first = replaceActiveTab([], "/", "/board");
     expect(first.tabs).toHaveLength(1);
     expect(first.tabs[0]?.title).toBe("任务");
-    const second = upsertTab(first.tabs, "/board/task_1");
-    expect(second.tabs).toHaveLength(2);
+    const second = replaceActiveTab(first.tabs, first.activeId, "/projects");
+    expect(second.tabs).toHaveLength(1);
+    expect(second.tabs[0]?.title).toBe("项目");
+    const issue = replaceActiveTab(second.tabs, second.activeId, "/board/task_1");
+    expect(issue.tabs).toHaveLength(1);
     expect(titleFromPath("/agents/new")).toBe("创建智能体");
     expect(titleFromPath("/agents/new/blank")).toBe("创建智能体");
     expect(titleFromPath("/agents/new/ai")).toBe("创建智能体");
     expect(titleFromPath("/agents/new/ai/session-1")).toBe("创建智能体");
-    const reused = upsertTab(second.tabs, "/board");
-    expect(reused.tabs).toHaveLength(2);
-    expect(reused.activeId).toBe("/board");
+  });
+
+  it("only adds a tab when opening one explicitly", () => {
+    const first = replaceActiveTab([], "/", "/board");
+    const added = openNewTab(first.tabs, "/");
+    expect(added.tabs).toHaveLength(2);
+    expect(added.tabs[1]?.title).toBe("开始");
+    expect(added.activeId).not.toBe(first.activeId);
   });
 
   it("closes a tab and reseeds home when it is the last one", () => {
-    const opened = upsertTab([], "/settings");
+    const opened = replaceActiveTab([], "/", "/settings");
     const closed = closeTab(opened.tabs, opened.activeId, opened.activeId);
     expect(closed.tabs[0]?.path).toBe("/");
     expect(closed.activeId).toBe("/");

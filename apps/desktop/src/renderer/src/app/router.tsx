@@ -65,6 +65,7 @@ export function AppRouter() {
           <Route path="/agents/new/blank" element={<ManualCreateAgentPage />} />
           <Route path="/agents/new/ai" element={<AiCreateAgentPage />} />
           <Route path="/agents/new/ai/:sessionId" element={<AiBuilderSessionPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route element={<PaddedCanvas />}>
           <Route path="/" element={<HomePage />} />
@@ -80,7 +81,6 @@ export function AppRouter() {
           <Route path="/conflicts" element={<ConflictsPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>
     </Routes>

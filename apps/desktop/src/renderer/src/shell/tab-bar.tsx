@@ -8,8 +8,13 @@ export function TabStrip() {
   const tabs = useTabStore((s) => s.tabs);
   const activeId = useTabStore((s) => s.activeId);
 
-  const open = (path: string) => {
-    useTabStore.getState().ensure(path);
+  const select = (id: string) => {
+    const path = useTabStore.getState().activate(id);
+    navigate(path);
+  };
+
+  const addTab = () => {
+    const path = useTabStore.getState().openNew("/");
     navigate(path);
   };
 
@@ -33,7 +38,7 @@ export function TabStrip() {
               <button
                 type="button"
                 title={tab.title}
-                onClick={() => open(tab.path)}
+                onClick={() => select(tab.id)}
                 onAuxClick={(event) => {
                   if (event.button !== 1 || !canClose) return;
                   event.preventDefault();
@@ -78,7 +83,7 @@ export function TabStrip() {
         aria-label="新标签页"
         title="新标签页"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-        onClick={() => open("/board")}
+        onClick={addTab}
       >
         <Plus />
       </Button>

@@ -4,29 +4,100 @@ import {
   Button,
   Input,
   Label,
-  PageHeader,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
   Switch,
+  Textarea,
+  cn,
 } from "@coordy/ui";
-import { useState } from "react";
+import {
+  Bell,
+  FolderGit2,
+  Keyboard,
+  KeyRound,
+  ListTodo,
+  MessageCircle,
+  Plug,
+  RefreshCw,
+  Server,
+  Settings as SettingsIcon,
+  SlidersHorizontal,
+  Tags,
+  User,
+  Users,
+  FlaskConical,
+  Zap,
+  type LucideIcon,
+} from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
-import { modifierSymbol } from "../lib/coordy/shortcuts";
+import { ISSUE_BOARD_COLUMNS, PRIORITY_ITEMS } from "../lib/coordy/issues";
+import {
+  agentDisplayName,
+  inboxKindLabel,
+  listableAgents,
+} from "../lib/coordy/labels";
+import { modifierSymbol as shortcutMod } from "../lib/coordy/shortcuts";
+import {
+  asAccount,
+  asAgents,
+  asComputers,
+  asLabels,
+  asPrincipals,
+  asWorkspace,
+  asWorkspaces,
+} from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { applyTheme, useThemeStore, type ThemePreference } from "../state/theme-store";
 
-const TABS = [
-  ["general", "通用"],
-  ["appearance", "外观"],
-  ["shortcuts", "快捷键"],
-  ["secrets", "密钥"],
-  ["about", "关于"],
+const ABOUT_KEY = "coordy.profile.about";
+
+const ACCOUNT_TABS = [
+  { id: "profile", label: "个人资料", icon: User },
+  { id: "preferences", label: "偏好设置", icon: SlidersHorizontal },
+  { id: "shortcuts", label: "快捷键", icon: Keyboard },
+  { id: "issue", label: "任务", icon: ListTodo },
+  { id: "chat", label: "聊天", icon: MessageCircle },
+  { id: "notifications", label: "通知", icon: Bell },
+  { id: "tokens", label: "API Token", icon: KeyRound },
+  { id: "daemon", label: "Daemon", icon: Server },
+  { id: "updates", label: "更新", icon: RefreshCw },
 ] as const;
 
-type SettingsTab = (typeof TABS)[number][0];
+const WORKSPACE_TABS = [
+  { id: "general", label: "常规", icon: SettingsIcon },
+  { id: "repositories", label: "代码仓库", icon: FolderGit2 },
+  { id: "github", label: "GitHub", icon: FolderGit2 },
+  { id: "integrations", label: "集成", icon: Plug },
+  { id: "labs", label: "实验室", icon: FlaskConical },
+  { id: "members", label: "成员", icon: Users },
+  { id: "labels", label: "标签", icon: Tags },
+  { id: "properties", label: "属性", icon: SlidersHorizontal },
+  { id: "quick_actions", label: "快捷操作", icon: Zap },
+  { id: "mcp", label: "MCP", icon: Server },
+] as const;
+
+type SettingsTab = (typeof ACCOUNT_TABS)[number]["id"] | (typeof WORKSPACE_TABS)[number]["id"];
+
+const ALL_TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [...ACCOUNT_TABS, ...WORKSPACE_TABS];
+
+const NOTICE_KINDS = [
+  "assignment",
+  "mention",
+  "comment",
+  "status",
+  "priority",
+  "date",
+  "agent_failed",
+  "automation",
+  "action_gate",
+  "pause",
+  "drift",
+] as const;
 
 const THEMES: { id: ThemePreference; label: string; hint: string }[] = [
   { id: "light", label: "浅色", hint: "浅色界面" },
@@ -34,35 +105,468 @@ const THEMES: { id: ThemePreference; label: string; hint: string }[] = [
   { id: "system", label: "跟随系统", hint: "跟操作系统一致" },
 ];
 
+function isSettingsTab(value: string | null): value is SettingsTab {
+  return ALL_TABS.some((item) => item.id === value);
+}
+
+function readAbout(): string {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(ABOUT_KEY) ?? "";
+}
+
+function initials(name: string): string {
+  const trimmed = name.trim() || "我";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
+  return Array.from(trimmed).slice(0, 2).join("");
+}
+
 export function SettingsPage() {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get("tab");
+  const tab: SettingsTab = isSettingsTab(raw) ? raw : "profile";
   const workspaceId = useSession((s) => s.workspaceId);
+  const principalId = useSession((s) => s.principalId);
   const qc = useQueryClient();
-  const [tab, setTab] = useState<SettingsTab>("general");
-  const q = useQuery({
+
+  const setTab = (id: SettingsTab) => {
+    setParams({ tab: id }, { replace: true });
+  };
+
+  return (
+    <section className="flex h-full min-h-0">
+      <nav className="flex w-[13.5rem] shrink-0 flex-col gap-4 overflow-auto border-r border-border px-3 py-4">
+        <SettingsNavGroup title="我的账号" items={ACCOUNT_TABS} tab={tab} onSelect={setTab} />
+        <WorkspaceNavGroup tab={tab} onSelect={setTab} />
+      </nav>
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto px-8 py-6">
+        <SettingsPane tab={tab} workspaceId={workspaceId} principalId={principalId} invalidate={() => qc.invalidateQueries()} />
+      </div>
+    </section>
+  );
+}
+
+function SettingsNavGroup({
+  title,
+  items,
+  tab,
+  onSelect,
+}: {
+  title: string;
+  items: readonly { id: SettingsTab; label: string; icon: LucideIcon }[];
+  tab: SettingsTab;
+  onSelect: (id: SettingsTab) => void;
+}) {
+  return (
+    <div>
+      <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">{title}</p>
+      <div className="flex flex-col gap-0.5">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={cn(
+              "flex h-8 items-center gap-2 rounded-md px-2 text-sm",
+              tab === item.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+            onClick={() => onSelect(item.id)}
+          >
+            <item.icon className="size-3.5" />
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WorkspaceNavGroup({ tab, onSelect }: { tab: SettingsTab; onSelect: (id: SettingsTab) => void }) {
+  const workspaceId = useSession((s) => s.workspaceId);
+  const workspaces = useQuery({
+    queryKey: ["workspaces-settings"],
+    queryFn: () => view({ type: "Workspaces" }),
+  });
+  const name = asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)?.name ?? "coordy";
+  return <SettingsNavGroup title={name} items={WORKSPACE_TABS} tab={tab} onSelect={onSelect} />;
+}
+
+function SettingsPane({
+  tab,
+  workspaceId,
+  principalId,
+  invalidate,
+}: {
+  tab: SettingsTab;
+  workspaceId: string | null;
+  principalId: string | null;
+  invalidate: () => void;
+}) {
+  const settings = useQuery({
     queryKey: ["settings", workspaceId],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Settings", workspace_id: workspaceId! }),
   });
+  const workspace = useQuery({
+    queryKey: ["view", { type: "Workspace", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId),
+    queryFn: () => view({ type: "Workspace", workspace_id: workspaceId! }),
+  });
+  const account = useQuery({
+    queryKey: ["view", { type: "Account" }, principalId],
+    enabled: Boolean(principalId),
+    queryFn: () => view({ type: "Account" }),
+  });
+  const principals = useQuery({
+    queryKey: ["view", { type: "Principals", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId),
+    queryFn: () => view({ type: "Principals", workspace_id: workspaceId! }),
+  });
+  const labels = useQuery({
+    queryKey: ["view", { type: "Labels", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId) && tab === "labels",
+    queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
+  });
+  const computers = useQuery({
+    queryKey: ["view", { type: "Computers", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId) && tab === "daemon",
+    queryFn: () => view({ type: "Computers", workspace_id: workspaceId! }),
+  });
+  const agents = useQuery({
+    queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId) && (tab === "mcp" || tab === "chat"),
+    queryFn: () => view({ type: "Agents", workspace_id: workspaceId! }),
+  });
   const secrets = useQuery({
     queryKey: ["secrets"],
+    enabled: tab === "tokens",
     queryFn: () => window.coordy.secretsStatus(),
   });
-  const appInfoQuery = useQuery({
+  const appInfo = useQuery({
     queryKey: ["app-info"],
     queryFn: () => window.coordy.getAppInfo(),
   });
+
+  const ws = asWorkspace(workspace.data);
+  const people = asPrincipals(principals.data);
+  const me = asAccount(account.data);
+  const person = people.find((item) => item.id === principalId);
+  const name = me?.name || person?.name || "我";
+  const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : ws?.repo_path;
+  const enabled = settings.data?.type === "Settings" ? settings.data.llm_advisor_enabled : false;
+  const daemon = settings.data?.type === "Settings" ? settings.data.daemon : undefined;
+  const noticeKinds = settings.data?.type === "Settings" ? (settings.data.notification_kinds ?? []) : [];
+  const info = appInfo.data;
+  const mod = shortcutMod(info?.os);
+
+  switch (tab) {
+    case "profile":
+      return <ProfilePane name={name} />;
+    case "preferences":
+      return <PreferencesPane />;
+    case "shortcuts":
+      return <ShortcutsPane mod={mod} />;
+    case "issue":
+      return (
+        <Pane title="任务" description="看板列和优先级是 Coordy 内置的，不能像云产品那样自定义工作流引擎。">
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {ISSUE_BOARD_COLUMNS.map((column) => (
+              <li key={column.id} className="rounded-lg border border-border px-3 py-2 text-sm">
+              {column.title}
+              </li>
+            ))}
+          </ul>
+          <div className="pt-4">
+            <h3 className="mb-2 text-sm font-medium">优先级</h3>
+            <p className="text-sm text-muted-foreground">{Object.values(PRIORITY_ITEMS).join(" · ")}</p>
+          </div>
+        </Pane>
+      );
+    case "chat":
+      return (
+        <Pane title="聊天" description="右下角悬浮窗走 Coordy 的 CreateChat / SendChatMessage，不会打开浏览器页。">
+          <p className="text-sm text-muted-foreground">
+            {mod}+J 开关悬浮聊天。聊天对应的 task 带 chat 标签，不会进看板。
+          </p>
+          {listableAgents(asAgents(agents.data)).length === 0 ? (
+            <p className="text-sm text-muted-foreground">还没有智能体，聊天窗里会提示先新建一个。</p>
+          ) : (
+            <p className="text-sm">可聊对象：{listableAgents(asAgents(agents.data)).map((agent) => agentDisplayName(agent)).join("、")}</p>
+          )}
+        </Pane>
+      );
+    case "notifications":
+      return (
+        <NotificationsPane
+          kinds={noticeKinds}
+          disabled={!workspaceId}
+          onSave={(next) => {
+            if (!workspaceId) return;
+            void submit({ type: "SetNotificationPrefs", workspace_id: workspaceId, kinds: next }).then(invalidate);
+          }}
+        />
+      );
+    case "tokens":
+      return <TokensPane status={secrets.data} />;
+    case "daemon":
+      return (
+        <Pane title="Daemon" description="coordyd 跑在这台电脑里，Unix socket，不走 localhost TCP。">
+          <Row label="状态" hint={daemon ? `${daemon.status} · pid ${daemon.pid}` : "还没读到"}>
+            <Badge variant={daemon?.status === "ok" ? "secondary" : "outline"}>{daemon?.status ?? "未知"}</Badge>
+          </Row>
+          <Row label="协议" hint={daemon?.protocol_version}>
+            <span className="text-sm">{daemon?.version ?? "…"}</span>
+          </Row>
+          <div className="space-y-2 pt-2">
+            <h3 className="text-sm font-medium">这台电脑</h3>
+            {asComputers(computers.data).length === 0 ? (
+              <p className="text-sm text-muted-foreground">还没登记。登记后智能体可以按机器限流。</p>
+            ) : (
+              asComputers(computers.data).map((item) => (
+                <p key={item.id} className="text-sm">
+                  {item.name}
+                  {item.online ? " · 在线" : " · 离线"}
+                </p>
+              ))
+            )}
+            <Button
+              variant="secondary"
+              disabled={!workspaceId}
+              onClick={() => {
+                if (!workspaceId) return;
+                void submit({
+                  type: "RegisterComputer",
+                  workspace_id: workspaceId,
+                  name: `本机 (${info?.os ?? "desktop"})`,
+                  kind: "desktop",
+                }).then(invalidate);
+              }}
+            >
+              登记这台电脑
+            </Button>
+          </div>
+        </Pane>
+      );
+    case "updates":
+      return (
+        <Pane title="更新" description="这是本机构建，没有应用商店更新通道。">
+          <p className="text-sm">Coordy {info?.version ?? "…"}</p>
+          <p className="text-sm text-muted-foreground">
+            {info ? `${info.os}${info.cliPath ? ` · ${info.cliPath}` : ""}` : "读取应用信息…"}
+          </p>
+          <InstallCliButton />
+        </Pane>
+      );
+    case "general":
+      return <GeneralPane workspaceId={workspaceId} workspace={ws} onSaved={invalidate} />;
+    case "repositories":
+      return (
+        <Pane title="代码仓库" description="绑定本机目录。智能体在这个目录里干活，路径不会上传。">
+          <p className="text-sm">{repoPath ?? "还没绑定"}</p>
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              const path = await window.coordy.chooseRepository();
+              if (path && workspaceId) {
+                await submit({ type: "BindRepository", workspace_id: workspaceId, path });
+                invalidate();
+              }
+            }}
+          >
+            选择文件夹
+          </Button>
+        </Pane>
+      );
+    case "github":
+      return (
+        <Pane title="GitHub" description="Coordy 不登录 GitHub 账号，也没有 OAuth。">
+          <p className="text-sm text-muted-foreground">
+            事项上可以挂 PR 编号和链接（LinkPullRequest）。仓库本身用左边「代码仓库」选本机文件夹。
+          </p>
+        </Pane>
+      );
+    case "integrations":
+      return (
+        <Pane title="集成" description="没有 Slack / 飞书 / 企微云通道。">
+          <p className="text-sm text-muted-foreground">
+            侧栏底部可以打开 Discord。密钥在「API Token」。可选 LLM 顾问在「实验室」。
+          </p>
+        </Pane>
+      );
+    case "labs":
+      return (
+        <Pane title="实验室" description="顾问不能提交状态；确定性门禁始终开着。">
+          <Row label="可选 LLM 顾问" hint="只做建议，不能 commit。">
+            <Switch
+              checked={enabled}
+              onCheckedChange={(next) => {
+                if (!workspaceId) return;
+                void submit({
+                  type: "SetSettings",
+                  workspace_id: workspaceId,
+                  llm_advisor_enabled: Boolean(next),
+                }).then(invalidate);
+              }}
+            />
+          </Row>
+        </Pane>
+      );
+    case "members":
+      return <MembersPane workspaceId={workspaceId} people={people} onSaved={invalidate} />;
+    case "labels":
+      return <LabelsPane workspaceId={workspaceId} items={asLabels(labels.data)} onSaved={invalidate} />;
+    case "properties":
+      return <PropertiesPane workspaceId={workspaceId} onSaved={invalidate} />;
+    case "quick_actions":
+      return (
+        <Pane title="快捷操作" description="Coordy 用命令面板，没有云端工作流按钮。">
+          <ShortcutRow keys={`${mod}K`} action="搜索 / 命令面板" />
+          <ShortcutRow keys="C" action="新建任务" />
+          <ShortcutRow keys={`${mod}J`} action="开关悬浮聊天" />
+          <p className="pt-2 text-sm text-muted-foreground">在面板里也可以新建智能体、小队、项目、自动化和 Skill。</p>
+        </Pane>
+      );
+    case "mcp":
+      return <McpPane workspaceId={workspaceId} agents={listableAgents(asAgents(agents.data))} onSaved={invalidate} />;
+    default:
+      return null;
+  }
+}
+
+function Pane({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return (
+    <div className="mx-auto max-w-3xl space-y-6">
+      <header>
+        <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
+        {description ? <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p> : null}
+      </header>
+      {children}
+    </div>
+  );
+}
+
+function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2 border-b border-border py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <p className="text-sm font-medium">{label}</p>
+        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      </div>
+      <div className="sm:max-w-sm sm:flex-1 sm:text-right">{children}</div>
+    </div>
+  );
+}
+
+function ProfilePane({ name }: { name: string }) {
+  const [about, setAbout] = useState(readAbout);
+  return (
+    <Pane title="个人资料" description="名字来自当前工作区成员。Coordy 没有单独的云账号资料表。">
+      <Row label="头像">
+        <span className="inline-flex size-12 items-center justify-center rounded-full bg-emerald-600 text-sm font-medium text-white">
+          {initials(name)}
+        </span>
+      </Row>
+      <Row label="姓名" hint="改名需要内核提供 UpdatePrincipal，当前版本只能显示。">
+        <Input value={name} readOnly />
+      </Row>
+      <div className="space-y-1.5">
+        <Label htmlFor="about-you">关于你</Label>
+        <Textarea
+          id="about-you"
+          rows={4}
+          value={about}
+          placeholder="写一点你希望智能体知道的背景。现在只存在这台电脑，还不会自动塞进提示词。"
+          onChange={(event) => {
+            setAbout(event.target.value);
+            window.localStorage.setItem(ABOUT_KEY, event.target.value);
+          }}
+        />
+      </div>
+    </Pane>
+  );
+}
+
+function PreferencesPane() {
   const preference = useThemeStore((s) => s.preference);
   const setPreference = useThemeStore((s) => s.setPreference);
+  return (
+    <Pane title="偏好设置" description="外观留在这台电脑。">
+      <div>
+        <Label>主题</Label>
+        <div className="mt-2 grid gap-2 sm:grid-cols-3">
+          {THEMES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={cn(
+                "rounded-xl border px-3 py-3 text-left",
+                preference === item.id ? "border-foreground bg-muted/60" : "border-border hover:bg-muted/40",
+              )}
+              onClick={() => {
+                setPreference(item.id);
+                applyTheme(item.id);
+              }}
+            >
+              <p className="text-sm font-medium">{item.label}</p>
+              <p className="text-xs text-muted-foreground">{item.hint}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+      <Row label="语言" hint="当前版本只提供简体中文。">
+        <span className="text-sm">简体中文</span>
+      </Row>
+    </Pane>
+  );
+}
+
+function ShortcutsPane({ mod }: { mod: string }) {
+  return (
+    <Pane title="快捷键" description="在输入框里打字时，单键快捷键不会触发。">
+      <ShortcutRow keys={`${mod}K`} action="打开搜索" />
+      <ShortcutRow keys="C" action="新建任务" />
+      <ShortcutRow keys={`${mod}B`} action="收起或展开侧栏" />
+      <ShortcutRow keys={`${mod}J`} action="开关悬浮聊天" />
+      <ShortcutRow keys={`${mod}T`} action="新标签页" />
+      <ShortcutRow keys={`${mod}W`} action="关闭当前标签页" />
+    </Pane>
+  );
+}
+
+function NotificationsPane({
+  kinds,
+  disabled,
+  onSave,
+}: {
+  kinds: string[];
+  disabled: boolean;
+  onSave: (kinds: string[]) => void;
+}) {
+  const selected = kinds.length === 0 ? new Set<string>(NOTICE_KINDS) : new Set(kinds);
+  const toggle = (kind: string, on: boolean) => {
+    const next = new Set(selected);
+    if (on) next.add(kind);
+    else next.delete(kind);
+    const allOn = NOTICE_KINDS.every((item) => next.has(item));
+    onSave(allOn ? [] : NOTICE_KINDS.filter((item) => next.has(item)));
+  };
+  return (
+    <Pane title="通知" description="这些开关只影响收件箱写入，不会向操作系统发推送。">
+      {NOTICE_KINDS.map((kind) => (
+        <Row key={kind} label={inboxKindLabel(kind)} hint={kind}>
+          <Switch checked={selected.has(kind)} disabled={disabled} onCheckedChange={(on) => toggle(kind, Boolean(on))} />
+        </Row>
+      ))}
+    </Pane>
+  );
+}
+
+function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?: string | null } }) {
+  const qc = useQueryClient();
   const [provider, setProvider] = useState("openai");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [notice, setNotice] = useState("");
-  const enabled = q.data?.type === "Settings" ? q.data.llm_advisor_enabled : false;
-  const status = secrets.data;
-  const info = appInfoQuery.data;
-  const repoPath = q.data?.type === "Settings" ? q.data.repo_path : null;
-
-  const saveSecrets = useMutation({
+  const save = useMutation({
     mutationFn: () =>
       window.coordy.setSecret({
         provider,
@@ -76,207 +580,317 @@ export function SettingsPage() {
     },
     onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
   });
-
   return (
-    <section className="space-y-4">
-      <PageHeader title="设置" description="外观、工作区和密钥都留在这台电脑。密钥不会进数据库，也不会进内核命令。" />
-      <div className="grid gap-6 md:grid-cols-[11rem_minmax(0,1fr)]">
-        <nav className="flex gap-1 md:flex-col">
-          {TABS.map(([id, label]) => (
-            <Button
-              key={id}
-              type="button"
-              variant={tab === id ? "secondary" : "ghost"}
-              className="justify-start"
-              onClick={() => setTab(id)}
-            >
-              {label}
-            </Button>
-          ))}
-        </nav>
-        <div className="space-y-6">
-          {tab === "general" ? (
-            <div className="space-y-5">
-              <div className="space-y-1.5">
-                <Label>工作区</Label>
-                <p className="text-sm">Local</p>
-                <p className="text-sm text-muted-foreground">本机工作区。绑定仓库后，任务会在这个目录里执行。</p>
-              </div>
-              <div className="space-y-1.5">
-                <Label>仓库</Label>
-                <p className="text-sm text-muted-foreground">{repoPath ?? "还没绑定"}</p>
-                <Button
-                  variant="secondary"
-                  onClick={async () => {
-                    const path = await window.coordy.chooseRepository();
-                    if (path && workspaceId) {
-                      await submit({ type: "BindRepository", workspace_id: workspaceId, path });
-                      await qc.invalidateQueries();
-                    }
-                  }}
-                >
-                  选择文件夹
-                </Button>
-              </div>
-              <div className="flex items-center justify-between gap-4 rounded-xl border border-border px-3 py-3">
-                <div>
-                  <Label htmlFor="llm-advisor">可选 LLM 顾问</Label>
-                  <p className="text-sm text-muted-foreground">顾问不能提交状态；确定性门禁始终开着。</p>
-                </div>
-                <Switch
-                  id="llm-advisor"
-                  checked={enabled}
-                  onCheckedChange={(next) => {
-                    if (workspaceId) {
-                      void submit({
-                        type: "SetSettings",
-                        workspace_id: workspaceId,
-                        llm_advisor_enabled: Boolean(next),
-                      }).then(() => qc.invalidateQueries({ queryKey: ["settings", workspaceId] }));
-                    }
-                  }}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>语言</Label>
-                <p className="text-sm">简体中文</p>
-                <p className="text-sm text-muted-foreground">当前版本只提供简体中文。</p>
-              </div>
-            </div>
-          ) : null}
-
-          {tab === "appearance" ? (
-            <div className="space-y-3">
-              <div>
-                <Label>主题</Label>
-                <p className="text-sm text-muted-foreground">浅色、深色，或跟随系统。</p>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {THEMES.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={[
-                      "rounded-xl border px-3 py-3 text-left",
-                      preference === item.id ? "border-foreground bg-muted/60" : "border-border hover:bg-muted/40",
-                    ].join(" ")}
-                    onClick={() => {
-                      setPreference(item.id);
-                      applyTheme(item.id);
-                    }}
-                  >
-                    <p className="text-sm font-medium">{item.label}</p>
-                    <p className="text-xs text-muted-foreground">{item.hint}</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {tab === "shortcuts" ? (
-            <div className="space-y-3">
-              <div>
-                <Label>快捷键</Label>
-                <p className="text-sm text-muted-foreground">在输入框里打字时，单键快捷键不会触发。</p>
-              </div>
-              <ShortcutRow keys={`${modifierSymbol(info?.os)}K`} action="打开搜索" />
-              <ShortcutRow keys="C" action="新建任务" />
-              <ShortcutRow keys={`${modifierSymbol(info?.os)}B`} action="收起或展开侧栏" />
-              <ShortcutRow keys={`${modifierSymbol(info?.os)}T`} action="打开任务标签页" />
-              <ShortcutRow keys={`${modifierSymbol(info?.os)}W`} action="关闭当前标签页" />
-            </div>
-          ) : null}
-
-          {tab === "secrets" ? (
-            <div className="space-y-4">
-              <div className="flex items-center gap-2 text-sm">
-                {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                写进本机 0600 文件。启动子进程时注入 OPENAI_API_KEY / ANTHROPIC_API_KEY，不会进 SQLite。
-              </p>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label>服务商</Label>
-                  <Select
-                    value={provider}
-                    items={{ openai: "OpenAI 兼容", anthropic: "Anthropic", custom: "自定义" }}
-                    onValueChange={(value) => value && setProvider(value)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="openai">OpenAI 兼容</SelectItem>
-                      <SelectItem value="anthropic">Anthropic</SelectItem>
-                      <SelectItem value="custom">自定义</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="settings-key">API 密钥</Label>
-                  <Input
-                    id="settings-key"
-                    type="password"
-                    autoComplete="off"
-                    placeholder={status?.key_configured ? "已保存，留空则保持" : "sk-…"}
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5 md:col-span-2">
-                  <Label htmlFor="settings-base">接口地址</Label>
-                  <Input
-                    id="settings-base"
-                    placeholder={status?.base_url ?? "https://api.openai.com/v1"}
-                    value={baseUrl}
-                    onChange={(event) => setBaseUrl(event.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={() => saveSecrets.mutate()} disabled={saveSecrets.isPending}>
-                  保存
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={async () => {
-                    await window.coordy.clearSecret();
-                    setNotice("已清除本机密钥。");
-                    await qc.invalidateQueries({ queryKey: ["secrets"] });
-                  }}
-                >
-                  清除密钥
-                </Button>
-              </div>
-              {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
-            </div>
-          ) : null}
-
-          {tab === "about" ? (
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <Label>应用</Label>
-                <p className="text-sm">Coordy {info?.version ?? "…"}</p>
-                <p className="text-sm text-muted-foreground">
-                  {info ? `${info.os}${info.cliPath ? ` · ${info.cliPath}` : ""}` : "读取应用信息…"}
-                </p>
-              </div>
-              <Button
-                variant="secondary"
-                onClick={async () => {
-                  const result = await window.coordy.installCli();
-                  setNotice(result.message);
-                }}
-              >
-                安装命令行
-              </Button>
-              {notice && tab === "about" ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
-            </div>
-          ) : null}
+    <Pane title="API Token" description="写进本机 0600 文件。启动子进程时注入环境变量，不会进 SQLite。">
+      <div className="flex items-center gap-2 text-sm">
+        {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
+      </div>
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>服务商</Label>
+          <Select
+            value={provider}
+            items={{ openai: "OpenAI 兼容", anthropic: "Anthropic", custom: "自定义" }}
+            onValueChange={(value) => value && setProvider(value)}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="openai">OpenAI 兼容</SelectItem>
+              <SelectItem value="anthropic">Anthropic</SelectItem>
+              <SelectItem value="custom">自定义</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="settings-key">API 密钥</Label>
+          <Input
+            id="settings-key"
+            type="password"
+            autoComplete="off"
+            placeholder={status?.key_configured ? "已保存，留空则保持" : "sk-…"}
+            value={apiKey}
+            onChange={(event) => setApiKey(event.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5 md:col-span-2">
+          <Label htmlFor="settings-base">接口地址</Label>
+          <Input
+            id="settings-base"
+            placeholder={status?.base_url ?? "https://api.openai.com/v1"}
+            value={baseUrl}
+            onChange={(event) => setBaseUrl(event.target.value)}
+          />
         </div>
       </div>
-    </section>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => save.mutate()} disabled={save.isPending}>
+          保存
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={async () => {
+            await window.coordy.clearSecret();
+            setNotice("已清除本机密钥。");
+            await qc.invalidateQueries({ queryKey: ["secrets"] });
+          }}
+        >
+          清除密钥
+        </Button>
+      </div>
+      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+    </Pane>
+  );
+}
+
+function GeneralPane({
+  workspaceId,
+  workspace,
+  onSaved,
+}: {
+  workspaceId: string | null;
+  workspace: ReturnType<typeof asWorkspace>;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(workspace?.name ?? "");
+  const [description, setDescription] = useState(workspace?.description ?? "");
+  const [prefix, setPrefix] = useState(workspace?.issue_prefix ?? "COOR");
+  useEffect(() => {
+    setName(workspace?.name ?? "");
+    setDescription(workspace?.description ?? "");
+    setPrefix(workspace?.issue_prefix ?? "COOR");
+  }, [workspace?.id, workspace?.name, workspace?.description, workspace?.issue_prefix]);
+  const dirty = name !== (workspace?.name ?? "") || description !== (workspace?.description ?? "") || prefix !== (workspace?.issue_prefix ?? "COOR");
+  return (
+    <Pane title="常规" description="工作区名字和事项前缀存在本机内核里。">
+      <div className="space-y-1.5">
+        <Label htmlFor="ws-name">名称</Label>
+        <Input id="ws-name" value={name} onChange={(event) => setName(event.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="ws-desc">说明</Label>
+        <Textarea id="ws-desc" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="ws-prefix">事项前缀</Label>
+        <Input id="ws-prefix" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+      </div>
+      <Button
+        disabled={!workspaceId || !dirty || !name.trim()}
+        onClick={() => {
+          if (!workspaceId) return;
+          void submit({
+            type: "UpdateWorkspace",
+            workspace_id: workspaceId,
+            name: name.trim(),
+            description,
+            issue_prefix: prefix.trim() || "COOR",
+          }).then(onSaved);
+        }}
+      >
+        保存
+      </Button>
+    </Pane>
+  );
+}
+
+function MembersPane({
+  workspaceId,
+  people,
+  onSaved,
+}: {
+  workspaceId: string | null;
+  people: ReturnType<typeof asPrincipals>;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <Pane title="成员" description="成员拥有智能体和契约投票权。这是本机工作区名单，不是云账号邀请。">
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!workspaceId || !name.trim()) return;
+          void submit({ type: "CreatePrincipal", workspace_id: workspaceId, name: name.trim() }).then(() => {
+            setName("");
+            onSaved();
+          });
+        }}
+      >
+        <Input placeholder="姓名" value={name} onChange={(event) => setName(event.target.value)} />
+        <Button type="submit">添加</Button>
+      </form>
+      {people.length === 0 ? (
+        <p className="text-sm text-muted-foreground">还没有成员。</p>
+      ) : (
+        people.map((person) => (
+          <p key={person.id} className="border-b border-border py-2 text-sm">
+            {person.name}
+            {person.role ? <span className="ml-2 text-xs text-muted-foreground">{person.role}</span> : null}
+          </p>
+        ))
+      )}
+    </Pane>
+  );
+}
+
+function LabelsPane({
+  workspaceId,
+  items,
+  onSaved,
+}: {
+  workspaceId: string | null;
+  items: ReturnType<typeof asLabels>;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  return (
+    <Pane title="标签" description="工作区标签可以打在事项上。">
+      <form
+        className="flex gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!workspaceId || !name.trim()) return;
+          void submit({ type: "CreateLabel", workspace_id: workspaceId, name: name.trim() }).then(() => {
+            setName("");
+            onSaved();
+          });
+        }}
+      >
+        <Input placeholder="标签名" value={name} onChange={(event) => setName(event.target.value)} />
+        <Button type="submit">添加</Button>
+      </form>
+      {items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">还没有标签。</p>
+      ) : (
+        items.map((item) => (
+          <div key={item.name} className="flex items-center justify-between border-b border-border py-2">
+            <span className="text-sm">{item.name}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!workspaceId}
+              onClick={() => {
+                if (!workspaceId) return;
+                void submit({ type: "DeleteLabel", workspace_id: workspaceId, name: item.name }).then(onSaved);
+              }}
+            >
+              删除
+            </Button>
+          </div>
+        ))
+      )}
+    </Pane>
+  );
+}
+
+function PropertiesPane({ workspaceId, onSaved }: { workspaceId: string | null; onSaved: () => void }) {
+  const [key, setKey] = useState("");
+  const [valueType, setValueType] = useState("text");
+  return (
+    <Pane title="属性" description="事项可以带自定义字段。工作区级定义目前没有独立查询，保存后能写进内核，这页不能列出已有项。">
+      <div className="grid gap-3 sm:grid-cols-[1fr_8rem_auto]">
+        <Input placeholder="字段名" value={key} onChange={(event) => setKey(event.target.value)} />
+        <Select
+          value={valueType}
+          items={{ text: "文本", number: "数字", date: "日期" }}
+          onValueChange={(value) => value && setValueType(value)}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="text">文本</SelectItem>
+            <SelectItem value="number">数字</SelectItem>
+            <SelectItem value="date">日期</SelectItem>
+          </SelectContent>
+        </Select>
+        <Button
+          disabled={!workspaceId || !key.trim()}
+          onClick={() => {
+            if (!workspaceId) return;
+            void submit({
+              type: "SetCustomPropertyDef",
+              workspace_id: workspaceId,
+              key: key.trim(),
+              value_type: valueType,
+            }).then(() => {
+              setKey("");
+              onSaved();
+            });
+          }}
+        >
+          保存定义
+        </Button>
+      </div>
+    </Pane>
+  );
+}
+
+function McpPane({
+  workspaceId,
+  agents,
+  onSaved,
+}: {
+  workspaceId: string | null;
+  agents: ReturnType<typeof listableAgents>;
+  onSaved: () => void;
+}) {
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  return (
+    <Pane title="MCP" description="MCP 服务器挂在智能体上，不是工作区全局插件市场。">
+      {agents.length === 0 ? (
+        <p className="text-sm text-muted-foreground">还没有智能体。</p>
+      ) : (
+        agents.map((agent) => {
+          const value = drafts[agent.id] ?? (agent.mcp_servers ?? []).join(", ");
+          return (
+            <div key={agent.id} className="space-y-1.5 border-b border-border py-3">
+              <Label>{agentDisplayName(agent)}</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={value}
+                  placeholder="server-a, server-b"
+                  onChange={(event) => setDrafts((current) => ({ ...current, [agent.id]: event.target.value }))}
+                />
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const servers = value
+                      .split(",")
+                      .map((item) => item.trim())
+                      .filter(Boolean);
+                    void submit({ type: "UpdateAgent", agent_id: agent.id, mcp_servers: servers }).then(onSaved);
+                  }}
+                >
+                  保存
+                </Button>
+              </div>
+            </div>
+          );
+        })
+      )}
+      {workspaceId ? null : <p className="text-sm text-muted-foreground">工作区还没就绪。</p>}
+    </Pane>
+  );
+}
+
+function InstallCliButton() {
+  const [notice, setNotice] = useState("");
+  return (
+    <div className="space-y-2">
+      <Button
+        variant="secondary"
+        onClick={async () => {
+          const result = await window.coordy.installCli();
+          setNotice(result.message);
+        }}
+      >
+        安装命令行
+      </Button>
+      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+    </div>
   );
 }
 

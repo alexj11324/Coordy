@@ -5,7 +5,6 @@ import { useNavigate } from "react-router-dom";
 import { modifierSymbol } from "../lib/coordy/shortcuts";
 import { allNavItems } from "./nav";
 import { useLayoutStore } from "../state/layout-store";
-import { useTabStore } from "../state/tab-store";
 
 type PaletteItem = {
   id: string;
@@ -25,7 +24,6 @@ export function CommandPalette({ os }: { os?: string }) {
 
   const items = useMemo<PaletteItem[]>(() => {
     const go = (path: string) => {
-      useTabStore.getState().ensure(path);
       navigate(path);
       setOpen(false);
     };

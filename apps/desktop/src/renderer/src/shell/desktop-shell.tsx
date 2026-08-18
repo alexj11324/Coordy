@@ -23,7 +23,7 @@ export function DesktopShell() {
   const path = `${location.pathname}${location.search}`;
 
   useLayoutEffect(() => {
-    useTabStore.getState().ensure(path);
+    useTabStore.getState().sync(path);
     useNavHistoryStore.getState().record(path);
   }, [path]);
 

@@ -3,13 +3,14 @@ import {
   activePath,
   closeTab,
   normalizePath,
+  openNewTab,
   renameTab,
+  replaceActiveTab,
   titleFromPath,
-  upsertTab,
   type AppTab,
 } from "../lib/coordy/tab-path";
 
-const STORAGE_KEY = "coordy.tabs";
+const STORAGE_KEY = "coordy.tabs.v2";
 
 function homeTab(): AppTab {
   return { id: "/", path: "/", title: titleFromPath("/") };
@@ -50,7 +51,8 @@ function persist(tabs: AppTab[], activeId: string) {
 type TabState = {
   tabs: AppTab[];
   activeId: string;
-  ensure: (path: string) => void;
+  sync: (path: string) => void;
+  openNew: (path?: string) => string;
   activate: (id: string) => string;
   close: (id: string) => string;
   setTitle: (path: string, title: string) => void;
@@ -61,10 +63,16 @@ export const useTabStore = create<TabState>((set, get) => {
   return {
     tabs: initial.tabs,
     activeId: initial.activeId,
-    ensure: (path) => {
-      const next = upsertTab(get().tabs, path);
+    sync: (path) => {
+      const next = replaceActiveTab(get().tabs, get().activeId, path);
       persist(next.tabs, next.activeId);
       set(next);
+    },
+    openNew: (path = "/") => {
+      const next = openNewTab(get().tabs, path);
+      persist(next.tabs, next.activeId);
+      set(next);
+      return next.tabs.find((tab) => tab.id === next.activeId)?.path ?? "/";
     },
     activate: (id) => {
       const tab = get().tabs.find((item) => item.id === id);
@@ -80,7 +88,7 @@ export const useTabStore = create<TabState>((set, get) => {
       return activePath(next.tabs, next.activeId);
     },
     setTitle: (path, title) => {
-      const tabs = renameTab(get().tabs, normalizePath(path), title);
+      const tabs = renameTab(get().tabs, normalizePath(path), title, get().activeId);
       persist(tabs, get().activeId);
       set({ tabs });
     },
