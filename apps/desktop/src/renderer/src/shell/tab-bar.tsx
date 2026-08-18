@@ -1,9 +1,9 @@
-import { Button, cn, Separator, SidebarTrigger } from "@coordy/ui";
+import { Button, cn } from "@coordy/ui";
 import { Plus, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useTabStore } from "../state/tab-store";
 
-export function TabBar() {
+export function TabStrip() {
   const navigate = useNavigate();
   const tabs = useTabStore((s) => s.tabs);
   const activeId = useTabStore((s) => s.activeId);
@@ -14,17 +14,7 @@ export function TabBar() {
   };
 
   return (
-    <div
-      className="flex h-11 shrink-0 items-stretch gap-1 border-b border-border bg-muted/40 px-1"
-      style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
-    >
-      <SidebarTrigger
-        className="mt-1.5"
-        aria-label="收起或展开侧栏"
-        title="收起或展开侧栏"
-        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-      />
-      <Separator orientation="vertical" className="my-2 data-vertical:h-4 data-vertical:self-auto" />
+    <div className="flex min-h-0 min-w-0 flex-1 items-stretch gap-1">
       <div className="flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.id === activeId;
@@ -51,9 +41,9 @@ export function TabBar() {
                   navigate(next);
                 }}
                 className={cn(
-                  "flex h-full min-w-0 flex-1 items-center gap-1 rounded-t-lg px-2.5 text-left text-sm",
+                  "flex h-full min-w-0 flex-1 items-center gap-1 rounded-md px-2.5 text-left text-sm",
                   active
-                    ? "bg-background font-medium text-foreground shadow-[0_1px_0_0_var(--background)]"
+                    ? "bg-background font-medium text-foreground"
                     : "text-muted-foreground hover:bg-background/70 hover:text-foreground",
                 )}
               >
@@ -84,7 +74,7 @@ export function TabBar() {
         type="button"
         size="icon-sm"
         variant="ghost"
-        className="mt-1.5"
+        className="self-center"
         aria-label="新标签页"
         title="新标签页"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}

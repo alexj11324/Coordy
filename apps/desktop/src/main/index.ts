@@ -4,6 +4,7 @@ import { exec } from "child_process";
 import { IPC } from "../shared/ipc-channels";
 import {
   BROWSER_WINDOW_POLICY,
+  canOpenExternal,
   contentSecurityPolicy,
   validateIpcSender,
 } from "./security/browser-window-policy";
@@ -24,10 +25,19 @@ function createWindow() {
     title: "Coordy",
     backgroundColor: "#fafafa",
     autoHideMenuBar: true,
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 14 } }
+      : {}),
     webPreferences: {
       ...BROWSER_WINDOW_POLICY,
       preload: resolvePreloadPath(__dirname),
     },
+  });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (canOpenExternal(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
   });
   window.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     callback({

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { closeTab, titleFromPath, upsertTab } from "../lib/coordy/tab-path";
 import { matchShortcut, modifierSymbol } from "../lib/coordy/shortcuts";
 import { filterIssues, issuesInColumn, taskIdentifier } from "../lib/coordy/issues";
+import { canGoBack, canGoForward, emptyHistory, historyBack, historyForward, recordVisit } from "../lib/coordy/nav-history";
 import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
 import type { TaskView } from "@coordy/protocol";
 
@@ -80,5 +81,25 @@ describe("shortcuts", () => {
   it("ignores composing and modifier-only C", () => {
     expect(matchShortcut({ key: "c", metaKey: true, ctrlKey: false, altKey: false })).toBeNull();
     expect(matchShortcut({ key: "c", metaKey: false, ctrlKey: false, altKey: false, isComposing: true })).toBeNull();
+  });
+});
+
+describe("nav history", () => {
+  it("records visits and walks back and forward", () => {
+    const first = recordVisit(emptyHistory("/"), "/squads");
+    const second = recordVisit(first, "/projects");
+    expect(canGoBack(second)).toBe(true);
+    expect(canGoForward(second)).toBe(false);
+    const back = historyBack(second);
+    expect(back?.path).toBe("/squads");
+    expect(canGoForward(back!.history)).toBe(true);
+    const forward = historyForward(back!.history);
+    expect(forward?.path).toBe("/projects");
+  });
+
+  it("does not push the same path twice", () => {
+    const history = recordVisit(emptyHistory("/squads"), "/squads");
+    expect(history.stack).toEqual(["/squads"]);
+    expect(history.index).toBe(0);
   });
 });

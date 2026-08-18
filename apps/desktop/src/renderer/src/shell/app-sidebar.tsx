@@ -1,8 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
   Sidebar,
   SidebarContent,
   SidebarFooter,
@@ -11,28 +8,17 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarRail,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Ellipsis, Plus, Search } from "lucide-react";
+import { MessageCircle, Plus, Search } from "lucide-react";
 import { modifierSymbol } from "../lib/coordy/shortcuts";
 import { useLayoutStore } from "../state/layout-store";
 import { useTabStore } from "../state/tab-store";
-import { NavUser } from "./nav-user";
-import {
-  configNav,
-  moreNav,
-  navItemActive,
-  personalNav,
-  workspaceNav,
-  type NavItem,
-} from "./nav";
+import { SidebarHelp } from "./nav-user";
+import { configNav, navItemActive, personalNav, workspaceNav, type NavItem } from "./nav";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 function NavSection({ label, items }: { label?: string; items: NavItem[] }) {
@@ -60,60 +46,33 @@ function NavSection({ label, items }: { label?: string; items: NavItem[] }) {
   );
 }
 
-function AdvancedNav() {
-  const pathname = useLocation().pathname;
-  const open = moreNav.some((item) => navItemActive(pathname, item));
-  return (
-    <SidebarGroup>
-      <SidebarMenu>
-        <Collapsible defaultOpen={open} className="group/collapsible" render={<SidebarMenuItem />}>
-          <CollapsibleTrigger render={<SidebarMenuButton tooltip="高级" />}>
-            <Ellipsis />
-            <span>高级</span>
-            <ChevronRight className="ml-auto transition-transform duration-200 group-data-open/collapsible:rotate-90" />
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <SidebarMenuSub>
-              {moreNav.map((item) => (
-                <SidebarMenuSubItem key={item.to}>
-                  <SidebarMenuSubButton
-                    isActive={navItemActive(pathname, item)}
-                    render={<NavLink to={item.to} />}
-                  >
-                    <span>{item.label}</span>
-                  </SidebarMenuSubButton>
-                </SidebarMenuSubItem>
-              ))}
-            </SidebarMenuSub>
-          </CollapsibleContent>
-        </Collapsible>
-      </SidebarMenu>
-    </SidebarGroup>
-  );
-}
-
 function SearchTrigger({ os }: { os?: string }) {
   const setOpen = useLayoutStore((s) => s.setPaletteOpen);
   const mod = modifierSymbol(os);
   return (
-    <SidebarMenuButton
-      className="text-sidebar-foreground/70"
-      tooltip="搜索"
+    <button
+      type="button"
+      className="flex h-8 w-full items-center gap-2 rounded-lg border border-sidebar-border bg-background px-2.5 text-sm text-muted-foreground shadow-none outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:px-0"
+      aria-label="搜索"
+      title={`搜索 ${mod}+K`}
       onClick={() => setOpen(true)}
     >
-      <Search />
-      <span>搜索…</span>
-      <span className="ml-auto font-mono text-[10px] tracking-widest text-muted-foreground">{`${mod}+K`}</span>
-    </SidebarMenuButton>
+      <Search className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1 truncate text-left group-data-[collapsible=icon]:hidden">搜索...</span>
+      <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px] text-muted-foreground group-data-[collapsible=icon]:hidden">
+        {`${mod}+K`}
+      </kbd>
+    </button>
   );
 }
 
-export function AppSidebar() {
+export function AppSidebar({ os }: { os?: string }) {
   const navigate = useNavigate();
   const appInfo = useQuery({
     queryKey: ["app-info"],
     queryFn: () => window.coordy.getAppInfo(),
   });
+  const platform = os ?? appInfo.data?.os;
 
   const openNewTask = () => {
     useLayoutStore.getState().requestNewTaskFocus();
@@ -122,30 +81,45 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar variant="inset" collapsible="icon">
-      <SidebarHeader>
+    <Sidebar variant="inset" collapsible="icon" className="pt-11">
+      <SidebarHeader className="gap-2 p-2">
         <WorkspaceSwitcher />
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SearchTrigger os={appInfo.data?.os} />
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton tooltip="新建任务" onClick={openNewTask}>
-              <Plus />
-              <span>新建任务</span>
-              <SidebarMenuBadge>C</SidebarMenuBadge>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <SearchTrigger os={platform} />
+        <button
+          type="button"
+          className="flex h-8 w-full items-center gap-2 rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground outline-none hover:bg-primary/80 focus-visible:ring-3 focus-visible:ring-ring/50 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
+          title="新建任务 C"
+          onClick={openNewTask}
+        >
+          <Plus className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-left group-data-[collapsible=icon]:hidden">新建任务</span>
+          <kbd className="font-mono text-[10px] text-primary-foreground/80 group-data-[collapsible=icon]:hidden">
+            C
+          </kbd>
+        </button>
       </SidebarHeader>
       <SidebarContent>
         <NavSection items={personalNav} />
         <NavSection label="工作区" items={workspaceNav} />
         <NavSection label="配置" items={configNav} />
-        <AdvancedNav />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser />
+        <div className="flex items-center gap-1">
+          <SidebarMenu className="min-w-0 flex-1">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                tooltip="加入 Discord"
+                render={
+                  <a href="https://discord.com/" target="_blank" rel="noreferrer" />
+                }
+              >
+                <MessageCircle />
+                <span>加入 Discord</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+          <SidebarHelp />
+        </div>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

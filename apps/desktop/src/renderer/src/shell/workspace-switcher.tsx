@@ -12,17 +12,16 @@ import {
   useSidebar,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronsUpDown, GalleryVerticalEnd, Plus } from "lucide-react";
+import { Check, ChevronDown, Plus } from "lucide-react";
 import { queryClient } from "../app/query-client";
 import { submitAsDaemon, viewAsDaemon } from "../lib/coordy/client";
 import { asPrincipals, asWorkspaces, outcomeId } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import type { WorkspaceView } from "@coordy/protocol";
 
-function workspaceMark(workspace: WorkspaceView) {
-  const icon = workspace.icon?.trim();
-  if (icon && Array.from(icon).length <= 2) return icon;
-  return null;
+function workspaceInitial(workspace?: WorkspaceView | null): string {
+  const name = workspace?.name?.trim() || "coordy";
+  return (Array.from(name)[0] ?? "C").toUpperCase();
 }
 
 export async function activateWorkspace(workspaceId: string) {
@@ -57,20 +56,14 @@ export function WorkspaceSwitcher() {
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
-              <SidebarMenuButton
-                size="lg"
-                className="data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground"
-              />
+              <SidebarMenuButton className="h-8 data-open:bg-sidebar-accent data-open:text-sidebar-accent-foreground" />
             }
           >
-            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sm text-sidebar-primary-foreground">
-              {active && workspaceMark(active) ? workspaceMark(active) : <GalleryVerticalEnd className="size-4" />}
+            <div className="flex size-6 items-center justify-center rounded-full bg-foreground text-[11px] font-medium text-background">
+              {workspaceInitial(active)}
             </div>
-            <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{active?.name ?? "coordy"}</span>
-              <span className="truncate text-xs">{active?.slug || active?.description || "本机工作区"}</span>
-            </div>
-            <ChevronsUpDown className="ml-auto" />
+            <span className="truncate font-medium">{active?.name ?? "coordy"}</span>
+            <ChevronDown className="ml-auto size-4 text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-56"
@@ -88,8 +81,8 @@ export function WorkspaceSwitcher() {
                     void activateWorkspace(workspace.id);
                   }}
                 >
-                  <div className="flex size-6 items-center justify-center rounded-md border text-xs">
-                    {workspaceMark(workspace) ?? <GalleryVerticalEnd className="size-3.5" />}
+                  <div className="flex size-6 items-center justify-center rounded-full bg-foreground text-[11px] font-medium text-background">
+                    {workspaceInitial(workspace)}
                   </div>
                   <span className="flex-1 truncate">{workspace.name}</span>
                   {workspace.id === active?.id ? <Check className="size-4" /> : null}

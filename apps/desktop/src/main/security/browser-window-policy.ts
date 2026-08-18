@@ -26,3 +26,15 @@ export const DEV_CSP =
 export function contentSecurityPolicy(): string {
   return process.env.ELECTRON_RENDERER_URL ? DEV_CSP : CSP;
 }
+
+export const EXTERNAL_LINK_ALLOWLIST = ["https://discord.com/", "https://discord.gg/"] as const;
+
+export function canOpenExternal(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    return EXTERNAL_LINK_ALLOWLIST.some((allowed) => parsed.origin === new URL(allowed).origin);
+  } catch {
+    return false;
+  }
+}

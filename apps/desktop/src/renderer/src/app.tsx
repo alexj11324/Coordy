@@ -57,7 +57,7 @@ async function bootstrap() {
   let workspaceId =
     workspaces.type === "Workspaces" && workspaces.items[0] ? workspaces.items[0].id : null;
   if (!workspaceId) {
-    const created = await submitAsDaemon({ type: "CreateWorkspace", name: "Local" });
+    const created = await submitAsDaemon({ type: "CreateWorkspace", name: "coordy" });
     workspaceId = String(created.ids.workspace_id);
     workspaces = await viewAsDaemon({ type: "Workspaces" });
   }

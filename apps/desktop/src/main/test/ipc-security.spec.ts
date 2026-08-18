@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { CSP, DEV_CSP, contentSecurityPolicy, validateIpcSender } from "../security/browser-window-policy";
+import { CSP, DEV_CSP, canOpenExternal, contentSecurityPolicy, validateIpcSender } from "../security/browser-window-policy";
 import { resolvePreloadPath } from "../preload-path";
 import { IPC } from "../../shared/ipc-channels";
 
@@ -70,6 +70,15 @@ describe("product ipc channels", () => {
     expect(IPC.discoverAgents).toBe("coordy:discover-agents");
     expect(IPC.importAgents).toBe("coordy:import-agents");
     expect(IPC.listDirectory).toBe("coordy:list-directory");
+  });
+});
+
+describe("external link allowlist", () => {
+  it("only opens Discord https links from the shell", () => {
+    expect(canOpenExternal("https://discord.com/invite/coordy")).toBe(true);
+    expect(canOpenExternal("https://discord.gg/coordy")).toBe(true);
+    expect(canOpenExternal("https://evil.example/")).toBe(false);
+    expect(canOpenExternal("http://discord.com/")).toBe(false);
   });
 });
 

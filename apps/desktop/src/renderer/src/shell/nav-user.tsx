@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import {
   Avatar,
   AvatarFallback,
@@ -14,12 +15,13 @@ import {
   useSidebar,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, ChevronsUpDown, User } from "lucide-react";
+import { Bot, CircleHelp, User } from "lucide-react";
 import { NamedWithLogo } from "../features/provider-logo";
 import { viewAsDaemon } from "../lib/coordy/client";
 import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
 import { asAgents, asPrincipals } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { moreNav } from "./nav";
 
 function personLabel(name: string): string {
   return name === "Local user" ? "我" : name;
@@ -47,8 +49,9 @@ function avatarTone(seed: string): string {
   return hues[hash % hues.length] ?? hues[0]!;
 }
 
-export function NavUser() {
+export function SidebarHelp() {
   const { isMobile } = useSidebar();
+  const navigate = useNavigate();
   const workspaceId = useSession((s) => s.workspaceId);
   const actor = useSession((s) => s.actor);
   const principals = useQuery({
@@ -76,21 +79,13 @@ export function NavUser() {
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
-          <DropdownMenuTrigger
-            render={<SidebarMenuButton size="lg" className="aria-expanded:bg-muted" />}
-          >
-            <Avatar>
-              <AvatarFallback className={avatarTone(name)}>{initials(name)}</AvatarFallback>
-            </Avatar>
-            <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-medium">{name}</span>
-              <span className="truncate text-xs">{subtitle}</span>
-            </div>
-            <ChevronsUpDown className="ml-auto size-4" />
+          <DropdownMenuTrigger render={<SidebarMenuButton tooltip="帮助" className="size-8 p-2" />}>
+            <CircleHelp />
+            <span className="sr-only">帮助</span>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-56"
-            side={isMobile ? "bottom" : "right"}
+            side={isMobile ? "top" : "right"}
             align="end"
             sideOffset={4}
           >
@@ -137,6 +132,21 @@ export function NavUser() {
                 </DropdownMenuGroup>
               </>
             ) : null}
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>高级</DropdownMenuLabel>
+              {moreNav.map((item) => (
+                <DropdownMenuItem
+                  key={item.to}
+                  onClick={() => {
+                    navigate(item.to);
+                  }}
+                >
+                  <item.icon />
+                  {item.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
