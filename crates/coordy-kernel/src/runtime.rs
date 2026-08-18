@@ -178,6 +178,12 @@ impl Kernel {
                         ))
                     }
                 }
+                let name = normalize_agent_name(&name)?;
+                if agent_name_taken(&world, &workspace_id, &name, None) {
+                    return Err(CoordyError::invalid(
+                        "agent name must be unique in this workspace",
+                    ));
+                }
                 let id = ids::new("ag");
                 world.agents.push(Agent {
                     id: id.clone(),
@@ -185,10 +191,104 @@ impl Kernel {
                     principal_id,
                     name,
                     harness,
+                    description: String::new(),
+                    instructions: String::new(),
+                    archived: false,
                 });
                 Self::audit(&mut world, &actor, "create_agent", &id);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok("agent created", json!({ "agent_id": id })))
+            }
+            Command::UpdateAgent {
+                agent_id,
+                name,
+                description,
+                instructions,
+                harness,
+            } => {
+                let agent = world
+                    .agent(&agent_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("agent"))?;
+                let allowed = match &actor {
+                    Actor::Daemon => true,
+                    Actor::Principal { id } => *id == agent.principal_id,
+                    Actor::Agent { .. } => false,
+                };
+                if !allowed {
+                    return Err(CoordyError::denied("only the owner may update this agent"));
+                }
+                if agent.archived {
+                    return Err(CoordyError::invalid("archived agents cannot be updated"));
+                }
+                if let Some(name) = name {
+                    let name = normalize_agent_name(&name)?;
+                    if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
+                        return Err(CoordyError::invalid(
+                            "agent name must be unique in this workspace",
+                        ));
+                    }
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.name = name;
+                    }
+                }
+                if let Some(description) = description {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.description = description;
+                    }
+                }
+                if let Some(instructions) = instructions {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.instructions = instructions;
+                    }
+                }
+                if let Some(harness) = harness {
+                    let harness = harness.trim();
+                    if harness.is_empty() {
+                        return Err(CoordyError::invalid("runtime is required"));
+                    }
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.harness = harness.to_string();
+                    }
+                }
+                Self::audit(&mut world, &actor, "update_agent", &agent_id);
+                Self::emit(
+                    &mut world,
+                    Effect::StateChanged {
+                        workspace_id: agent.workspace_id,
+                    },
+                );
+                Ok(Outcome::ok(
+                    "agent updated",
+                    json!({ "agent_id": agent_id }),
+                ))
+            }
+            Command::ArchiveAgent { agent_id } => {
+                let agent = world
+                    .agent(&agent_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("agent"))?;
+                let allowed = match &actor {
+                    Actor::Daemon => true,
+                    Actor::Principal { id } => *id == agent.principal_id,
+                    Actor::Agent { .. } => false,
+                };
+                if !allowed {
+                    return Err(CoordyError::denied("only the owner may archive this agent"));
+                }
+                if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                    row.archived = true;
+                }
+                Self::emit(
+                    &mut world,
+                    Effect::StateChanged {
+                        workspace_id: agent.workspace_id,
+                    },
+                );
+                Ok(Outcome::ok(
+                    "agent archived",
+                    json!({ "agent_id": agent_id }),
+                ))
             }
             Command::Grant {
                 workspace_id,
@@ -307,6 +407,7 @@ impl Kernel {
             Command::CreateTask {
                 workspace_id,
                 title,
+                description,
             } => {
                 if !actor_in_workspace(&world, &actor, &workspace_id)
                     && !matches!(actor, Actor::Daemon)
@@ -318,6 +419,7 @@ impl Kernel {
                     id: id.clone(),
                     workspace_id: workspace_id.clone(),
                     title,
+                    description,
                     status: "open".into(),
                     assignee_agent_id: None,
                     worktree_path: None,
@@ -343,6 +445,72 @@ impl Kernel {
                 Ok(Outcome::ok(
                     "assigned",
                     json!({ "task_id": task_id, "agent_id": agent_id }),
+                ))
+            }
+            Command::UpdateTask {
+                task_id,
+                title,
+                description,
+            } => {
+                let workspace_id = world
+                    .task(&task_id)
+                    .map(|t| t.workspace_id.clone())
+                    .ok_or_else(|| CoordyError::not_found("task"))?;
+                if actor.is_agent() {
+                    return Err(CoordyError::denied("agent cannot edit this issue"));
+                }
+                if !actor_in_workspace(&world, &actor, &workspace_id)
+                    && !matches!(actor, Actor::Daemon)
+                {
+                    return Err(CoordyError::denied("not in workspace"));
+                }
+                if title.is_none() && description.is_none() {
+                    return Err(CoordyError::invalid("nothing to update"));
+                }
+                if title.as_ref().is_some_and(|value| value.trim().is_empty()) {
+                    return Err(CoordyError::invalid("title cannot be empty"));
+                }
+                let task = world
+                    .task_mut(&task_id)
+                    .ok_or_else(|| CoordyError::not_found("task"))?;
+                if let Some(title) = title {
+                    task.title = title;
+                }
+                if let Some(description) = description {
+                    task.description = description;
+                }
+                Self::emit(&mut world, Effect::StateChanged { workspace_id });
+                Ok(Outcome::ok("task updated", json!({ "task_id": task_id })))
+            }
+            Command::SetTaskStatus { task_id, status } => {
+                if !allowed_task_status(&status) {
+                    return Err(CoordyError::invalid("unknown task status"));
+                }
+                let workspace_id = world
+                    .task(&task_id)
+                    .map(|t| t.workspace_id.clone())
+                    .ok_or_else(|| CoordyError::not_found("task"))?;
+                if actor.is_agent() {
+                    return Err(CoordyError::denied("agent cannot set task status"));
+                }
+                if !actor_in_workspace(&world, &actor, &workspace_id)
+                    && !matches!(actor, Actor::Daemon)
+                {
+                    return Err(CoordyError::denied("not in workspace"));
+                }
+                let task = world
+                    .task_mut(&task_id)
+                    .ok_or_else(|| CoordyError::not_found("task"))?;
+                task.status = status.clone();
+                if status != "blocked" {
+                    task.blocked_reason = None;
+                } else if task.blocked_reason.is_none() {
+                    task.blocked_reason = Some("marked blocked".into());
+                }
+                Self::emit(&mut world, Effect::StateChanged { workspace_id });
+                Ok(Outcome::ok(
+                    "status updated",
+                    json!({ "task_id": task_id, "status": status }),
                 ))
             }
             Command::BindRepository { workspace_id, path } => {
@@ -665,6 +833,7 @@ impl Kernel {
                     .agent(&agent_id)
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("agent"))?;
+                let source = apply_agent_instructions(source, &agent.instructions);
                 let run_id = ids::new("run");
                 let harness: String = match &source {
                     RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl".into(),
@@ -680,6 +849,13 @@ impl Kernel {
                         }
                     }
                 };
+                let prompt_event = match &source {
+                    RunSource::Codex { prompt }
+                    | RunSource::ClaudeCode { prompt }
+                    | RunSource::OpenCode { prompt }
+                    | RunSource::Acp { prompt } => Some(prompt.clone()),
+                    RunSource::Jsonl { .. } | RunSource::Fixture { .. } => None,
+                };
                 world.runs.push(Run {
                     id: run_id.clone(),
                     workspace_id: task.workspace_id.clone(),
@@ -692,6 +868,17 @@ impl Kernel {
                 });
                 if let Some(task) = world.task_mut(&task_id) {
                     task.status = "running".into();
+                }
+                if let Some(prompt) = prompt_event {
+                    ingest_event(
+                        &mut world,
+                        &self.advisor,
+                        &run_id,
+                        HarnessEvent::Message {
+                            role: "user".into(),
+                            content: prompt,
+                        },
+                    )?;
                 }
                 let events = match source {
                     RunSource::Fixture { events } => events,
@@ -731,6 +918,40 @@ impl Kernel {
                     }
                 }
                 Ok(Outcome::ok("run completed", json!({ "run_id": run_id })))
+            }
+            Command::CancelRun { run_id } => {
+                let run = world
+                    .run(&run_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("run"))?;
+                if !can_command_agent(&world, &actor, &run.agent_id)
+                    && !matches!(actor, Actor::Daemon)
+                {
+                    return Err(CoordyError::denied("cannot cancel this run"));
+                }
+                if run.status != "running" && run.status != "paused" {
+                    return Err(CoordyError::invalid("this round is not running"));
+                }
+                if let Some(active) = world.run_mut(&run_id) {
+                    active.status = "cancelled".into();
+                }
+                if let Some(task) = world.task_mut(&run.task_id) {
+                    if task.status == "running" {
+                        task.status = "open".into();
+                    }
+                }
+                ingest_event(
+                    &mut world,
+                    &self.advisor,
+                    &run_id,
+                    HarnessEvent::Message {
+                        role: "system".into(),
+                        content: "这一轮已停下".into(),
+                    },
+                )?;
+                drop(world);
+                self.ports.cancel_harness(&run_id)?;
+                Ok(Outcome::ok("run cancelled", json!({ "run_id": run_id })))
             }
             Command::IngestHarnessEvent { run_id, event } => {
                 let run = world
@@ -922,13 +1143,15 @@ impl Kernel {
                     items: world
                         .agents
                         .iter()
-                        .filter(|a| a.workspace_id == workspace_id)
+                        .filter(|a| a.workspace_id == workspace_id && !a.archived)
                         .map(|a| AgentView {
                             id: a.id.clone(),
                             workspace_id: a.workspace_id.clone(),
                             principal_id: a.principal_id.clone(),
                             name: a.name.clone(),
                             harness: a.harness.clone(),
+                            description: a.description.clone(),
+                            instructions: a.instructions.clone(),
                         })
                         .collect(),
                 })
@@ -1108,6 +1331,13 @@ impl Kernel {
 
 const SUPERSEDING_AUTHORITY: &[&str] = &["USER", "SPEC", "REPOSITORY_FACT", "AUTHORIZED_DECISION"];
 
+fn allowed_task_status(status: &str) -> bool {
+    matches!(
+        status,
+        "open" | "running" | "review" | "blocked" | "done" | "cancelled"
+    )
+}
+
 fn health_view(world: &World) -> HealthView {
     HealthView {
         status: "ok".into(),
@@ -1133,6 +1363,7 @@ fn task_view(task: &Task) -> TaskView {
         id: task.id.clone(),
         workspace_id: task.workspace_id.clone(),
         title: task.title.clone(),
+        description: task.description.clone(),
         status: task.status.clone(),
         assignee_agent_id: task.assignee_agent_id.clone(),
         worktree_path: task.worktree_path.clone(),
@@ -1312,11 +1543,13 @@ fn ingest_event(
         } => {
             if name == coordy_protocol::HARNESS_SESSION_TOOL {
                 if let Some(active) = world.run_mut(run_id) {
-                    active.status = if exit_code.unwrap_or(0) == 0 {
-                        "completed".into()
-                    } else {
-                        "failed".into()
-                    };
+                    if active.status == "running" {
+                        active.status = if exit_code.unwrap_or(0) == 0 {
+                            "completed".into()
+                        } else {
+                            "failed".into()
+                        };
+                    }
                 }
                 if let Some(task) = world.task_mut(&run.task_id) {
                     if task.status == "running" {
@@ -1478,6 +1711,50 @@ fn evaluate_drift(world: &mut World, advisor: &Arc<dyn Advisor>, run: &Run, work
                 Some(run.id.clone()),
             );
         }
+    }
+}
+
+fn normalize_agent_name(name: &str) -> Result<String, CoordyError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(CoordyError::invalid("agent name is required"));
+    }
+    Ok(name.to_string())
+}
+
+fn agent_name_taken(
+    world: &World,
+    workspace_id: &str,
+    name: &str,
+    except_id: Option<&str>,
+) -> bool {
+    world.agents.iter().any(|agent| {
+        !agent.archived
+            && agent.workspace_id == workspace_id
+            && except_id.map(|id| agent.id != id).unwrap_or(true)
+            && agent.name.trim() == name
+    })
+}
+
+fn apply_agent_instructions(source: RunSource, instructions: &str) -> RunSource {
+    let extra = instructions.trim();
+    if extra.is_empty() {
+        return source;
+    }
+    match source {
+        RunSource::Acp { prompt } => RunSource::Acp {
+            prompt: format!("{extra}\n\n{prompt}"),
+        },
+        RunSource::Codex { prompt } => RunSource::Codex {
+            prompt: format!("{extra}\n\n{prompt}"),
+        },
+        RunSource::ClaudeCode { prompt } => RunSource::ClaudeCode {
+            prompt: format!("{extra}\n\n{prompt}"),
+        },
+        RunSource::OpenCode { prompt } => RunSource::OpenCode {
+            prompt: format!("{extra}\n\n{prompt}"),
+        },
+        other => other,
     }
 }
 

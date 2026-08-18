@@ -51,6 +51,12 @@ pub struct Agent {
     pub principal_id: String,
     pub name: String,
     pub harness: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub instructions: String,
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -97,6 +103,8 @@ pub struct Task {
     pub id: String,
     pub workspace_id: String,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
     pub status: String,
     pub assignee_agent_id: Option<String>,
     pub worktree_path: Option<String>,

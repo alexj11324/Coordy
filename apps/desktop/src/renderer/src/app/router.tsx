@@ -2,8 +2,13 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { DesktopShell } from "../shell/desktop-shell";
 import { HomePage } from "../features/home";
 import { BoardPage } from "../features/board";
+import { TaskDetailPage } from "../features/task-detail";
+import { AgentsPage } from "../features/agents";
+import { CreateAgentPage } from "../features/create-agent";
+import { AgentDetailPage } from "../features/agent-detail";
+import { RuntimesPage } from "../features/runtimes";
+import { SettingsPage } from "../features/settings";
 import {
-  AgentsPage,
   AuthorityPage,
   ConflictsPage,
   ContractsPage,
@@ -12,7 +17,6 @@ import {
   MemoryPage,
   PrincipalsPage,
   RunsPage,
-  SettingsPage,
 } from "../features/pages";
 
 export function AppRouter() {
@@ -22,8 +26,12 @@ export function AppRouter() {
         <Route path="/" element={<HomePage />} />
         <Route path="/home" element={<Navigate to="/" replace />} />
         <Route path="/board" element={<BoardPage />} />
+        <Route path="/board/:taskId" element={<TaskDetailPage />} />
         <Route path="/principals" element={<PrincipalsPage />} />
         <Route path="/agents" element={<AgentsPage />} />
+        <Route path="/agents/new" element={<CreateAgentPage />} />
+        <Route path="/agents/:agentId" element={<AgentDetailPage />} />
+        <Route path="/runtimes" element={<RuntimesPage />} />
         <Route path="/authority" element={<AuthorityPage />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/contracts" element={<ContractsPage />} />

@@ -1,6 +1,7 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Badge,
+  Button,
   Label,
   ScrollArea,
   Select,
@@ -13,6 +14,7 @@ import {
   Separator,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
+import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
   Bot,
@@ -21,7 +23,9 @@ import {
   Home,
   Inbox,
   LayoutDashboard,
+  Monitor,
   Play,
+  Plus,
   Settings,
   Shield,
   Sparkles,
@@ -29,30 +33,70 @@ import {
   Users,
 } from "lucide-react";
 import { viewAsDaemon } from "../lib/coordy/client";
+import { agentDisplayName, healthLabel, listableAgents } from "../lib/coordy/labels";
 import { asAgents, asPrincipals } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 
-const primary = [
+const personal = [
+  ["/inbox", "收件箱", Inbox],
   ["/", "开始", Home],
   ["/board", "任务", LayoutDashboard],
-  ["/agents", "助手", Bot],
-  ["/runs", "运行", Play],
+] as const;
+
+const workspace = [["/agents", "智能体", Bot]] as const;
+
+const config = [
+  ["/runtimes", "运行时", Monitor],
   ["/settings", "设置", Settings],
 ] as const;
 
 const more = [
+  ["/runs", "动态", Play],
   ["/principals", "成员", Users],
   ["/authority", "权限", Shield],
-  ["/memory", "记忆", StickyNote],
-  ["/contracts", "契约", FileText],
-  ["/dependencies", "依赖", GitBranch],
+  ["/memory", "备忘", StickyNote],
+  ["/contracts", "约定", FileText],
+  ["/dependencies", "关联", GitBranch],
   ["/conflicts", "冲突", AlertTriangle],
-  ["/inbox", "收件箱", Inbox],
 ] as const;
+
+function personLabel(name: string): string {
+  return name === "Local user" ? "我" : name;
+}
+
+function NavItems({
+  items,
+}: {
+  items: ReadonlyArray<readonly [string, string, LucideIcon]>;
+}) {
+  return (
+    <>
+      {items.map(([to, label, Icon]) => (
+        <NavLink
+          key={to}
+          to={to}
+          end={to === "/"}
+          className={({ isActive }) =>
+            [
+              "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
+              isActive
+                ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
+            ].join(" ")
+          }
+        >
+          <Icon className="size-4" />
+          {label}
+        </NavLink>
+      ))}
+    </>
+  );
+}
 
 export function DesktopShell() {
   const workspaceId = useSession((s) => s.workspaceId);
   const actor = useSession((s) => s.actor);
+  const navigate = useNavigate();
   const health = useQuery({
     queryKey: ["health"],
     queryFn: () => viewAsDaemon({ type: "Health" }),
@@ -71,7 +115,7 @@ export function DesktopShell() {
   const status =
     health.data && health.data.type === "Health" ? health.data.status : "connecting";
   const people = asPrincipals(principals.data);
-  const agentList = asAgents(agents.data);
+  const agentList = listableAgents(asAgents(agents.data));
   const actorValue =
     actor.type === "agent"
       ? `agent:${actor.id}`
@@ -79,8 +123,11 @@ export function DesktopShell() {
         ? `principal:${actor.id}`
         : "daemon";
   const actorItems = [
-    ...people.map((person) => ({ value: `principal:${person.id}`, label: person.name })),
-    ...agentList.map((agent) => ({ value: `agent:${agent.id}`, label: agent.name })),
+    ...people.map((person) => ({ value: `principal:${person.id}`, label: personLabel(person.name) })),
+    ...agentList.map((agent) => ({
+      value: `agent:${agent.id}`,
+      label: agentDisplayName(agent),
+    })),
   ];
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -90,17 +137,23 @@ export function DesktopShell() {
             <Sparkles className="size-4" />
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold tracking-tight">Coordy</div>
-            <div className="text-xs text-muted-foreground">本机助手协调</div>
+            <div className="text-sm font-semibold tracking-tight">coordy</div>
+            <div className="text-xs text-muted-foreground">在这台电脑上和智能体一起干活</div>
           </div>
-          <Badge variant={status === "ok" ? "outline" : "secondary"} className="capitalize">
+          <Badge variant={status === "ok" ? "outline" : "secondary"}>
             <span
               className={
                 status === "ok" ? "size-1.5 rounded-full bg-emerald-500" : "size-1.5 rounded-full bg-amber-500"
               }
             />
-            {status}
+            {healthLabel(status)}
           </Badge>
+        </div>
+        <div className="px-3 pb-3">
+          <Button className="w-full justify-start" onClick={() => navigate("/board")}>
+            <Plus data-icon="inline-start" />
+            新建任务
+          </Button>
         </div>
         <div className="px-3 pb-3">
           <Label className="mb-1.5 px-1 text-xs font-normal text-muted-foreground">当前身份</Label>
@@ -122,7 +175,7 @@ export function DesktopShell() {
               <SelectValue>
                 {(value: string | null) => {
                   const match = actorItems.find((item) => item.value === value);
-                  return match?.label ?? value ?? "选择身份";
+                  return match?.label ?? value ?? "选一个身份";
                 }}
               </SelectValue>
             </SelectTrigger>
@@ -131,16 +184,16 @@ export function DesktopShell() {
                 <SelectLabel>成员</SelectLabel>
                 {people.map((person) => (
                   <SelectItem key={person.id} value={`principal:${person.id}`}>
-                    {person.name}
+                    {personLabel(person.name)}
                   </SelectItem>
                 ))}
               </SelectGroup>
               {agentList.length > 0 ? (
                 <SelectGroup>
-                  <SelectLabel>助手</SelectLabel>
+                  <SelectLabel>智能体</SelectLabel>
                   {agentList.map((agent) => (
                     <SelectItem key={agent.id} value={`agent:${agent.id}`}>
-                      {agent.name}
+                      {agentDisplayName(agent)}
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -151,44 +204,13 @@ export function DesktopShell() {
         <Separator />
         <ScrollArea className="flex-1 px-2 py-3">
           <nav className="flex flex-col gap-0.5">
-            {primary.map(([to, label, Icon]) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === "/"}
-                className={({ isActive }) =>
-                  [
-                    "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
-                    isActive
-                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
-                  ].join(" ")
-                }
-              >
-                <Icon className="size-4" />
-                {label}
-              </NavLink>
-            ))}
-            <p className="mt-3 px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              更多
-            </p>
-            {more.map(([to, label, Icon]) => (
-              <NavLink
-                key={to}
-                to={to}
-                className={({ isActive }) =>
-                  [
-                    "flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-sm transition-colors",
-                    isActive
-                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                      : "text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground",
-                  ].join(" ")
-                }
-              >
-                <Icon className="size-4" />
-                {label}
-              </NavLink>
-            ))}
+            <NavItems items={personal} />
+            <p className="mt-3 px-2.5 pb-1 text-[11px] font-medium text-muted-foreground">工作区</p>
+            <NavItems items={workspace} />
+            <p className="mt-3 px-2.5 pb-1 text-[11px] font-medium text-muted-foreground">配置</p>
+            <NavItems items={config} />
+            <p className="mt-3 px-2.5 pb-1 text-[11px] font-medium text-muted-foreground">其他</p>
+            <NavItems items={more} />
           </nav>
         </ScrollArea>
       </aside>

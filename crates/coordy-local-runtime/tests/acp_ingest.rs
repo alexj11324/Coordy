@@ -136,6 +136,7 @@ fn acp_session_ingests_and_key_stays_out_of_sqlite() {
             command: Command::CreateTask {
                 workspace_id,
                 title: "say hi".into(),
+                description: String::new(),
             },
         })
         .unwrap();

@@ -80,7 +80,7 @@ export function latestRunForTask(runs: RunView[], taskId: string): RunView | und
   return undefined;
 }
 
-export type BoardColumn = "open" | "running" | "review" | "blocked";
+export type BoardColumn = "open" | "running" | "review" | "blocked" | "done";
 
 export function boardColumn(status: string): BoardColumn {
   switch (status) {
@@ -91,6 +91,9 @@ export function boardColumn(status: string): BoardColumn {
     case "review":
     case "completed":
       return "review";
+    case "done":
+    case "cancelled":
+      return "done";
     default:
       return "open";
   }

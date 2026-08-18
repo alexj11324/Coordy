@@ -19,6 +19,8 @@ pub trait Ports: Send + Sync {
         prompt: &str,
         run_id: &str,
     ) -> Result<(), CoordyError>;
+
+    fn cancel_harness(&self, run_id: &str) -> Result<(), CoordyError>;
 }
 
 #[derive(Default)]
@@ -51,6 +53,10 @@ impl Ports for NoopPorts {
         }
         Ok(())
     }
+
+    fn cancel_harness(&self, _run_id: &str) -> Result<(), CoordyError> {
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -58,6 +64,7 @@ pub struct RecordingPorts {
     pub worktrees: std::sync::Mutex<Vec<String>>,
     pub patches: std::sync::Mutex<Vec<String>>,
     pub spawns: std::sync::Mutex<Vec<(String, String, String, String)>>,
+    pub cancelled: std::sync::Mutex<Vec<String>>,
 }
 
 impl Ports for RecordingPorts {
@@ -89,6 +96,11 @@ impl Ports for RecordingPorts {
             prompt.to_string(),
             run_id.to_string(),
         ));
+        Ok(())
+    }
+
+    fn cancel_harness(&self, run_id: &str) -> Result<(), CoordyError> {
+        self.cancelled.lock().unwrap().push(run_id.to_string());
         Ok(())
     }
 }

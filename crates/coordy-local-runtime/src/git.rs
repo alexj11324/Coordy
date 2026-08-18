@@ -81,4 +81,8 @@ impl Ports for GitPorts {
             .map_err(|e| CoordyError::unavailable(format!("spawn {kind}: {e}")))?;
         Ok(())
     }
+
+    fn cancel_harness(&self, _run_id: &str) -> Result<(), CoordyError> {
+        Ok(())
+    }
 }

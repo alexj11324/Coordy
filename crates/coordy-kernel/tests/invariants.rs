@@ -293,6 +293,7 @@ fn cross_principal_command_denied() {
             Command::CreateTask {
                 workspace_id: h.workspace_id.clone(),
                 title: "bob work".into(),
+                description: String::new(),
             },
         ))
         .unwrap();
@@ -474,6 +475,7 @@ fn compaction_drift_pauses_and_action_gate_blocks() {
             Command::CreateTask {
                 workspace_id: h.workspace_id.clone(),
                 title: "long run".into(),
+                description: String::new(),
             },
         ))
         .unwrap();
@@ -602,6 +604,7 @@ fn jsonl_fixture_file_pauses_on_drift() {
             Command::CreateTask {
                 workspace_id: h.workspace_id.clone(),
                 title: "jsonl".into(),
+                description: String::new(),
             },
         ))
         .unwrap();
@@ -681,6 +684,7 @@ fn stale_reactivated_plan_pauses() {
             Command::CreateTask {
                 workspace_id: h.workspace_id.clone(),
                 title: "rejected-return".into(),
+                description: String::new(),
             },
         ))
         .unwrap();
@@ -752,6 +756,7 @@ fn declare_dependency_invalidated_on_apply() {
             Command::CreateTask {
                 workspace_id: h.workspace_id.clone(),
                 title: "dep-src".into(),
+                description: String::new(),
             },
         ))
         .unwrap();
@@ -936,6 +941,7 @@ fn start_run_acp_spawns_against_bound_repo() {
             Command::CreateTask {
                 workspace_id,
                 title: "talk".into(),
+                description: String::new(),
             },
         ))
         .unwrap()
@@ -1027,6 +1033,7 @@ fn acp_session_tool_returns_task_for_review() {
             Command::CreateTask {
                 workspace_id: workspace_id.clone(),
                 title: "talk".into(),
+                description: String::new(),
             },
         ))
         .unwrap()
@@ -1094,4 +1101,468 @@ fn acp_session_tool_returns_task_for_review() {
     };
     assert_eq!(tasks[0].id, task_id);
     assert_eq!(tasks[0].status, "review");
+}
+
+#[test]
+fn principal_can_edit_issue_and_set_status() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "ship".into(),
+                description: "first note".into(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::UpdateTask {
+                task_id: task_id.clone(),
+                title: Some("ship it".into()),
+                description: None,
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: task_id.clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.alice },
+            Query::Board {
+                workspace_id: h.workspace_id,
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    assert_eq!(tasks[0].id, task_id);
+    assert_eq!(tasks[0].title, "ship it");
+    assert_eq!(tasks[0].description, "first note");
+    assert_eq!(tasks[0].status, "done");
+}
+
+#[test]
+fn agent_cannot_set_task_status() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "gate".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a1.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id,
+                status: "done".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+#[test]
+fn cancel_run_stops_active_round_and_ignores_later_session_tool() {
+    let ports = std::sync::Arc::new(RecordingPorts::default());
+    let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));
+    let workspace_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace {
+                name: "cancel".into(),
+            },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let principal_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "ACP".into(),
+                harness: "claude-acp".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let task_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: workspace_id.clone(),
+                title: "talk".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    let run_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: task_id.clone(),
+                source: RunSource::Acp {
+                    prompt: "hello acp".into(),
+                },
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CancelRun {
+                run_id: run_id.clone(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        ports.cancelled.lock().unwrap().as_slice(),
+        &[run_id.clone()]
+    );
+    kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: run_id.clone(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: "claude-acp".into(),
+                    output: "end_turn".into(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+    let View::Run { run, events } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Run { run_id },
+        ))
+        .unwrap()
+    else {
+        panic!("run view");
+    };
+    assert_eq!(run.status, "cancelled");
+    assert!(events
+        .iter()
+        .any(|event| event.payload.contains("这一轮已停下")));
+    let View::Board { tasks } = kernel
+        .view_sync(q(Actor::Daemon, Query::Board { workspace_id }))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    assert_eq!(tasks[0].id, task_id);
+    assert_eq!(tasks[0].status, "open");
+}
+
+#[test]
+fn archive_hides_unnamed_placeholder_agents() {
+    let h = setup();
+    let agent_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: h.workspace_id.clone(),
+                principal_id: h.alice.clone(),
+                name: "助手".into(),
+                harness: "acp".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let before = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Agents {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Agents { items } = before else {
+        panic!("agents");
+    };
+    assert!(items.iter().any(|agent| agent.id == agent_id));
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ArchiveAgent {
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Agents { items } = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.alice },
+            Query::Agents {
+                workspace_id: h.workspace_id,
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    assert!(!items.iter().any(|agent| agent.id == agent_id));
+}
+
+#[test]
+fn agent_name_must_be_unique_in_workspace() {
+    let h = setup();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: h.workspace_id.clone(),
+                principal_id: h.alice.clone(),
+                name: "A1".into(),
+                harness: "jsonl".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+}
+
+#[test]
+fn update_agent_stores_description_and_instructions() {
+    let h = setup();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::UpdateAgent {
+                agent_id: h.a1.clone(),
+                name: Some("前端审查".into()),
+                description: Some("审查前端 Pull Request".into()),
+                instructions: Some("只在评论里写结论，不要改代码。".into()),
+                harness: Some("claude-acp".into()),
+            },
+        ))
+        .unwrap();
+    let View::Agents { items } = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.alice },
+            Query::Agents {
+                workspace_id: h.workspace_id,
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    let agent = items.iter().find(|item| item.id == h.a1).unwrap();
+    assert_eq!(agent.name, "前端审查");
+    assert_eq!(agent.description, "审查前端 Pull Request");
+    assert_eq!(agent.instructions, "只在评论里写结论，不要改代码。");
+    assert_eq!(agent.harness, "claude-acp");
+}
+
+#[test]
+fn start_run_prepends_agent_instructions() {
+    let ports = std::sync::Arc::new(RecordingPorts::default());
+    let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));
+    let workspace_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace { name: "acp".into() },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::BindRepository {
+                workspace_id: workspace_id.clone(),
+                path: "/tmp/coordy-acp-repo".into(),
+            },
+        ))
+        .unwrap();
+    let principal_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "审查员".into(),
+                harness: "claude-acp".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::UpdateAgent {
+                agent_id: agent_id.clone(),
+                name: None,
+                description: None,
+                instructions: Some("先读测试。".into()),
+                harness: None,
+            },
+        ))
+        .unwrap();
+    let task_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateTask {
+                workspace_id,
+                title: "talk".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "hello acp".into(),
+                },
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns[0].2, "先读测试。\n\nhello acp");
 }

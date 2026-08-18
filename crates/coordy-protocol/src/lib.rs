@@ -66,6 +66,20 @@ pub enum Command {
         name: String,
         harness: String,
     },
+    UpdateAgent {
+        agent_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        instructions: Option<String>,
+        #[serde(default)]
+        harness: Option<String>,
+    },
+    ArchiveAgent {
+        agent_id: String,
+    },
     Grant {
         workspace_id: String,
         grantee_id: String,
@@ -85,10 +99,23 @@ pub enum Command {
     CreateTask {
         workspace_id: String,
         title: String,
+        #[serde(default)]
+        description: String,
     },
     AssignTask {
         task_id: String,
         agent_id: String,
+    },
+    UpdateTask {
+        task_id: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+    },
+    SetTaskStatus {
+        task_id: String,
+        status: String,
     },
     BindRepository {
         workspace_id: String,
@@ -134,6 +161,9 @@ pub enum Command {
     StartRun {
         task_id: String,
         source: RunSource,
+    },
+    CancelRun {
+        run_id: String,
     },
     IngestHarnessEvent {
         run_id: String,
@@ -311,6 +341,8 @@ pub struct TaskView {
     pub id: String,
     pub workspace_id: String,
     pub title: String,
+    #[serde(default)]
+    pub description: String,
     pub status: String,
     pub assignee_agent_id: Option<String>,
     pub worktree_path: Option<String>,
@@ -343,6 +375,10 @@ pub struct AgentView {
     pub principal_id: String,
     pub name: String,
     pub harness: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub instructions: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

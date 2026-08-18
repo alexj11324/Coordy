@@ -1,12 +1,14 @@
 //! Agent harness adapters. The kernel consumes `HarnessEvent` only.
 
 mod acp;
+mod children;
 mod discovery;
 
 pub use acp::{
     drive_session, map_session_update, resolve_acp_command, serve_fake_acp, spawn_acp_session,
     ACP_STUB_REPLY,
 };
+pub use children::{kill_child, register_child, unregister_child};
 pub use discovery::{
     discover, extra_bin_dirs, resolve_launch, suggested_acp_stub_command, which_bin,
 };

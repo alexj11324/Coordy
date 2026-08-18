@@ -35,6 +35,46 @@ fn settings_view_includes_advisor_flag() {
 }
 
 #[test]
+fn create_task_description_defaults_when_omitted() {
+    let cmd: coordy_protocol::Command = serde_json::from_value(json!({
+        "type": "CreateTask",
+        "workspace_id": "ws",
+        "title": "look around"
+    }))
+    .unwrap();
+    match cmd {
+        coordy_protocol::Command::CreateTask { description, .. } => {
+            assert_eq!(description, "");
+        }
+        other => panic!("expected CreateTask, got {other:?}"),
+    }
+}
+
+#[test]
+fn update_agent_fields_default_when_omitted() {
+    let cmd: coordy_protocol::Command = serde_json::from_value(json!({
+        "type": "UpdateAgent",
+        "agent_id": "ag_1"
+    }))
+    .unwrap();
+    match cmd {
+        coordy_protocol::Command::UpdateAgent {
+            name,
+            description,
+            instructions,
+            harness,
+            ..
+        } => {
+            assert!(name.is_none());
+            assert!(description.is_none());
+            assert!(instructions.is_none());
+            assert!(harness.is_none());
+        }
+        other => panic!("expected UpdateAgent, got {other:?}"),
+    }
+}
+
+#[test]
 fn run_source_acp_keeps_pascal_variant() {
     let value = serde_json::to_value(coordy_protocol::RunSource::Acp {
         prompt: "hello".into(),

@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::SecretEnv;
 
-pub const ACP_STUB_REPLY: &str = "内置演示助手已接通。这不是云端模型：本机发现 Codex/Claude 后会自动导入；填入你自己的 API 密钥即可用真助手。";
+pub const ACP_STUB_REPLY: &str = "内置演示智能体已接通。这不是云端模型：在「新建智能体」里选一个本机运行时，并填入你自己的 API 密钥即可用真智能体。";
 
 pub fn resolve_acp_command(configured: Option<&str>) -> Result<(String, Vec<String>), CoordyError> {
     crate::discovery::resolve_launch("acp", configured, None)
@@ -24,6 +24,7 @@ pub fn spawn_acp_session(
     worktree: &str,
     prompt: &str,
     secrets: &SecretEnv,
+    run_id: Option<&str>,
     mut on_event: impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
     let mut cmd = Command::new(bin);
@@ -38,6 +39,9 @@ pub fn spawn_acp_session(
     let mut child = cmd
         .spawn()
         .map_err(|e| CoordyError::unavailable(format!("spawn ACP `{bin}`: {e}")))?;
+    if let Some(run_id) = run_id {
+        crate::children::register_child(run_id, child.id());
+    }
     let stdin = child
         .stdin
         .take()
@@ -54,6 +58,9 @@ pub fn spawn_acp_session(
     }
     let cwd = PathBuf::from(if worktree.is_empty() { "." } else { worktree });
     let result = drive_session(stdout, stdin, prompt, &cwd, &mut on_event);
+    if let Some(run_id) = run_id {
+        crate::children::unregister_child(run_id);
+    }
     let _ = child.kill();
     let _ = child.wait();
     result

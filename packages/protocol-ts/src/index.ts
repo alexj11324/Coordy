@@ -12,11 +12,22 @@ export type Command =
   | { type: "CreateWorkspace"; name: string }
   | { type: "CreatePrincipal"; workspace_id: string; name: string }
   | { type: "CreateAgent"; workspace_id: string; principal_id: string; name: string; harness: string }
+  | {
+      type: "UpdateAgent";
+      agent_id: string;
+      name?: string | null;
+      description?: string | null;
+      instructions?: string | null;
+      harness?: string | null;
+    }
+  | { type: "ArchiveAgent"; agent_id: string }
   | { type: "Grant"; workspace_id: string; grantee_id: string; resource: string; action: string }
   | { type: "RevokeGrant"; grant_id: string }
   | { type: "Delegate"; workspace_id: string; from_actor_id: string; to_actor_id: string; resource: string; action: string }
-  | { type: "CreateTask"; workspace_id: string; title: string }
+  | { type: "CreateTask"; workspace_id: string; title: string; description?: string }
   | { type: "AssignTask"; task_id: string; agent_id: string }
+  | { type: "UpdateTask"; task_id: string; title?: string | null; description?: string | null }
+  | { type: "SetTaskStatus"; task_id: string; status: string }
   | { type: "BindRepository"; workspace_id: string; path: string }
   | { type: "CreateWorktree"; task_id: string }
   | {
@@ -36,6 +47,7 @@ export type Command =
   | { type: "ProposeContract"; workspace_id: string; title: string; body: string; participant_ids: string[] }
   | { type: "ApproveContract"; contract_id: string }
   | { type: "StartRun"; task_id: string; source: RunSource }
+  | { type: "CancelRun"; run_id: string }
   | { type: "IngestHarnessEvent"; run_id: string; event: HarnessEvent }
   | { type: "ApplyPatch"; task_id: string; patch: string }
   | {
@@ -98,6 +110,7 @@ export type TaskView = {
   id: string;
   workspace_id: string;
   title: string;
+  description?: string | null;
   status: string;
   assignee_agent_id?: string | null;
   worktree_path?: string | null;
@@ -120,6 +133,8 @@ export type AgentView = {
   principal_id: string;
   name: string;
   harness: string;
+  description?: string;
+  instructions?: string;
 };
 export type GrantView = {
   id: string;

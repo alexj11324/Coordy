@@ -113,6 +113,16 @@ pub async fn import_agents(
     };
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
+    for agent in &existing {
+        if matches!(agent.harness.as_str(), "acp" | "jsonl") {
+            let _ = runtime.kernel.submit_sync(AuthenticatedCommand {
+                actor: Actor::Daemon,
+                command: Command::ArchiveAgent {
+                    agent_id: agent.id.clone(),
+                },
+            });
+        }
+    }
     for agent in wanted {
         if existing.iter().any(|item| item.harness == agent.id) {
             skipped.push(agent.id.clone());

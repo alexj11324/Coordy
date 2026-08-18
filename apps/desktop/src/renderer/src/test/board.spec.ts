@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { acpRunSource } from "../lib/coordy/start-task";
-import { asTasks, boardColumn, latestRunForTask, outcomeId } from "../lib/coordy/views";
-import type { RunView, View } from "@coordy/protocol";
+import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
+import { agentDisplayName, listableAgents, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
+import { asTasks, boardColumn, isPlaceholderHarness, latestRunForTask, outcomeId } from "../lib/coordy/views";
+import type { AgentView, RunView, View } from "@coordy/protocol";
 
 describe("board view helpers", () => {
   it("reads tasks from a Board view", () => {
@@ -42,5 +44,48 @@ describe("board view helpers", () => {
       { id: "run_3", task_id: "t2", agent_id: "a", status: "completed", harness: "claude-acp", compaction_count: 0 },
     ];
     expect(latestRunForTask(runs, "t1")?.id).toBe("run_2");
+  });
+
+  it("hides leftover placeholder agents that are not a real CLI", () => {
+    const agents: AgentView[] = [
+      { id: "ag_1", workspace_id: "ws", principal_id: "p", name: "助手", harness: "acp" },
+      { id: "ag_2", workspace_id: "ws", principal_id: "p", name: "助手", harness: "acp" },
+      { id: "ag_3", workspace_id: "ws", principal_id: "p", name: "Coordy 演示", harness: "coordy-stub" },
+    ];
+    expect(agents.filter((agent) => isPlaceholderHarness(agent.harness))).toHaveLength(2);
+    expect(listableAgents(agents).map((agent) => agent.harness)).toEqual(["coordy-stub"]);
+  });
+
+  it("keeps a custom 智能体 name instead of replacing it with the CLI", () => {
+    expect(agentDisplayName({ name: "前端审查", harness: "claude-acp" })).toBe("前端审查");
+    expect(agentDisplayName({ name: "助手", harness: "acp" })).toBe("未对应任何 CLI");
+    expect(
+      agentDisplayName(
+        { name: "助手", harness: "claude-acp" },
+        [{ id: "claude-acp", name: "Claude Code", installed: true, command: "claude acp", source: "path" }],
+      ),
+    ).toBe("Claude Code");
+  });
+
+  it("only offers installed tools as selectable runtimes", () => {
+    expect(
+      selectableRuntimes([
+        { id: "claude-acp", name: "Claude Code", installed: true, command: "claude acp", source: "path" },
+        { id: "made-up", name: "Made Up", installed: false, command: "npx -y made-up", source: "registry" },
+      ]).map((item) => item.id),
+    ).toEqual(["claude-acp"]);
+  });
+
+  it("drafts 智能体 fields from a goal description", () => {
+    const draft = draftAgentFromGoal("审查前端 Pull Request。\n只看 TypeScript。");
+    expect(draft.name).toBe("审查前端 Pull Request");
+    expect(draft.description).toContain("审查前端");
+    expect(draft.instructions).toContain("只看 TypeScript");
+  });
+
+  it("uses Multica status words for issue columns", () => {
+    expect(taskStatusLabel("review")).toBe("待验收");
+    expect(boardColumn("done")).toBe("done");
+    expect(boardColumn("cancelled")).toBe("done");
   });
 });

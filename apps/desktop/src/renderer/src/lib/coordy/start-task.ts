@@ -6,18 +6,33 @@ export function acpRunSource(prompt: string) {
   return { type: "Acp" as const, prompt };
 }
 
-export async function syncDiscoveredAgents(
-  workspaceId: string,
-  principalId: string,
-  refresh = false,
-) {
-  if (refresh) {
-    await window.coordy.discoverAgents(true);
-  }
-  return window.coordy.importAgents({
-    workspace_id: workspaceId,
-    principal_id: principalId,
+export async function createNamedAgent(input: {
+  workspaceId: string;
+  principalId: string;
+  name: string;
+  harness: string;
+  description?: string;
+  instructions?: string;
+}): Promise<string> {
+  const created = await submit({
+    type: "CreateAgent",
+    workspace_id: input.workspaceId,
+    principal_id: input.principalId,
+    name: input.name.trim(),
+    harness: input.harness,
   });
+  const agentId = outcomeId(created.ids, "agent_id");
+  const description = input.description?.trim() ?? "";
+  const instructions = input.instructions?.trim() ?? "";
+  if (description || instructions) {
+    await submit({
+      type: "UpdateAgent",
+      agent_id: agentId,
+      description: description || null,
+      instructions: instructions || null,
+    });
+  }
+  return agentId;
 }
 
 export async function pickAgentId(workspaceId: string, preferredId?: string | null): Promise<string> {
@@ -28,7 +43,7 @@ export async function pickAgentId(workspaceId: string, preferredId?: string | nu
     agents.find((agent) => !isPlaceholderHarness(agent.harness)) ??
     agents[0];
   if (live) return live.id;
-  throw new Error("还没有助手。本机会从 PATH 和 ACP Registry 自动导入，请稍后再试或打开「助手」页。");
+  throw new Error("还没有智能体。请先打开「智能体」页，点新建智能体。");
 }
 
 export async function startAcpRun(input: {
@@ -42,7 +57,8 @@ export async function startAcpRun(input: {
   const created = await submit({
     type: "CreateTask",
     workspace_id: input.workspaceId,
-    title: input.title.trim() || "新任务",
+    title: input.title.trim() || "新事项",
+    description: input.prompt.trim(),
   });
   const taskId = outcomeId(created.ids, "task_id");
   await submit({ type: "AssignTask", task_id: taskId, agent_id: agentId });

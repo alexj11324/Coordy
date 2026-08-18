@@ -25,6 +25,6 @@ export function installCliBinaries(): { ok: boolean; message: string } {
   }
   return {
     ok: true,
-    message: `已安装到 ${copies.join(" 和 ")}。若终端找不到命令，把 ~/.local/bin 加进 PATH。`,
+    message: `已经装好，新开一个终端就可以用。如果还是找不到命令，把 ${destDir} 加到终端的搜索路径里。`,
   };
 }

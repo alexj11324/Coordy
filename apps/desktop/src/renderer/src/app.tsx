@@ -4,18 +4,23 @@ import { useEffect, useState } from "react";
 import { queryClient } from "./app/query-client";
 import { AppRouter } from "./app/router";
 import { submitAsDaemon, viewAsDaemon } from "./lib/coordy/client";
-import { syncDiscoveredAgents } from "./lib/coordy/start-task";
 import { useSession } from "./state/session-store";
+import { applyTheme, useThemeStore } from "./state/theme-store";
 
 export function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    applyTheme(useThemeStore.getState().preference);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme(useThemeStore.getState().preference);
+    media.addEventListener("change", onChange);
     bootstrap()
       .then(() => setReady(true))
       .catch((err: unknown) => {
         setError(err instanceof Error ? err.message : String(err));
       });
+    return () => media.removeEventListener("change", onChange);
   }, []);
   useEffect(() => {
     if (!ready) return;
@@ -33,7 +38,7 @@ export function App() {
   if (!ready) {
     return (
       <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-muted-foreground">
-        Starting coordyd…
+        正在打开…
       </div>
     );
   }
@@ -64,18 +69,9 @@ async function bootstrap() {
     const created = await submitAsDaemon({
       type: "CreatePrincipal",
       workspace_id: workspaceId,
-      name: "Local user",
+      name: "我",
     });
     principalId = String(created.ids.principal_id);
   }
   useSession.getState().setPrincipal(principalId);
-  try {
-    await syncDiscoveredAgents(workspaceId, principalId, true);
-  } catch {
-    try {
-      await syncDiscoveredAgents(workspaceId, principalId, false);
-    } catch {
-      /* offline / empty PATH still lets the window open; Home retries */
-    }
-  }
 }

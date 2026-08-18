@@ -3,7 +3,8 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 use coordy_harness::{
-    parse_codex_jsonl_line, resolve_launch, spawn_acp_session, spawn_command, SecretEnv,
+    kill_child, parse_codex_jsonl_line, register_child, resolve_launch, spawn_acp_session,
+    spawn_command, unregister_child, SecretEnv,
 };
 use coordy_kernel::Ports;
 use coordy_protocol::{CoordyError, HarnessEvent};
@@ -62,6 +63,7 @@ impl Ports for LivePorts {
                 &kind,
                 &worktree,
                 &prompt,
+                &run_id,
                 &secrets,
                 registry.as_deref(),
                 emit,
@@ -91,12 +93,18 @@ impl Ports for LivePorts {
         });
         Ok(())
     }
+
+    fn cancel_harness(&self, run_id: &str) -> Result<(), CoordyError> {
+        let _ = kill_child(run_id);
+        Ok(())
+    }
 }
 
 fn run_kind(
     kind: &str,
     worktree: &str,
     prompt: &str,
+    run_id: &str,
     secrets: &SecretEnv,
     registry_json: Option<&str>,
     mut emit: impl FnMut(HarnessEvent),
@@ -107,9 +115,14 @@ fn run_kind(
             for (key, value) in secrets.env_pairs() {
                 cmd.env(key, value);
             }
-            let output = cmd
-                .output()
+            let child = cmd
+                .spawn()
                 .map_err(|e| CoordyError::unavailable(format!("run {kind}: {e}")))?;
+            register_child(run_id, child.id());
+            let output = child
+                .wait_with_output()
+                .map_err(|e| CoordyError::unavailable(format!("run {kind}: {e}")))?;
+            unregister_child(run_id);
             let stdout = String::from_utf8_lossy(&output.stdout);
             let mut any = false;
             for line in stdout.lines() {
@@ -141,7 +154,7 @@ fn run_kind(
         }
         _ => {
             let (bin, args) = resolve_launch(kind, secrets.acp_command.as_deref(), registry_json)?;
-            spawn_acp_session(&bin, &args, worktree, prompt, secrets, emit)
+            spawn_acp_session(&bin, &args, worktree, prompt, secrets, Some(run_id), emit)
         }
     }
 }

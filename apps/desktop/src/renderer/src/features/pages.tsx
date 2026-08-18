@@ -22,27 +22,25 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
   Textarea,
 } from "@coordy/ui";
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
-  Bot,
   FileText,
   GitBranch,
   Inbox,
   Play,
   Plus,
-  RefreshCw,
   Shield,
   StickyNote,
   Users,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
-import { startAcpOnTask, syncDiscoveredAgents } from "../lib/coordy/start-task";
+import { listableAgents } from "../lib/coordy/labels";
+import { startAcpOnTask } from "../lib/coordy/start-task";
 import { useSession } from "../state/session-store";
 import type { Command, Query } from "@coordy/protocol";
 import {
@@ -111,7 +109,7 @@ export function PrincipalsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="成员" description="成员拥有助手、记忆和契约投票权。" />
+      <PageHeader title="成员" description="成员拥有智能体、记忆和契约投票权。" />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(event: FormEvent) => {
@@ -150,112 +148,11 @@ export function PrincipalsPage() {
   );
 }
 
-export function AgentsPage() {
-  const q = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
-  const items = asAgents(q.data);
-  const catalog = useQuery({
-    queryKey: ["discover-agents"],
-    queryFn: () => window.coordy.discoverAgents(false),
-  });
-  const qc = useQueryClient();
-  const workspaceId = useSession((s) => s.workspaceId);
-  const principalId = useSession((s) => s.principalId);
-  const session = useSession();
-  const importedIds = new Set(items.map((agent) => agent.harness));
-  const available = (catalog.data ?? []).filter((item) => !importedIds.has(item.id));
-  const autoImported = useRef(false);
-
-  useEffect(() => {
-    if (!workspaceId || !principalId || !catalog.isFetched || autoImported.current) return;
-    const missingInstalled = (catalog.data ?? []).filter((item) => item.installed && !importedIds.has(item.id));
-    if (missingInstalled.length === 0) return;
-    autoImported.current = true;
-    void syncDiscoveredAgents(workspaceId, principalId, false).then(() => qc.invalidateQueries());
-  }, [workspaceId, principalId, catalog.isFetched, catalog.data, importedIds, qc]);
-
-  return (
-    <section className="space-y-4">
-      <PageHeader title="助手" description="启动时自动扫描 PATH 和 ACP Registry。本机已安装的会导入成队友；其余条目可一键加入，不用手填命令。">
-        <Button
-          variant="secondary"
-          onClick={async () => {
-            if (!workspaceId || !principalId) return;
-            await syncDiscoveredAgents(workspaceId, principalId, true);
-            await qc.invalidateQueries();
-          }}
-        >
-          <RefreshCw data-icon="inline-start" />
-          刷新发现
-        </Button>
-      </PageHeader>
-      {items.length === 0 ? (
-        <EmptyList icon={Bot} title="还没有助手" description="装好 Claude / Codex / Gemini 等 CLI 后会自动出现。演示助手也会一并导入。" />
-      ) : (
-        items.map((agent) => {
-          const discovered = (catalog.data ?? []).find((item) => item.id === agent.harness);
-          return (
-            <Card key={agent.id} size="sm" className="mb-2">
-              <CardHeader>
-                <CardTitle>{agent.name}</CardTitle>
-                <CardDescription>
-                  {agent.harness}
-                  {discovered?.installed ? " · 本机已安装" : discovered ? " · Registry" : ""}
-                  {discovered?.command ? ` · ${discovered.command}` : ""}
-                </CardDescription>
-                <CardAction>
-                  <Button variant="ghost" size="sm" onClick={() => session.setAgent(agent.id, agent.principal_id)}>
-                    以它的身份
-                  </Button>
-                </CardAction>
-              </CardHeader>
-            </Card>
-          );
-        })
-      )}
-      {available.length > 0 ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>发现但未导入</CardTitle>
-            <CardDescription>来自 ACP Registry。导入后就可以像指派同事一样指派它；启动时才按命令拉起，不会预先 npm install。</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {available.map((item) => (
-              <div key={item.id} className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-                <div>
-                  <p className="text-sm font-medium">{item.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {item.installed ? "本机已安装" : "Registry"} · {item.command}
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={async () => {
-                    if (!workspaceId || !principalId) return;
-                    await window.coordy.importAgents({
-                      workspace_id: workspaceId,
-                      principal_id: principalId,
-                      ids: [item.id],
-                    });
-                    await qc.invalidateQueries();
-                  }}
-                >
-                  导入为队友
-                </Button>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      ) : null}
-    </section>
-  );
-}
-
 export function AuthorityPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Authority", workspace_id }));
   const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
   const grants = asGrants(q.data);
-  const agentList = asAgents(agents.data);
+  const agentList = listableAgents(asAgents(agents.data));
   const resource = useForm("");
   const action = useForm("command");
   const granteeId = useForm("");
@@ -269,7 +166,7 @@ export function AuthorityPage() {
   const agentItems = Object.fromEntries(agentList.map((agent) => [agent.id, agent.name]));
   return (
     <section>
-      <PageHeader title="权限" description="把命令权授给某个助手。委托不能升级。" />
+      <PageHeader title="权限" description="把命令权授给某个智能体。委托不能升级。" />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
@@ -309,7 +206,7 @@ export function AuthorityPage() {
           onChange={(event: ChangeEvent<HTMLInputElement>) => action.set(event.target.value)}
         />
         <Button type="submit" disabled={agentList.length === 0}>
-          授予选中的助手
+          授权
         </Button>
       </form>
       <div className="mb-4 grid gap-2 md:grid-cols-4">
@@ -357,11 +254,11 @@ export function AuthorityPage() {
             }
           }}
         >
-          {agentList.length < 2 ? "需要至少两个助手才能委托" : "委托给选中的助手"}
+          {agentList.length < 2 ? "至少需要两个智能体" : "委托"}
         </Button>
       </div>
       {grants.length === 0 ? (
-        <EmptyList icon={Shield} title="还没有授权" description="选一个助手授予动作，或把权限委托给另一个助手。" />
+        <EmptyList icon={Shield} title="还没有授权" description="选一个智能体授予动作，或把权限委托给另一个智能体。" />
       ) : (
         grants.map((grant) => (
           <Card key={grant.id} size="sm" className="mb-2">
@@ -427,7 +324,7 @@ export function MemoryPage() {
         />
         <Select
           value={visibility.value}
-          items={{ principal: "成员私有", agent_private: "助手私有" }}
+          items={{ principal: "成员私有", agent_private: "智能体私有" }}
           onValueChange={(value) => value && visibility.set(value)}
         >
           <SelectTrigger className="w-44">
@@ -435,13 +332,13 @@ export function MemoryPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="principal">成员私有</SelectItem>
-            <SelectItem value="agent_private">助手私有</SelectItem>
+            <SelectItem value="agent_private">智能体私有</SelectItem>
           </SelectContent>
         </Select>
         <Button type="submit">记下</Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={StickyNote} title="还没有记忆" description="记下一条成员或助手私有笔记。私有记忆不会上传。" />
+        <EmptyList icon={StickyNote} title="还没有记忆" description="记下一条成员或智能体私有笔记。私有记忆不会上传。" />
       ) : (
         items.map((memory) => {
           const recipients = otherPeople(memory.owner_actor_id);
@@ -493,7 +390,7 @@ export function MemoryPage() {
                         }
                       }}
                     >
-                      分享给选中的人
+                      分享
                     </Button>
                   </>
                 )}
@@ -580,7 +477,7 @@ export function ContractsPage() {
           </Select>
         </div>
         <Button type="submit" className="w-fit" disabled={people.length < 2 || !firstId || !secondId || firstId === secondId}>
-          {people.length < 2 ? "需要至少两位成员才能提议契约" : "向选中的两位成员提议契约"}
+          {people.length < 2 ? "至少需要两位成员" : "提议"}
         </Button>
       </form>
       {items.length === 0 ? (
@@ -615,10 +512,10 @@ export function DependenciesPage() {
   const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
   const items = asDependencies(q.data);
   const tasks = asTasks(board.data);
-  const agentList = asAgents(agents.data);
+  const agentList = listableAgents(asAgents(agents.data));
   const nodes = [
     ...tasks.map((task) => ({ id: task.id, label: `任务 · ${task.title}` })),
-    ...agentList.map((agent) => ({ id: agent.id, label: `助手 · ${agent.name}` })),
+    ...agentList.map((agent) => ({ id: agent.id, label: `智能体 · ${agent.name}` })),
   ];
   const nodeItems = Object.fromEntries(nodes.map((node) => [node.id, node.label]));
   const fromId = useForm("");
@@ -672,11 +569,11 @@ export function DependenciesPage() {
         </Select>
         <Input placeholder="实体，例如 repo" value={entity.value} onChange={(event: ChangeEvent<HTMLInputElement>) => entity.set(event.target.value)} />
         <Button type="submit" disabled={nodes.length < 1 || !selectedFrom || !selectedTo}>
-          声明依赖
+          添加
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={GitBranch} title="还没有依赖" description="先有任务或助手，再声明一条从 A 到 B 的边。" />
+        <EmptyList icon={GitBranch} title="还没有依赖" description="先有任务或智能体，再声明一条从 A 到 B 的边。" />
       ) : (
         items.map((dep) => (
           <Card key={dep.id} size="sm" className="mb-2">
@@ -702,13 +599,13 @@ export function ConflictsPage() {
   const navigate = useNavigate();
   return (
     <section>
-      <PageHeader title="冲突" description="工作计划与承诺打架时会出现在这里。处理入口在收件箱。">
+      <PageHeader title="冲突" description="工作计划与约定冲突时会出现在这里，可以到收件箱处理。">
         <Button variant="secondary" onClick={() => navigate("/inbox")}>
-          去收件箱
+          打开收件箱
         </Button>
       </PageHeader>
       {items.length === 0 ? (
-        <EmptyList icon={AlertTriangle} title="没有冲突" description="助手在压缩后改计划并撞上承诺时，会记一条冲突并投递到收件箱。" />
+        <EmptyList icon={AlertTriangle} title="没有冲突" description="智能体在压缩后改计划并撞上承诺时，会记一条冲突并投递到收件箱。" />
       ) : (
         items.map((conflict) => (
           <Card key={conflict.id} size="sm" className="mb-2">
@@ -720,7 +617,7 @@ export function ConflictsPage() {
             </CardHeader>
             <CardFooter>
               <Button variant="secondary" onClick={() => navigate("/inbox")}>
-                去收件箱处理
+                处理
               </Button>
             </CardFooter>
           </Card>
@@ -736,7 +633,7 @@ export function RunsPage() {
   const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
   const items = asRuns(q.data);
   const tasks = asTasks(board.data);
-  const agentList = asAgents(agents.data);
+  const agentList = listableAgents(asAgents(agents.data));
   const [runId, setRunId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState("");
   const prompt = useForm("继续做这件事，用中文汇报进度。");
@@ -752,7 +649,7 @@ export function RunsPage() {
   const taskItems = Object.fromEntries(tasks.map((task) => [task.id, task.title]));
   return (
     <section>
-      <PageHeader title="运行" description="ACP 会话事件会进这里。选一个任务继续说，助手会接着干。" />
+      <PageHeader title="运行" description="ACP 会话事件会进这里。选一个任务继续说，智能体会接着干。" />
       <div className="mb-4 flex flex-wrap gap-2">
         <Select value={selectedTask} items={taskItems} onValueChange={(value) => value && setTaskId(value)}>
           <SelectTrigger className="w-56">
@@ -783,11 +680,11 @@ export function RunsPage() {
             await qc.invalidateQueries();
           }}
         >
-          继续让助手干
+          继续
         </Button>
       </div>
       {items.length === 0 ? (
-        <EmptyList icon={Play} title="还没有运行" description="在「开始」或「任务」里派给助手，事件会出现在这里。" />
+        <EmptyList icon={Play} title="还没有运行" description="在「开始」或「任务」里指派智能体后，记录会出现在这里。" />
       ) : (
         items.map((run) => (
           <Card key={run.id} size="sm" className="mb-2">
@@ -851,172 +748,6 @@ export function InboxPage() {
           </Card>
         ))
       )}
-    </section>
-  );
-}
-
-export function SettingsPage() {
-  const workspaceId = useSession((s) => s.workspaceId);
-  const qc = useQueryClient();
-  const q = useQuery({
-    queryKey: ["settings", workspaceId],
-    enabled: Boolean(workspaceId),
-    queryFn: () => view({ type: "Settings", workspace_id: workspaceId! }),
-  });
-  const secrets = useQuery({
-    queryKey: ["secrets"],
-    queryFn: () => window.coordy.secretsStatus(),
-  });
-  const appInfoQuery = useQuery({
-    queryKey: ["app-info"],
-    queryFn: () => window.coordy.getAppInfo(),
-  });
-  const command = useCommand();
-  const [notice, setNotice] = useState("");
-  const [provider, setProvider] = useState("openai");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const enabled = q.data?.type === "Settings" ? q.data.llm_advisor_enabled : false;
-  const status = secrets.data;
-  const info = appInfoQuery.data;
-  return (
-    <section className="space-y-4">
-      <PageHeader title="设置" description="密钥留在这台电脑。助手由 PATH + ACP Registry 自动发现，不必手填命令。" />
-      <Card>
-        <CardHeader>
-          <CardTitle>你自己的密钥</CardTitle>
-          <CardDescription>写 0600 文件，不进数据库。启动子进程时注入 OPENAI_API_KEY / ANTHROPIC_API_KEY。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex items-center gap-2 text-sm">
-            {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>服务商</Label>
-              <Select
-                value={provider}
-                items={{ openai: "OpenAI 兼容", anthropic: "Anthropic", custom: "自定义" }}
-                onValueChange={(value) => value && setProvider(value)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="openai">OpenAI 兼容</SelectItem>
-                  <SelectItem value="anthropic">Anthropic</SelectItem>
-                  <SelectItem value="custom">自定义</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="settings-key">API 密钥</Label>
-              <Input
-                id="settings-key"
-                type="password"
-                autoComplete="off"
-                placeholder={status?.key_configured ? "已保存，留空则保持" : "sk-…"}
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="settings-base">Base URL</Label>
-              <Input
-                id="settings-base"
-                placeholder={status?.base_url ?? "https://api.openai.com/v1"}
-                value={baseUrl}
-                onChange={(event) => setBaseUrl(event.target.value)}
-              />
-            </div>
-          </div>
-        </CardContent>
-        <CardFooter className="flex-wrap gap-2">
-          <Button
-            onClick={async () => {
-              await window.coordy.setSecret({
-                provider,
-                api_key: apiKey.trim() ? apiKey.trim() : null,
-                base_url: baseUrl.trim() ? baseUrl.trim() : null,
-              });
-              setApiKey("");
-              setNotice("密钥已保存。");
-              await qc.invalidateQueries({ queryKey: ["secrets"] });
-            }}
-          >
-            保存
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => {
-              await window.coordy.clearSecret();
-              setNotice("已清除本机密钥。");
-              await qc.invalidateQueries({ queryKey: ["secrets"] });
-            }}
-          >
-            清除密钥
-          </Button>
-        </CardFooter>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>工作区</CardTitle>
-          <CardDescription>绑定仓库后，开始任务会把这个目录交给助手。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div>
-            <Label>仓库</Label>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {q.data?.type === "Settings" ? q.data.repo_path ?? "未绑定" : "…"}
-            </p>
-          </div>
-          <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
-            <div>
-              <Label htmlFor="llm-advisor">可选 LLM 顾问</Label>
-              <p className="text-sm text-muted-foreground">顾问不能提交状态；确定性门禁始终开着。</p>
-            </div>
-            <Switch
-              id="llm-advisor"
-              checked={enabled}
-              onCheckedChange={(next) => {
-                if (workspaceId) {
-                  command.mutate({
-                    type: "SetSettings",
-                    workspace_id: workspaceId,
-                    llm_advisor_enabled: Boolean(next),
-                  });
-                }
-              }}
-            />
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {info ? `${info.version} / ${info.os}${info.cliPath ? ` / ${info.cliPath}` : ""}` : "读取应用信息…"}
-          </p>
-          {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
-        </CardContent>
-        <CardFooter className="flex-wrap gap-2">
-          <Button
-            onClick={async () => {
-              const path = await window.coordy.chooseRepository();
-              if (path && workspaceId) {
-                await submit({ type: "BindRepository", workspace_id: workspaceId, path });
-                await qc.invalidateQueries();
-              }
-            }}
-          >
-            绑定仓库
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => {
-              const result = await window.coordy.installCli();
-              setNotice(result.message);
-            }}
-          >
-            安装 CLI 到 ~/.local/bin
-          </Button>
-        </CardFooter>
-      </Card>
     </section>
   );
 }
