@@ -50,3 +50,40 @@ path risks as follow-ups instead of expanding the current implementation.
 If a proposed change would materially expand the approved scope, report the
 evidence and ask before implementing it. Do not create a shared abstraction
 without at least two current, concrete consumers.
+
+## Cursor Cloud specific instructions
+
+Coordy is a pure-Python (>=3.11) research CLI with zero third-party runtime
+dependencies; there is no long-running backend, database server, or container
+to start. The only required "service" is the `coordy` CLI operating on a local
+`.coordy/` workspace. Development commands are the same as CI
+(`.github/workflows/ci.yml`) and the README Quick start.
+
+- A `.venv` virtualenv at the repo root is the working environment. Activate it
+  (`. .venv/bin/activate`) or call binaries directly (`.venv/bin/coordy`,
+  `.venv/bin/python`) before running anything. The startup update script
+  recreates/refreshes it, so `python -m pip install -e .` normally does not need
+  to be rerun by hand.
+- Lint/static checks (no ruff/black/flake8 configured): `python -m pip check`,
+  `python -m compileall -q src`, and `node --check web/incident-review/app.js`
+  for the static browser UI. Tests: `python -m unittest discover -s tests -v`.
+  Build: `python -m build`.
+- Known pre-existing test failure (not an environment issue):
+  `test_s0_excludes_guardian_sessions_and_does_not_treat_turn_settings_as_compaction`
+  in `tests/test_coordy.py` fails deterministically (`auxiliary_sessions_excluded`
+  is 0, expected 1). All other 123 tests pass. Do not treat this as a broken
+  setup.
+- End-to-end smoke without any credentials: `coordy run --input
+  examples/synthetic_sessions.jsonl --workspace .coordy/demo` then `coordy
+  summary --workspace .coordy/demo`. S0a is deterministic and correctly reports
+  `INSUFFICIENT_EVIDENCE` / `PENDING_EVIDENCE_REVIEW`; that is expected, not a
+  failure.
+- Model-graded S0b/causal stages and `grade-*` commands require an
+  OpenAI-compatible Responses API via a private `0600` `.env.local`
+  (`COORDY_JUDGE_API_KEY`, `COORDY_JUDGE_BASE_URL`; see `.env.example`). These
+  are optional and not needed for S0a, `run`, or the test suite.
+- The review web UI (`coordy serve-incident-causal-review`, loopback
+  `127.0.0.1:8765`) is optional and only loads once the upstream
+  incident-causal review artifacts exist (i.e. after the LLM-graded pipeline);
+  it fails closed on a bare workspace. Its store logic is covered by
+  `tests/test_review_ui.py`.
