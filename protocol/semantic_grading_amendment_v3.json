@@ -1,0 +1,83 @@
+{
+  "S0a": {
+    "name": "evidence_infrastructure",
+    "rules_may_only": [
+      "parse deterministic event and tool facts",
+      "enumerate real compaction opportunities",
+      "rank candidates"
+    ],
+    "rules_must_not": [
+      "infer state loss or causality",
+      "assign Type A/B/C/D/U ground truth",
+      "estimate prevalence"
+    ]
+  },
+  "S0b": {
+    "causal_judge_scope": "every final primary State Diff SUSPECT; secondary disagreement cannot filter a case out",
+    "causal_core_question": "did the agent act incorrectly because it forgot or distorted still-active important state across compaction",
+    "detection_gate_scope": "necessary first gate only; DETECTED requires subsequent State Probe, Action Probe, and baseline comparison before answering full Question A",
+    "causal_packet": "direct T0-T5 sections; T0/T1 are not reconstructed from derived State Diff output",
+    "causal_answer_ingestion": "hash-bound HUMAN_CONFIRMED answers required",
+    "classification_bridge": "a human causal YES plus two agreeing evidence-bound judges may write system Type A/B/C classification into re-hashed S0 evidence cards",
+    "causal_types": [
+      "A",
+      "B",
+      "C",
+      "D",
+      "U"
+    ],
+    "disagreement_or_low_confidence": "UNCERTAIN_and_human_review",
+    "engineering_consequence_sources": [
+      "structured tool result with exit code",
+      "patch_apply_end",
+      "bound Git/test/replay evidence"
+    ],
+    "human_calibration_cases": {
+      "maximum": 40,
+      "minimum": 20,
+      "target": 30
+    },
+    "independent_second_judge": "targeted review of every primary suspect and low-confidence case plus a reproducible Goal-root-stratified sample of healthy cases and no-post controls; target 30, normally 20-40, with mandatory-case overflow reported",
+    "machine_judges_are_ground_truth": false,
+    "name": "semantic_grading",
+    "outcome_blinding": "State Diff sees pre-state, compaction summary, and post-plan only.",
+    "checkpoint_provenance": "scan, packet, model, effort, API base, timeout, prompt, schema, request/response IDs, and token usage",
+    "smoke_approval_binding": "exact payload SHA-256 plus exact non-secret judge-configuration SHA-256",
+    "prose_is_engineering_consequence": false,
+    "state_diff_coverage": "every compaction opportunity",
+    "state_diff_isolation": "one opportunity per API request; output schema binds the exact opportunity and allowed evidence IDs",
+    "state_diff_top_level": "suspect is deterministically derived from at least one missing, contradicted, or stale-reactivated diff with DIRECT downstream relevance; inconsistent model summaries are preserved, normalized without another call, and forced to independent/human review",
+    "judge_transport": "direct OpenAI-compatible Responses API; no codex exec subprocess",
+    "judge_tool_policy": "request and response both require tools=[]; store=false and parallel_tool_calls=false",
+    "maximum_judge_attempts_per_opportunity": "1 normally; up to two explicitly authorized retries only for an HTTP 504 with no request ID, response ID, or usage",
+    "dispatch_recovery": "pre-POST durable tombstone; uncertain transport outcome forbids resend; a concrete HTTP 504 without provenance may receive at most two audited explicit retries",
+    "smoke_gate": {
+      "scope": "safety_and_evidence_binding_only; no accuracy or recall claim",
+      "no_post_plan_controls": "all must be UNASSESSABLE and not suspected",
+      "post_plan_cases": "all must be assessable",
+      "maximum_post_plan_suspect_rate": 0.6666666666666666,
+      "full_population_requires_separate_approval": true
+    },
+    "state_diff_labels": [
+      "missing",
+      "contradicted",
+      "stale_reactivated",
+      "preserved"
+    ],
+    "state_types": [
+      "goal",
+      "constraint",
+      "decision",
+      "rejected_option",
+      "plan",
+      "dependency",
+      "acceptance_criteria"
+    ],
+    "state_window": "deterministic temporal coverage plus recency; not a last-N-only window",
+    "user_message_serialization": "preserve complete textual message content, including response annotations and the actual user request; do not truncate or redact semantic text; replace embedded image bytes with evidence-bound unassessed markers",
+    "single_writer": "one workspace semantic lock with atomic fsynced checkpoint replacement"
+  },
+  "applies_to": "screening_v1.S0 semantic evidence grading",
+  "gate_changes": "none_until_human_calibration_and_causal_review_complete",
+  "version": "3"
+}
