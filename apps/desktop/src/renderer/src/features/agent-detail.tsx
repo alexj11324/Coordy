@@ -14,6 +14,8 @@ import { agentDisplayName, listableAgents, pickerRuntimes } from "../lib/coordy/
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { RuntimePicker } from "./runtime-picker";
+import { ProviderLogo } from "./provider-logo";
+import { useTabTitle } from "../shell/use-tab-title";
 
 export function AgentDetailPage() {
   const { agentId } = useParams();
@@ -39,6 +41,8 @@ export function AgentDetailPage() {
     () => pickerRuntimes(catalog.data, harness || agent?.harness),
     [catalog.data, harness, agent?.harness],
   );
+  const displayName = agent ? agentDisplayName(agent, catalog.data) : undefined;
+  useTabTitle(displayName);
 
   useEffect(() => {
     if (!agent) return;
@@ -88,10 +92,13 @@ export function AgentDetailPage() {
           <ArrowLeft className="size-3.5" />
           智能体
         </Link>
-        <PageHeader
-          title={agentDisplayName(agent, catalog.data)}
-          description="名称、描述和运行时决定它是谁、在哪执行。指令每次开工都会带上。"
-        />
+        <div className="flex items-start gap-3">
+          <ProviderLogo provider={agent.harness} className="mt-1 size-8" />
+          <PageHeader
+            title={displayName ?? agentDisplayName(agent, catalog.data)}
+            description="名称、描述和运行时决定它是谁、在哪执行。指令每次开工都会带上。"
+          />
+        </div>
       </div>
       {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
       <form

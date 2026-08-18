@@ -27,6 +27,7 @@ import {
 } from "../lib/coordy/labels";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { ProviderLogo } from "./provider-logo";
 
 export function AgentsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -75,6 +76,7 @@ export function AgentsPage() {
               <CardHeader>
                 <button type="button" className="text-left" onClick={() => navigate(`/agents/${agent.id}`)}>
                   <CardTitle className="flex items-center gap-2">
+                    <ProviderLogo provider={agent.harness} className="size-4" />
                     {agentDisplayName(agent, catalog.data)}
                     <Badge variant={presence === "online" || presence === "demo" ? "outline" : "secondary"}>
                       <span

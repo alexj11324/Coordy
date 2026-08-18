@@ -2,59 +2,40 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Button,
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
   EmptyTitle,
   Input,
-  Label,
-  PageHeader,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Textarea,
+  cn,
 } from "@coordy/ui";
-import { LayoutDashboard, Play, Plus } from "lucide-react";
-import { useState, type ChangeEvent, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Columns3, LayoutDashboard, List, Plus } from "lucide-react";
+import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import {
-  agentDisplayName,
-  formatActivity,
-  listableAgents,
-  taskStatusLabel,
-} from "../lib/coordy/labels";
-import { startAcpOnTask } from "../lib/coordy/start-task";
+  filterIssues,
+  ISSUE_BOARD_COLUMNS,
+  ISSUE_LIST_GROUPS,
+  issuesInColumn,
+  readIssueViewMode,
+  taskIdentifier,
+  writeIssueViewMode,
+  type IssueViewMode,
+} from "../lib/coordy/issues";
+import { agentDisplayName, listableAgents, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { useSession } from "../state/session-store";
-import type { Command, Query, TaskView } from "@coordy/protocol";
-import {
-  asAgents,
-  asCommitments,
-  asRunDetail,
-  asRuns,
-  asTasks,
-  boardColumn,
-  latestRunForTask,
-  type BoardColumn,
-} from "../lib/coordy/views";
-
-const COLUMNS: { id: BoardColumn; title: string }[] = [
-  { id: "open", title: "待办" },
-  { id: "running", title: "进行中" },
-  { id: "review", title: "待验收" },
-  { id: "blocked", title: "暂时做不了" },
-  { id: "done", title: "已完成" },
-];
+import { useLayoutStore } from "../state/layout-store";
+import { asAgents, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views";
+import type { AgentView, DiscoveredAgentView, Query, TaskView } from "@coordy/protocol";
+import { NamedWithLogo, ProviderLogo } from "./provider-logo";
+import { StatusGlyph } from "./issue-status";
 
 function useWorkspaceQuery(make: (workspace_id: string) => Query) {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -65,230 +46,389 @@ function useWorkspaceQuery(make: (workspace_id: string) => Query) {
   });
 }
 
-function useCommand() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (command: Command) => submit(command),
-    onSuccess: () => qc.invalidateQueries(),
-  });
-}
-
-function useForm(initial: string) {
-  const [value, set] = useState(initial);
-  return { value, set };
-}
-
 export function BoardPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
-  const commitments = useWorkspaceQuery((workspace_id) => ({
-    type: "Commitments",
-    workspace_id,
-  }));
   const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
   const runsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Runs", workspace_id }));
   const catalog = useQuery({
     queryKey: ["discover-agents"],
     queryFn: () => window.coordy.discoverAgents(false),
   });
-  const title = useForm("");
-  const prompt = useForm("");
-  const command = useCommand();
   const qc = useQueryClient();
-  const tasks = asTasks(q.data);
   const workspaceId = useSession((s) => s.workspaceId);
+  const tasks = asTasks(q.data);
   const agentList = listableAgents(asAgents(agents.data));
   const runList = asRuns(runsQuery.data);
-  const [assigneeByTask, setAssigneeByTask] = useState<Record<string, string>>({});
-  const agentItems = Object.fromEntries(
-    agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)]),
-  );
+  const [mode, setMode] = useState<IssueViewMode>(readIssueViewMode);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const pendingFocus = useLayoutStore((s) => s.pendingFocus);
+  const visible = useMemo(() => filterIssues(tasks, query, status), [tasks, query, status]);
 
-  const grouped = COLUMNS.map((column) => ({
-    ...column,
-    tasks: tasks.filter((task) => boardColumn(task.status) === column.id),
-  }));
+  useEffect(() => {
+    if (pendingFocus !== "new-task") return;
+    useLayoutStore.getState().consumePendingFocus();
+    setComposerOpen(true);
+  }, [pendingFocus]);
+
+  useEffect(() => {
+    if (!composerOpen) return;
+    document.getElementById("board-new-title")?.focus();
+  }, [composerOpen]);
+
+  const create = useMutation({
+    mutationFn: async (title: string) => {
+      if (!workspaceId) throw new Error("还没准备好，请稍等一下");
+      return submit({ type: "CreateTask", workspace_id: workspaceId, title });
+    },
+    onSuccess: async () => {
+      setDraft("");
+      setComposerOpen(false);
+      await qc.invalidateQueries();
+    },
+  });
+
+  const setView = (next: IssueViewMode) => {
+    setMode(next);
+    writeIssueViewMode(next);
+  };
 
   return (
-    <section>
-      <PageHeader
-        title="事项"
-        description="一件事项记下要做什么、交给谁、现在到哪一步。指派给智能体后它会开工，进度写回这件事。"
-      />
-      <form
-        className="mb-4 flex gap-2"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          if (workspaceId && title.value) {
-            command.mutate({ type: "CreateTask", workspace_id: workspaceId, title: title.value });
-            title.set("");
-          }
-        }}
-      >
-        <Input
-          placeholder="先写个标题就行，别的以后再补"
-          value={title.value}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => title.set(event.target.value)}
-        />
-        <Button type="submit">
-          <Plus data-icon="inline-start" />
-          创建
-        </Button>
-      </form>
-      <div className="mb-4 space-y-1.5">
-        <Label htmlFor="board-prompt">这次开工要特别注意的（只作用于这一轮）</Label>
-        <Textarea
-          id="board-prompt"
-          placeholder="范围、顺序，或这次先看什么。长期要求写进事项说明里。"
-          value={prompt.value}
-          onChange={(event: ChangeEvent<HTMLTextAreaElement>) => prompt.set(event.target.value)}
-        />
-      </div>
-      {tasks.length === 0 ? (
-        <Empty className="bg-muted/30">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <LayoutDashboard />
-            </EmptyMedia>
-            <EmptyTitle>还没有事项</EmptyTitle>
-            <EmptyDescription>创建一个，或先新建智能体再从「开始」页说一句话。</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-      ) : (
-        <div className="grid gap-3 lg:grid-cols-5">
-          {grouped.map((column) => (
-            <div key={column.id} className="space-y-2">
-              <div className="flex items-center justify-between px-1">
-                <h2 className="text-sm font-medium">{column.title}</h2>
-                <Badge variant="secondary">{column.tasks.length}</Badge>
-              </div>
-              {column.tasks.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">空</p>
-              ) : (
-                column.tasks.map((task) => (
-                  <TaskCard
-                    key={task.id}
-                    task={task}
-                    agentList={agentList}
-                    agentItems={agentItems}
-                    catalog={catalog.data}
-                    assignee={assigneeByTask[task.id] || task.assignee_agent_id || agentList[0]?.id || ""}
-                    onAssignee={(value) => setAssigneeByTask((prev) => ({ ...prev, [task.id]: value }))}
-                    prompt={prompt.value || task.title}
-                    latestRunId={latestRunForTask(runList, task.id)?.id ?? null}
-                    onInvalidate={() => qc.invalidateQueries()}
-                  />
-                ))
-              )}
-            </div>
-          ))}
+    <section className="flex h-full min-h-0 flex-col">
+      <header className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2">
+        <h1 className="mr-2 text-sm font-semibold">任务</h1>
+        <div className="flex items-center rounded-lg border border-border p-0.5">
+          <Button
+            type="button"
+            size="xs"
+            variant={mode === "board" ? "secondary" : "ghost"}
+            onClick={() => setView("board")}
+          >
+            <Columns3 data-icon="inline-start" />
+            看板
+          </Button>
+          <Button
+            type="button"
+            size="xs"
+            variant={mode === "list" ? "secondary" : "ghost"}
+            onClick={() => setView("list")}
+          >
+            <List data-icon="inline-start" />
+            列表
+          </Button>
         </div>
-      )}
-      <h2 className="mb-2 mt-8 text-lg font-medium">约定</h2>
-      {asCommitments(commitments.data).length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有写进事项里的长期约定。</p>
+        <Input
+          value={query}
+          placeholder="筛选标题或编号"
+          className="h-7 w-44"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+        <Select
+          value={status}
+          items={{ all: "全部状态", ...TASK_STATUS_ITEMS }}
+          onValueChange={(value) => value && setStatus(value)}
+        >
+          <SelectTrigger size="sm" className="w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            {Object.entries(TASK_STATUS_ITEMS).map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <div className="ml-auto">
+          <Button size="sm" onClick={() => setComposerOpen(true)}>
+            <Plus data-icon="inline-start" />
+            新建
+          </Button>
+        </div>
+      </header>
+
+      {composerOpen ? (
+        <form
+          className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            const title = draft.trim();
+            if (!title) return;
+            create.mutate(title);
+          }}
+        >
+          <StatusGlyph status="open" />
+          <Input
+            id="board-new-title"
+            value={draft}
+            placeholder="事项标题"
+            className="h-8 border-0 shadow-none focus-visible:ring-0"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setComposerOpen(false);
+                setDraft("");
+              }
+            }}
+          />
+          <Button type="submit" size="sm" disabled={create.isPending || !draft.trim()}>
+            创建
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setComposerOpen(false);
+              setDraft("");
+            }}
+          >
+            取消
+          </Button>
+        </form>
+      ) : null}
+
+      {visible.length === 0 ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <LayoutDashboard />
+              </EmptyMedia>
+              <EmptyTitle>{tasks.length === 0 ? "还没有事项" : "没有匹配的事项"}</EmptyTitle>
+              <EmptyDescription>
+                {tasks.length === 0 ? "按 C 或点新建，先写个标题。" : "换个筛选条件，或清空搜索。"}
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        </div>
+      ) : mode === "board" ? (
+        <IssueBoard
+          tasks={visible}
+          agents={agentList}
+          catalog={catalog.data}
+          runningIds={new Set(runList.filter((run) => run.status === "running").map((run) => run.task_id))}
+          onMoved={() => qc.invalidateQueries()}
+        />
       ) : (
-        asCommitments(commitments.data).map((item) => (
-          <Card key={item.id} size="sm" className="mb-2">
-            <CardHeader>
-              <CardTitle>{item.claim}</CardTitle>
-              <CardAction>
-                <Badge variant="outline">{item.status === "ACTIVE" ? "有效" : item.status}</Badge>
-              </CardAction>
-            </CardHeader>
-          </Card>
-        ))
+        <IssueList
+          tasks={visible}
+          agents={agentList}
+          catalog={catalog.data}
+          runs={runList}
+        />
       )}
     </section>
   );
 }
 
-function TaskCard({
-  task,
-  agentList,
-  agentItems,
+function IssueBoard({
+  tasks,
+  agents,
   catalog,
-  assignee,
-  onAssignee,
-  prompt,
-  latestRunId,
-  onInvalidate,
+  runningIds,
+  onMoved,
+}: {
+  tasks: TaskView[];
+  agents: AgentView[];
+  catalog: DiscoveredAgentView[] | undefined;
+  runningIds: Set<string>;
+  onMoved: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 gap-3 overflow-x-auto p-4">
+      {ISSUE_BOARD_COLUMNS.map((column) => {
+        const items = issuesInColumn(tasks, column.id);
+        return (
+          <BoardColumn
+            key={column.id}
+            columnId={column.id}
+            title={column.title}
+            tasks={items}
+            agents={agents}
+            catalog={catalog}
+            runningIds={runningIds}
+            onMoved={onMoved}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function BoardColumn({
+  columnId,
+  title,
+  tasks,
+  agents,
+  catalog,
+  runningIds,
+  onMoved,
+}: {
+  columnId: string;
+  title: string;
+  tasks: TaskView[];
+  agents: AgentView[];
+  catalog: DiscoveredAgentView[] | undefined;
+  runningIds: Set<string>;
+  onMoved: () => void;
+}) {
+  const [over, setOver] = useState(false);
+  const dropStatus = columnId === "done" ? "done" : columnId;
+  return (
+    <div
+      className={cn(
+        "flex min-h-0 w-[min(100%,18rem)] min-w-[16rem] flex-1 flex-col rounded-xl bg-muted/40",
+        over ? "ring-2 ring-ring/40" : "",
+      )}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setOver(true);
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        setOver(false);
+        const taskId = event.dataTransfer.getData("text/coordy-task");
+        if (!taskId) return;
+        void submit({ type: "SetTaskStatus", task_id: taskId, status: dropStatus }).then(onMoved);
+      }}
+    >
+      <div className="flex h-10 shrink-0 items-center justify-between px-3">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <StatusGlyph status={dropStatus} />
+          {title}
+        </div>
+        <Badge variant="secondary">{tasks.length}</Badge>
+      </div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-auto px-2 pb-2">
+        {tasks.length === 0 ? (
+          <p className="px-1 py-6 text-center text-xs text-muted-foreground">空</p>
+        ) : (
+          tasks.map((task) => (
+            <IssueCard
+              key={task.id}
+              task={task}
+              agent={agents.find((item) => item.id === task.assignee_agent_id)}
+              catalog={catalog}
+              running={runningIds.has(task.id)}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function IssueCard({
+  task,
+  agent,
+  catalog,
+  running,
 }: {
   task: TaskView;
-  agentList: { id: string; name: string; harness: string }[];
-  agentItems: Record<string, string>;
-  catalog: Parameters<typeof agentDisplayName>[1];
-  assignee: string;
-  onAssignee: (value: string) => void;
-  prompt: string;
-  latestRunId: string | null;
-  onInvalidate: () => void;
+  agent?: AgentView;
+  catalog: DiscoveredAgentView[] | undefined;
+  running: boolean;
 }) {
-  const detail = useQuery({
-    queryKey: ["board-run", latestRunId],
-    enabled: Boolean(latestRunId),
-    queryFn: () => view({ type: "Run", run_id: latestRunId! }),
-    refetchInterval: task.status === "running" ? 800 : false,
-  });
-  const events = (asRunDetail(detail.data)?.events ?? []).slice(-3);
-  const assigneeName = agentList.find((agent) => agent.id === task.assignee_agent_id);
+  const navigate = useNavigate();
+  const onDragStart = (event: DragEvent<HTMLButtonElement>) => {
+    event.dataTransfer.setData("text/coordy-task", task.id);
+    event.dataTransfer.effectAllowed = "move";
+  };
+  return (
+    <button
+      type="button"
+      draggable
+      onDragStart={onDragStart}
+      onClick={() => navigate(`/board/${task.id}`)}
+      className="w-full rounded-lg border border-border bg-background p-2.5 text-left shadow-sm transition-colors hover:bg-muted/50"
+    >
+      <p className="line-clamp-2 text-sm font-medium">{task.title}</p>
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="font-mono text-[11px] text-muted-foreground">{taskIdentifier(task.id)}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          {running ? <span className="size-1.5 rounded-full bg-sky-500" title="进行中" /> : null}
+          {agent ? (
+            <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
+              <ProviderLogo provider={agent.harness} className="size-3.5" />
+              <span className="max-w-[7rem] truncate">{agentDisplayName(agent, catalog)}</span>
+            </span>
+          ) : (
+            <span className="text-[11px] text-muted-foreground">未指派</span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function IssueList({
+  tasks,
+  agents,
+  catalog,
+  runs,
+}: {
+  tasks: TaskView[];
+  agents: AgentView[];
+  catalog: DiscoveredAgentView[] | undefined;
+  runs: ReturnType<typeof asRuns>;
+}) {
   const navigate = useNavigate();
   return (
-    <Card size="sm">
-      <CardHeader>
-        <CardTitle className="text-sm">
-          <Link to={`/board/${task.id}`} className="hover:underline">
-            {task.title}
-          </Link>
-        </CardTitle>
-        <CardDescription>
-          {assigneeName ? agentDisplayName(assigneeName, catalog) : "未指派"}
-        </CardDescription>
-        <CardAction>
-          <Badge>{taskStatusLabel(task.status)}</Badge>
-        </CardAction>
-      </CardHeader>
-      {events.length > 0 ? (
-        <CardContent className="space-y-1">
-          {events.map((event) => {
-            const line = formatActivity(event);
-            return (
-              <p key={event.seq} className="line-clamp-2 whitespace-pre-wrap text-xs text-muted-foreground">
-                {line.label}：{line.body}
-              </p>
-            );
-          })}
-        </CardContent>
-      ) : null}
-      <CardFooter className="flex-col items-stretch gap-2">
-        <Select value={assignee} items={agentItems} onValueChange={(value) => value && onAssignee(value)}>
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {agentList.map((agent) => (
-              <SelectItem key={agent.id} value={agent.id}>
-                {agentDisplayName(agent, catalog)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={!assignee}
-            onClick={() => {
-              if (!assignee) return;
-              void startAcpOnTask(task.id, prompt || task.title, assignee).then(onInvalidate);
-            }}
-          >
-            <Play data-icon="inline-start" />
-            指派并开始
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => navigate(`/board/${task.id}`)}>
-            打开
-          </Button>
-        </div>
-      </CardFooter>
-    </Card>
+    <div className="min-h-0 flex-1 overflow-auto">
+      {ISSUE_LIST_GROUPS.map((group) => {
+        const items = group.id === "cancelled"
+          ? tasks.filter((task) => task.status === "cancelled")
+          : issuesInColumn(tasks, group.id).filter((task) => task.status !== "cancelled");
+        if (items.length === 0 && group.id === "cancelled") return null;
+        return (
+          <section key={group.id}>
+            <div className="sticky top-0 z-10 flex h-9 items-center gap-2 border-b border-border bg-background px-4 text-sm font-medium">
+              <StatusGlyph status={group.id} />
+              {group.title}
+              <span className="text-xs font-normal text-muted-foreground">{items.length}</span>
+            </div>
+            {items.length === 0 ? (
+              <p className="px-4 py-3 text-xs text-muted-foreground">空</p>
+            ) : (
+              items.map((task) => {
+                const agent = agents.find((item) => item.id === task.assignee_agent_id);
+                const latest = latestRunForTask(runs, task.id);
+                return (
+                  <button
+                    key={task.id}
+                    type="button"
+                    onClick={() => navigate(`/board/${task.id}`)}
+                    className="flex h-9 w-full items-center gap-3 border-b border-border/60 px-4 text-left hover:bg-muted/50"
+                  >
+                    <StatusGlyph status={task.status} />
+                    <span className="w-[5.5rem] shrink-0 font-mono text-xs text-muted-foreground">
+                      {taskIdentifier(task.id)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-sm">{task.title}</span>
+                    {latest?.status === "running" ? (
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        执行中
+                      </Badge>
+                    ) : null}
+                    {agent ? (
+                      <NamedWithLogo provider={agent.harness} className="max-w-[9rem] shrink-0 text-xs text-muted-foreground">
+                        {agentDisplayName(agent, catalog)}
+                      </NamedWithLogo>
+                    ) : (
+                      <span className="shrink-0 text-xs text-muted-foreground">未指派</span>
+                    )}
+                  </button>
+                );
+              })
+            )}
+          </section>
+        );
+      })}
+    </div>
   );
 }

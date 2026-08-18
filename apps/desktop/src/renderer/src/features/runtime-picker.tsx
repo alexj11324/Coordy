@@ -1,6 +1,7 @@
 import { Badge } from "@coordy/ui";
 import type { DiscoveredAgentView } from "@coordy/protocol";
 import { presenceLabel } from "../lib/coordy/labels";
+import { ProviderLogo } from "./provider-logo";
 
 export function RuntimePicker({
   items,
@@ -34,7 +35,10 @@ export function RuntimePicker({
             ].join(" ")}
           >
             <div className="min-w-0">
-              <p className="text-sm font-medium">{item.name}</p>
+              <p className="flex items-center gap-2 text-sm font-medium">
+                <ProviderLogo provider={item.id} className="size-4" />
+                {item.name}
+              </p>
               <p className="truncate text-xs text-muted-foreground">{item.command}</p>
             </div>
             <Badge variant={item.installed ? "outline" : "secondary"}>

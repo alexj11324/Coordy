@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { DesktopShell } from "../shell/desktop-shell";
 import { HomePage } from "../features/home";
 import { BoardPage } from "../features/board";
@@ -19,27 +19,47 @@ import {
   RunsPage,
 } from "../features/pages";
 
+function FlushCanvas() {
+  return (
+    <div className="h-full min-h-0">
+      <Outlet />
+    </div>
+  );
+}
+
+function PaddedCanvas() {
+  return (
+    <div className="h-full overflow-auto p-4 md:p-6">
+      <Outlet />
+    </div>
+  );
+}
+
 export function AppRouter() {
   return (
     <Routes>
       <Route element={<DesktopShell />}>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/home" element={<Navigate to="/" replace />} />
-        <Route path="/board" element={<BoardPage />} />
-        <Route path="/board/:taskId" element={<TaskDetailPage />} />
-        <Route path="/principals" element={<PrincipalsPage />} />
-        <Route path="/agents" element={<AgentsPage />} />
-        <Route path="/agents/new" element={<CreateAgentPage />} />
-        <Route path="/agents/:agentId" element={<AgentDetailPage />} />
-        <Route path="/runtimes" element={<RuntimesPage />} />
-        <Route path="/authority" element={<AuthorityPage />} />
-        <Route path="/memory" element={<MemoryPage />} />
-        <Route path="/contracts" element={<ContractsPage />} />
-        <Route path="/dependencies" element={<DependenciesPage />} />
-        <Route path="/conflicts" element={<ConflictsPage />} />
-        <Route path="/runs" element={<RunsPage />} />
-        <Route path="/inbox" element={<InboxPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
+        <Route element={<FlushCanvas />}>
+          <Route path="/board" element={<BoardPage />} />
+          <Route path="/board/:taskId" element={<TaskDetailPage />} />
+        </Route>
+        <Route element={<PaddedCanvas />}>
+          <Route path="/" element={<HomePage />} />
+          <Route path="/home" element={<Navigate to="/" replace />} />
+          <Route path="/principals" element={<PrincipalsPage />} />
+          <Route path="/agents" element={<AgentsPage />} />
+          <Route path="/agents/new" element={<CreateAgentPage />} />
+          <Route path="/agents/:agentId" element={<AgentDetailPage />} />
+          <Route path="/runtimes" element={<RuntimesPage />} />
+          <Route path="/authority" element={<AuthorityPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/contracts" element={<ContractsPage />} />
+          <Route path="/dependencies" element={<DependenciesPage />} />
+          <Route path="/conflicts" element={<ConflictsPage />} />
+          <Route path="/runs" element={<RunsPage />} />
+          <Route path="/inbox" element={<InboxPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+        </Route>
       </Route>
     </Routes>
   );

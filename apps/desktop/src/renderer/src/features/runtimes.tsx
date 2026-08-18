@@ -17,6 +17,7 @@ import {
 import { Monitor, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { presenceLabel } from "../lib/coordy/labels";
+import { ProviderLogo } from "./provider-logo";
 
 export function RuntimesPage() {
   const qc = useQueryClient();
@@ -80,6 +81,7 @@ export function RuntimesPage() {
           <Card key={item.id} size="sm" className="mb-2">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
+                <ProviderLogo provider={item.id} className="size-4" />
                 {item.name}
                 <Badge variant="outline">
                   <span className="size-1.5 rounded-full bg-emerald-500" />
@@ -107,6 +109,7 @@ export function RuntimesPage() {
             <Card key={item.id} size="sm" className="mb-2">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
+                  <ProviderLogo provider={item.id} className="size-4" />
                   {item.name}
                   <Badge variant="secondary">
                     <span className="size-1.5 rounded-full bg-muted-foreground/50" />

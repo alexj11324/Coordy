@@ -11,6 +11,32 @@ export const TASK_STATUS_ITEMS: Record<string, string> = {
   cancelled: "不做了",
 };
 
+/** Map Coordy harness / ACP ids onto Multica-style provider keys. */
+export function providerKey(harness: string): string {
+  switch (harness) {
+    case "claude-acp":
+    case "claude":
+      return "claude";
+    case "codex-acp":
+    case "codex":
+      return "codex";
+    case "gemini":
+      return "gemini";
+    case "github-copilot-cli":
+    case "copilot":
+      return "copilot";
+    case "opencode":
+      return "opencode";
+    case "cursor":
+      return "cursor";
+    case "coordy-stub":
+    case "coordy":
+      return "coordy";
+    default:
+      return harness;
+  }
+}
+
 export function harnessLabel(harness: string): string {
   switch (harness) {
     case "claude-acp":

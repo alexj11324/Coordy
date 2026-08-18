@@ -2,15 +2,8 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import {
   Badge,
   Button,
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
   Input,
   Label,
-  PageHeader,
   Select,
   SelectContent,
   SelectItem,
@@ -18,10 +11,11 @@ import {
   SelectValue,
   Textarea,
 } from "@coordy/ui";
-import { ArrowLeft, FolderOpen, Play, Square, Terminal } from "lucide-react";
+import { FolderOpen, Play, Square, Terminal } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
+import { taskIdentifier } from "../lib/coordy/issues";
 import {
   agentDisplayName,
   formatActivity,
@@ -33,6 +27,9 @@ import {
 import { startAcpOnTask } from "../lib/coordy/start-task";
 import { asAgents, asRunDetail, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { useTabTitle } from "../shell/use-tab-title";
+import { NamedWithLogo } from "./provider-logo";
+import { StatusGlyph } from "./issue-status";
 
 export function TaskDetailPage() {
   const { taskId } = useParams();
@@ -86,6 +83,7 @@ export function TaskDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : null;
   const workPath = task?.worktree_path || repoPath;
+  useTabTitle(task ? `${taskIdentifier(task.id)} ${task.title}` : undefined);
 
   useEffect(() => {
     if (!task) return;
@@ -96,10 +94,11 @@ export function TaskDetailPage() {
   const save = useMutation({
     mutationFn: async () => {
       if (!task) throw new Error("找不到这件事");
+      const nextTitle = title.trim() || task.title;
       await submit({
         type: "UpdateTask",
         task_id: task.id,
-        title: title.trim(),
+        title: nextTitle,
         description,
       });
     },
@@ -112,10 +111,11 @@ export function TaskDetailPage() {
   if (!taskId) return null;
   if (board.isFetched && !task) {
     return (
-      <section>
-        <PageHeader title="找不到这件事" description="它可能已经被移走了。" />
+      <section className="flex h-full flex-col items-start gap-3 p-6">
+        <h1 className="text-lg font-semibold">找不到这件事</h1>
+        <p className="text-sm text-muted-foreground">它可能已经被移走了。</p>
         <Button variant="secondary" onClick={() => navigate("/board")}>
-          回到看板
+          回到任务
         </Button>
       </section>
     );
@@ -126,42 +126,83 @@ export function TaskDetailPage() {
   const agentItems = Object.fromEntries(
     agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)]),
   );
+  const persist = () => {
+    if (title.trim() !== task.title || description !== (task.description ?? "")) {
+      save.mutate();
+    }
+  };
 
   return (
-    <section className="space-y-4">
-      <div>
-        <Link to="/board" className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-3.5" />
-          看板
-        </Link>
-        <PageHeader
-          title={task.title}
-          description="一件事项记下要做什么、交给谁、现在到哪一步，以及智能体后来的进度。"
+    <section className="flex h-full min-h-0 min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center gap-2 px-6 pt-4 text-xs text-muted-foreground">
+          <StatusGlyph status={task.status} />
+          <span className="font-mono">{taskIdentifier(task.id)}</span>
+          <span>{taskStatusLabel(task.status)}</span>
+        </div>
+        <Input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          onBlur={persist}
+          className="h-auto border-0 px-6 py-3 text-2xl font-semibold shadow-none focus-visible:ring-0 md:text-2xl"
         />
+        <Textarea
+          rows={8}
+          placeholder="添加说明…"
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+          onBlur={persist}
+          className="min-h-[8rem] resize-none rounded-none border-0 px-6 shadow-none focus-visible:ring-0"
+        />
+        {notice ? <p className="px-6 text-sm text-muted-foreground">{notice}</p> : null}
+        {task.blocked_reason ? <p className="px-6 text-sm text-destructive">{task.blocked_reason}</p> : null}
+        <div className="min-h-0 flex-1 space-y-3 overflow-auto px-6 py-4">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">活动</h2>
+          {activity.length === 0 ? (
+            <p className="text-sm text-muted-foreground">还没有记录。指派智能体或写一条评论就会出现。</p>
+          ) : (
+            activity.map((event) => {
+              const line = formatActivity(event);
+              return (
+                <div key={`${event.runId}-${event.seq}`} className="border-b border-border/70 pb-3 last:border-0">
+                  <p className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <Badge variant="outline">{line.label}</Badge>
+                    {event.runStatus ? <span>{runStatusLabel(event.runStatus)}</span> : null}
+                  </p>
+                  <p className="whitespace-pre-wrap text-sm">{line.body}</p>
+                </div>
+              );
+            })
+          )}
+        </div>
+        <form
+          className="flex shrink-0 flex-col gap-2 border-t border-border p-4"
+          onSubmit={(event: FormEvent) => {
+            event.preventDefault();
+            const text = comment.trim();
+            if (!text) return;
+            void startAcpOnTask(task.id, text, assignee || undefined).then(async () => {
+              setComment("");
+              setNotice("评论已交给智能体。");
+              await qc.invalidateQueries();
+            });
+          }}
+        >
+          <Textarea
+            rows={3}
+            placeholder="留言，或让智能体接着做"
+            value={comment}
+            onChange={(event) => setComment(event.target.value)}
+          />
+          <Button type="submit" className="w-fit" disabled={!comment.trim()}>
+            发送
+          </Button>
+        </form>
       </div>
-      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>事项</CardTitle>
-          <CardDescription>标题够用就可以先建；背景、要求和验收标准写在说明里。</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="issue-title">标题</Label>
-            <Input id="issue-title" value={title} onChange={(event) => setTitle(event.target.value)} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="issue-body">说明</Label>
-            <Textarea
-              id="issue-body"
-              rows={5}
-              placeholder="目标、背景、要求和验收标准"
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-            />
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
+      <aside className="flex w-[min(100%,18rem)] shrink-0 flex-col gap-5 overflow-auto border-l border-border p-4">
+        <div>
+          <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">属性</h2>
+          <div className="space-y-3">
             <div className="space-y-1.5">
               <Label>状态</Label>
               <Select
@@ -175,12 +216,22 @@ export function TaskDetailPage() {
                 }}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>
+                    {(value: string | null) => (
+                      <span className="flex items-center gap-2">
+                        <StatusGlyph status={value || task.status} />
+                        {taskStatusLabel(value || task.status)}
+                      </span>
+                    )}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(TASK_STATUS_ITEMS).map(([value, label]) => (
                     <SelectItem key={value} value={value}>
-                      {label}
+                      <span className="flex items-center gap-2">
+                        <StatusGlyph status={value} />
+                        {label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -199,26 +250,39 @@ export function TaskDetailPage() {
                 }}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue>
+                    {(value: string | null) => {
+                      const agent = agentList.find((item) => item.id === value);
+                      if (!agent) return "未指派";
+                      return (
+                        <NamedWithLogo provider={agent.harness}>
+                          {agentDisplayName(agent, catalog.data)}
+                        </NamedWithLogo>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {agentList.map((agent) => (
                     <SelectItem key={agent.id} value={agent.id}>
-                      {agentDisplayName(agent, catalog.data)}
+                      <NamedWithLogo provider={agent.harness}>
+                        {agentDisplayName(agent, catalog.data)}
+                      </NamedWithLogo>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              <Label>运行</Label>
+              <p className="text-sm text-muted-foreground">
+                {latest ? runStatusLabel(latest.status) : "还没开始"}
+              </p>
+            </div>
           </div>
-          {task.blocked_reason ? <p className="text-sm text-destructive">{task.blocked_reason}</p> : null}
-        </CardContent>
-        <CardFooter className="flex-wrap gap-2">
-          <Button onClick={() => save.mutate()} disabled={save.isPending || !title.trim()}>
-            保存
-          </Button>
+        </div>
+        <div className="flex flex-col gap-2">
           <Button
-            variant="secondary"
             disabled={!assignee}
             onClick={() => {
               if (!assignee) return;
@@ -256,62 +320,8 @@ export function TaskDetailPage() {
             <Terminal data-icon="inline-start" />
             打开终端
           </Button>
-        </CardFooter>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>评论和执行记录</CardTitle>
-          <CardDescription>
-            成员和智能体的留言、动手记录都留在这里。在下面再说一句，智能体会接着看，不会改指派。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {activity.length === 0 ? (
-            <p className="text-sm text-muted-foreground">还没有记录。指派智能体或写一条评论就会出现。</p>
-          ) : (
-            activity.map((event) => {
-              const line = formatActivity(event);
-              return (
-                <div key={`${event.runId}-${event.seq}`} className="rounded-lg border border-border px-3 py-2">
-                  <p className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <Badge variant="outline">{line.label}</Badge>
-                    {event.runStatus ? <span>{runStatusLabel(event.runStatus)}</span> : null}
-                  </p>
-                  <p className="whitespace-pre-wrap text-sm">{line.body}</p>
-                </div>
-              );
-            })
-          )}
-        </CardContent>
-        <CardFooter>
-          <form
-            className="flex w-full flex-col gap-2"
-            onSubmit={(event: FormEvent) => {
-              event.preventDefault();
-              const text = comment.trim();
-              if (!text) return;
-              void startAcpOnTask(task.id, text, assignee || undefined).then(async () => {
-                setComment("");
-                setNotice("评论已交给智能体。");
-                await qc.invalidateQueries();
-              });
-            }}
-          >
-            <Textarea
-              rows={3}
-              placeholder="补充要求、提问，或让智能体接着做"
-              value={comment}
-              onChange={(event) => setComment(event.target.value)}
-            />
-            <Button type="submit" className="w-fit" disabled={!comment.trim()}>
-              发送
-            </Button>
-          </form>
-        </CardFooter>
-      </Card>
-
-      <p className="text-xs text-muted-foreground">当前状态：{taskStatusLabel(task.status)}</p>
+        </div>
+      </aside>
     </section>
   );
 }

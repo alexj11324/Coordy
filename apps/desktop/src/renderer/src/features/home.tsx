@@ -32,6 +32,7 @@ import { startAcpRun } from "../lib/coordy/start-task";
 import { agentDisplayName, formatActivity, listableAgents, runStatusLabel } from "../lib/coordy/labels";
 import { asAgents, asRunDetail, asRuns } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { NamedWithLogo } from "./provider-logo";
 
 export function HomePage() {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -146,7 +147,9 @@ export function HomePage() {
                   <SelectContent>
                     {agentList.map((agent) => (
                       <SelectItem key={agent.id} value={agent.id}>
-                        {agentDisplayName(agent, catalog.data)}
+                        <NamedWithLogo provider={agent.harness}>
+                          {agentDisplayName(agent, catalog.data)}
+                        </NamedWithLogo>
                       </SelectItem>
                     ))}
                   </SelectContent>

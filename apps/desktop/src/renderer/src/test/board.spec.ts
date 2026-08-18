@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { acpRunSource } from "../lib/coordy/start-task";
 import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
-import { agentDisplayName, listableAgents, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
+import { agentDisplayName, listableAgents, providerKey, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
 import { asTasks, boardColumn, isPlaceholderHarness, latestRunForTask, outcomeId } from "../lib/coordy/views";
 import type { AgentView, RunView, View } from "@coordy/protocol";
 
@@ -87,5 +87,11 @@ describe("board view helpers", () => {
     expect(taskStatusLabel("review")).toBe("待验收");
     expect(boardColumn("done")).toBe("done");
     expect(boardColumn("cancelled")).toBe("done");
+  });
+
+  it("maps harness ids onto Multica provider keys", () => {
+    expect(providerKey("claude-acp")).toBe("claude");
+    expect(providerKey("codex-acp")).toBe("codex");
+    expect(providerKey("github-copilot-cli")).toBe("copilot");
   });
 });

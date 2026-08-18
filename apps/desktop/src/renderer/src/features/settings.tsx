@@ -14,12 +14,14 @@ import {
 } from "@coordy/ui";
 import { useState } from "react";
 import { submit, view } from "../lib/coordy/client";
+import { modifierSymbol } from "../lib/coordy/shortcuts";
 import { useSession } from "../state/session-store";
 import { applyTheme, useThemeStore, type ThemePreference } from "../state/theme-store";
 
 const TABS = [
   ["general", "通用"],
   ["appearance", "外观"],
+  ["shortcuts", "快捷键"],
   ["secrets", "密钥"],
   ["about", "关于"],
 ] as const;
@@ -171,6 +173,20 @@ export function SettingsPage() {
             </div>
           ) : null}
 
+          {tab === "shortcuts" ? (
+            <div className="space-y-3">
+              <div>
+                <Label>快捷键</Label>
+                <p className="text-sm text-muted-foreground">在输入框里打字时，单键快捷键不会触发。</p>
+              </div>
+              <ShortcutRow keys={`${modifierSymbol(info?.os)}K`} action="打开搜索" />
+              <ShortcutRow keys="C" action="新建任务" />
+              <ShortcutRow keys={`${modifierSymbol(info?.os)}B`} action="收起或展开侧栏" />
+              <ShortcutRow keys={`${modifierSymbol(info?.os)}T`} action="打开任务标签页" />
+              <ShortcutRow keys={`${modifierSymbol(info?.os)}W`} action="关闭当前标签页" />
+            </div>
+          ) : null}
+
           {tab === "secrets" ? (
             <div className="space-y-4">
               <div className="flex items-center gap-2 text-sm">
@@ -261,5 +277,14 @@ export function SettingsPage() {
         </div>
       </div>
     </section>
+  );
+}
+
+function ShortcutRow({ keys, action }: { keys: string; action: string }) {
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-border px-3 py-2.5">
+      <p className="text-sm">{action}</p>
+      <kbd className="rounded-md border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-xs">{keys}</kbd>
+    </div>
   );
 }
