@@ -28,6 +28,7 @@ fn settings_view_includes_advisor_flag() {
         },
         repo_path: None,
         llm_advisor_enabled: false,
+        notification_kinds: Vec::new(),
     };
     let value = serde_json::to_value(view).unwrap();
     assert_eq!(value["type"], "Settings");

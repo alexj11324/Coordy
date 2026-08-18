@@ -528,6 +528,9 @@ fn compaction_drift_pauses_and_action_gate_blocks() {
                         },
                     ],
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap();
@@ -648,6 +651,9 @@ fn jsonl_fixture_file_pauses_on_drift() {
             Command::StartRun {
                 task_id,
                 source: RunSource::Jsonl { path },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap();
@@ -722,6 +728,9 @@ fn stale_reactivated_plan_pauses() {
                         },
                     ],
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap();
@@ -968,6 +977,9 @@ fn start_run_acp_spawns_against_bound_repo() {
                 source: RunSource::Acp {
                     prompt: "hello acp".into(),
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap();
@@ -1062,6 +1074,9 @@ fn acp_session_tool_returns_task_for_review() {
                 source: RunSource::Acp {
                     prompt: "hello acp".into(),
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap()
@@ -1100,7 +1115,7 @@ fn acp_session_tool_returns_task_for_review() {
         panic!("board");
     };
     assert_eq!(tasks[0].id, task_id);
-    assert_eq!(tasks[0].status, "review");
+    assert_eq!(tasks[0].status, "open");
 }
 
 #[test]
@@ -1132,6 +1147,12 @@ fn principal_can_edit_issue_and_set_status() {
                 task_id: task_id.clone(),
                 title: Some("ship it".into()),
                 description: None,
+                priority: None,
+                start_date: None,
+                due_date: None,
+                labels: None,
+                custom_fields: None,
+                sort_key: None,
             },
         ))
         .unwrap();
@@ -1283,6 +1304,9 @@ fn cancel_run_stops_active_round_and_ignores_later_session_tool() {
                 source: RunSource::Acp {
                     prompt: "hello acp".into(),
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap()
@@ -1436,6 +1460,15 @@ fn update_agent_stores_description_and_instructions() {
                 description: Some("审查前端 Pull Request".into()),
                 instructions: Some("只在评论里写结论，不要改代码。".into()),
                 harness: Some("claude-acp".into()),
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                mcp_servers: None,
             },
         ))
         .unwrap();
@@ -1522,6 +1555,15 @@ fn start_run_prepends_agent_instructions() {
                 description: None,
                 instructions: Some("先读测试。".into()),
                 harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                mcp_servers: None,
             },
         ))
         .unwrap();
@@ -1560,6 +1602,9 @@ fn start_run_prepends_agent_instructions() {
                 source: RunSource::Acp {
                     prompt: "hello acp".into(),
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         ))
         .unwrap();

@@ -4,6 +4,7 @@ mod authority;
 mod jsonl;
 mod memory;
 mod ports;
+mod product;
 mod runtime;
 mod verification;
 mod world;

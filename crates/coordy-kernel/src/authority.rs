@@ -144,5 +144,23 @@ pub fn can_command_agent(world: &World, actor: &Actor, agent_id: &str) -> bool {
     if actor_controls_agent(world, actor, agent) {
         return true;
     }
+    if matches!(actor, Actor::Daemon) {
+        return true;
+    }
+    if let Actor::Principal { id } = actor {
+        match agent.access.as_str() {
+            "workspace" => {
+                if actor_in_workspace(world, actor, &agent.workspace_id) {
+                    return true;
+                }
+            }
+            "members" => {
+                if agent.access_member_ids.iter().any(|member| member == id) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
     can(world, actor, &format!("agent:{agent_id}"), "command")
 }

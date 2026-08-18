@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { closeTab, titleFromPath, upsertTab } from "../lib/coordy/tab-path";
 import { matchShortcut, modifierSymbol } from "../lib/coordy/shortcuts";
 import { filterIssues, issuesInColumn, taskIdentifier } from "../lib/coordy/issues";
+import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
 import type { TaskView } from "@coordy/protocol";
 
 function task(partial: Partial<TaskView> & Pick<TaskView, "id" | "title" | "status">): TaskView {
@@ -13,8 +14,9 @@ function task(partial: Partial<TaskView> & Pick<TaskView, "id" | "title" | "stat
 
 describe("issue identifiers and filters", () => {
   it("formats Linear-style identifiers from kernel ids", () => {
-    expect(taskIdentifier("task_ab12cd34ef")).toBe("TASK-AB12CD");
-    expect(taskIdentifier("task_1")).toBe("TASK-1");
+    expect(taskIdentifier({ id: "task_ab12cd34ef" })).toBe("COOR-AB12CD");
+    expect(taskIdentifier({ id: "task_1" })).toBe("COOR-1");
+    expect(taskIdentifier({ id: "task_x", identifier: "COOR-12" })).toBe("COOR-12");
   });
 
   it("filters by status, title, and identifier", () => {
@@ -24,7 +26,7 @@ describe("issue identifiers and filters", () => {
     ];
     expect(filterIssues(tasks, "", "open")).toHaveLength(1);
     expect(filterIssues(tasks, "文档", "all")[0]?.title).toBe("写文档");
-    expect(filterIssues(tasks, "TASK-AAA", "all")).toHaveLength(1);
+    expect(filterIssues(tasks, "COOR-AAA", "all")).toHaveLength(1);
   });
 
   it("puts cancelled tasks into the done board column", () => {
@@ -52,6 +54,15 @@ describe("tabs", () => {
     const closed = closeTab(opened.tabs, opened.activeId, opened.activeId);
     expect(closed.tabs[0]?.path).toBe("/");
     expect(closed.activeId).toBe("/");
+  });
+});
+
+describe("sidebar nav", () => {
+  it("groups personal and workspace destinations like the shadcn sidebar", () => {
+    expect(personalNav.map((item) => item.to)).toEqual(["/inbox", "/chat", "/mine"]);
+    expect(workspaceNav.map((item) => item.label)).toContain("智能体");
+    expect(navItemActive("/agents/new", { to: "/agents" })).toBe(true);
+    expect(navItemActive("/board", { to: "/inbox" })).toBe(false);
   });
 });
 

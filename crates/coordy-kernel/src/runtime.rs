@@ -5,7 +5,7 @@ use coordy_protocol::{
     Actor, AgentContextView, AgentView, AuthenticatedCommand, AuthorizedQuery, Command,
     CommitmentView, ConflictView, ContractView, CoordyError, DependencyView, Effect, GrantView,
     HarnessEvent, HealthView, InboxView, MemoryView, Outcome, PrincipalView, Query, RunEventView,
-    RunSource, RunView, TaskView, View, WorkspaceView, PRODUCT_VERSION, PROTOCOL_VERSION,
+    RunSource, RunView, View, PRODUCT_VERSION, PROTOCOL_VERSION,
 };
 use serde_json::json;
 
@@ -13,6 +13,7 @@ use crate::authority::{
     actor_in_workspace, can_command_agent, grantor_holds, matching_held_grant, would_escalate,
 };
 use crate::ports::Ports;
+use crate::product;
 use crate::verification::{
     action_conflicts, agent_cannot_supersede, deterministic_state_diff_with_rejected,
     extract_prefixed, invalidate_dependencies,
@@ -85,6 +86,10 @@ impl Kernel {
         world.effects.push(EffectRecord { cursor, effect });
     }
 
+    pub(crate) fn emit_effect(world: &mut World, effect: Effect) {
+        Self::emit(world, effect);
+    }
+
     fn audit(world: &mut World, actor: &Actor, action: &str, detail: &str) {
         world.audit.push(AuditEntry {
             at: ids::now(),
@@ -100,11 +105,25 @@ impl Kernel {
         match envelope.command {
             Command::CreateWorkspace { name } => {
                 let id = ids::new("ws");
+                let (slug, prefix) = product::default_new_workspace(&name);
+                let mut slug = slug;
+                let mut n = 2u32;
+                while product::ensure_unique_slug(&world, &id, &slug).is_err() {
+                    slug = format!("{slug}-{n}");
+                    n += 1;
+                }
                 world.workspaces.push(Workspace {
                     id: id.clone(),
                     name: name.clone(),
                     repo_path: None,
                     created_at: ids::now(),
+                    icon: String::new(),
+                    description: String::new(),
+                    context: String::new(),
+                    slug,
+                    issue_prefix: prefix,
+                    next_issue_number: 1,
+                    archived: false,
                 });
                 Self::audit(&mut world, &actor, "create_workspace", &id);
                 Self::emit(
@@ -145,10 +164,20 @@ impl Kernel {
                     }
                 }
                 let id = ids::new("pr");
+                let role = if world
+                    .principals
+                    .iter()
+                    .any(|p| p.workspace_id == workspace_id)
+                {
+                    "member".into()
+                } else {
+                    "owner".into()
+                };
                 world.principals.push(Principal {
                     id: id.clone(),
                     workspace_id: workspace_id.clone(),
                     name,
+                    role,
                 });
                 Self::audit(&mut world, &actor, "create_principal", &id);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
@@ -194,6 +223,16 @@ impl Kernel {
                     description: String::new(),
                     instructions: String::new(),
                     archived: false,
+                    avatar: String::new(),
+                    model: String::new(),
+                    thinking: String::new(),
+                    speed: String::new(),
+                    access: "owner".into(),
+                    access_member_ids: Vec::new(),
+                    concurrency_limit: 6,
+                    cli_args: String::new(),
+                    mcp_servers: Vec::new(),
+                    skill_ids: Vec::new(),
                 });
                 Self::audit(&mut world, &actor, "create_agent", &id);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
@@ -205,6 +244,15 @@ impl Kernel {
                 description,
                 instructions,
                 harness,
+                avatar,
+                model,
+                thinking,
+                speed,
+                access,
+                access_member_ids,
+                concurrency_limit,
+                cli_args,
+                mcp_servers,
             } => {
                 let agent = world
                     .agent(&agent_id)
@@ -249,6 +297,55 @@ impl Kernel {
                     }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.harness = harness.to_string();
+                    }
+                }
+                if let Some(avatar) = avatar {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.avatar = avatar;
+                    }
+                }
+                if let Some(model) = model {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.model = model;
+                    }
+                }
+                if let Some(thinking) = thinking {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.thinking = thinking;
+                    }
+                }
+                if let Some(speed) = speed {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.speed = speed;
+                    }
+                }
+                if let Some(access) = access {
+                    if !matches!(access.as_str(), "owner" | "workspace" | "members") {
+                        return Err(CoordyError::invalid("unknown access"));
+                    }
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.access = access;
+                    }
+                }
+                if let Some(access_member_ids) = access_member_ids {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.access_member_ids = access_member_ids;
+                    }
+                }
+                if let Some(concurrency_limit) = concurrency_limit {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.concurrency_limit = concurrency_limit.max(1);
+                    }
+                }
+                if let Some(cli_args) = cli_args {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.workspace_id = row.workspace_id.clone();
+                        row.cli_args = cli_args;
+                    }
+                }
+                if let Some(mcp_servers) = mcp_servers {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.mcp_servers = mcp_servers;
                     }
                 }
                 Self::audit(&mut world, &actor, "update_agent", &agent_id);
@@ -414,7 +511,9 @@ impl Kernel {
                 {
                     return Err(CoordyError::denied("not in workspace"));
                 }
+                let (number, identifier) = product::allocate_issue_number(&mut world, &workspace_id)?;
                 let id = ids::new("task");
+                let sort_key = world.tasks.len() as i64;
                 world.tasks.push(Task {
                     id: id.clone(),
                     workspace_id: workspace_id.clone(),
@@ -424,9 +523,27 @@ impl Kernel {
                     assignee_agent_id: None,
                     worktree_path: None,
                     blocked_reason: None,
+                    identifier: identifier.clone(),
+                    number,
+                    priority: "none".into(),
+                    start_date: None,
+                    due_date: None,
+                    labels: Vec::new(),
+                    custom_fields: Vec::new(),
+                    assignee_principal_id: None,
+                    assignee_squad_id: None,
+                    project_id: None,
+                    parent_id: None,
+                    stage: String::new(),
+                    sort_key,
+                    deleted: false,
+                    pull_requests: Vec::new(),
                 });
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
-                Ok(Outcome::ok("task created", json!({ "task_id": id })))
+                Ok(Outcome::ok(
+                    "task created",
+                    json!({ "task_id": id, "identifier": identifier, "number": number }),
+                ))
             }
             Command::AssignTask { task_id, agent_id } => {
                 let Some(agent) = world.agent(&agent_id).cloned() else {
@@ -442,6 +559,18 @@ impl Kernel {
                     return Err(CoordyError::invalid("agent/task workspace mismatch"));
                 }
                 task.assignee_agent_id = Some(agent_id.clone());
+                let workspace_id = task.workspace_id.clone();
+                let title = task.title.clone();
+                drop(task);
+                product::push_notice(
+                    &mut world,
+                    &workspace_id,
+                    "assignment",
+                    "事项已指派智能体",
+                    &title,
+                    Some(task_id.clone()),
+                );
+                Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok(
                     "assigned",
                     json!({ "task_id": task_id, "agent_id": agent_id }),
@@ -451,11 +580,18 @@ impl Kernel {
                 task_id,
                 title,
                 description,
+                priority,
+                start_date,
+                due_date,
+                labels,
+                custom_fields,
+                sort_key,
             } => {
-                let workspace_id = world
+                let previous = world
                     .task(&task_id)
-                    .map(|t| t.workspace_id.clone())
+                    .cloned()
                     .ok_or_else(|| CoordyError::not_found("task"))?;
+                let workspace_id = previous.workspace_id.clone();
                 if actor.is_agent() {
                     return Err(CoordyError::denied("agent cannot edit this issue"));
                 }
@@ -464,20 +600,84 @@ impl Kernel {
                 {
                     return Err(CoordyError::denied("not in workspace"));
                 }
-                if title.is_none() && description.is_none() {
+                if title.is_none()
+                    && description.is_none()
+                    && priority.is_none()
+                    && start_date.is_none()
+                    && due_date.is_none()
+                    && labels.is_none()
+                    && custom_fields.is_none()
+                    && sort_key.is_none()
+                {
                     return Err(CoordyError::invalid("nothing to update"));
                 }
                 if title.as_ref().is_some_and(|value| value.trim().is_empty()) {
                     return Err(CoordyError::invalid("title cannot be empty"));
                 }
-                let task = world
-                    .task_mut(&task_id)
-                    .ok_or_else(|| CoordyError::not_found("task"))?;
-                if let Some(title) = title {
-                    task.title = title;
+                if let Some(priority) = priority.as_ref() {
+                    if !product::priority_ok(priority) {
+                        return Err(CoordyError::invalid("unknown priority"));
+                    }
                 }
-                if let Some(description) = description {
-                    task.description = description;
+                let mut next_priority = previous.priority.clone();
+                let mut next_start = previous.start_date.clone();
+                let mut next_due = previous.due_date.clone();
+                {
+                    let task = world
+                        .task_mut(&task_id)
+                        .ok_or_else(|| CoordyError::not_found("task"))?;
+                    if let Some(title) = title {
+                        task.title = title;
+                    }
+                    if let Some(description) = description {
+                        task.description = description;
+                    }
+                    if let Some(priority) = priority.clone() {
+                        task.priority = priority;
+                    }
+                    if let Some(start_date) = start_date.clone() {
+                        task.start_date = if start_date.is_empty() {
+                            None
+                        } else {
+                            Some(start_date)
+                        };
+                    }
+                    if let Some(due_date) = due_date.clone() {
+                        task.due_date = if due_date.is_empty() { None } else { Some(due_date) };
+                    }
+                    if let Some(labels) = labels {
+                        task.labels = labels;
+                    }
+                    if let Some(custom_fields) = custom_fields {
+                        task.custom_fields = custom_fields;
+                    }
+                    if let Some(sort_key) = sort_key {
+                        task.sort_key = sort_key;
+                    }
+                    next_priority = task.priority.clone();
+                    next_start = task.start_date.clone();
+                    next_due = task.due_date.clone();
+                }
+                if priority.is_some() && previous.priority != next_priority {
+                    product::push_notice(
+                        &mut world,
+                        &workspace_id,
+                        "priority",
+                        "优先级变了",
+                        &previous.title,
+                        Some(task_id.clone()),
+                    );
+                } else if (start_date.is_some() || due_date.is_some())
+                    && (previous.start_date != next_start || previous.due_date != next_due)
+                {
+                    product::push_notice(
+                        &mut world,
+                        &workspace_id,
+                        "date",
+                        "日期变了",
+                        &previous.title,
+                        Some(task_id.clone()),
+                    );
                 }
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok("task updated", json!({ "task_id": task_id })))
@@ -501,11 +701,24 @@ impl Kernel {
                 let task = world
                     .task_mut(&task_id)
                     .ok_or_else(|| CoordyError::not_found("task"))?;
+                let previous = task.status.clone();
+                let title = task.title.clone();
                 task.status = status.clone();
                 if status != "blocked" {
                     task.blocked_reason = None;
                 } else if task.blocked_reason.is_none() {
                     task.blocked_reason = Some("marked blocked".into());
+                }
+                drop(task);
+                if previous != status {
+                    product::push_notice(
+                        &mut world,
+                        &workspace_id,
+                        "status",
+                        "状态变了",
+                        &title,
+                        Some(task_id.clone()),
+                    );
                 }
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok(
@@ -817,14 +1030,23 @@ impl Kernel {
                     json!({ "status": contract.status, "contract_id": contract_id }),
                 ))
             }
-            Command::StartRun { task_id, source } => {
+            Command::StartRun {
+                task_id,
+                source,
+                agent_id: override_agent,
+                chat_id,
+                trigger,
+            } => {
                 let task = world
                     .task(&task_id)
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("task"))?;
-                let agent_id = task
-                    .assignee_agent_id
-                    .clone()
+                if task.status == "backlog" {
+                    return Err(CoordyError::invalid("backlog issues are not queued"));
+                }
+                let agent_id = override_agent
+                    .filter(|id| !id.is_empty())
+                    .or(task.assignee_agent_id.clone())
                     .ok_or_else(|| CoordyError::invalid("assign an agent first"))?;
                 if !can_command_agent(&world, &actor, &agent_id) {
                     return Err(CoordyError::denied("cannot command this agent"));
@@ -833,7 +1055,21 @@ impl Kernel {
                     .agent(&agent_id)
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("agent"))?;
-                let source = apply_agent_instructions(source, &agent.instructions);
+                let mut instructions = agent.instructions.clone();
+                if let Some(ws) = world.workspace(&task.workspace_id) {
+                    if !ws.context.is_empty() {
+                        instructions = format!("# Workspace\n{}\n\n{}", ws.context, instructions);
+                    }
+                }
+                for skill_id in &agent.skill_ids {
+                    if let Some(skill) = world.skill(skill_id) {
+                        instructions.push_str("\n\n# Skill: ");
+                        instructions.push_str(&skill.name);
+                        instructions.push('\n');
+                        instructions.push_str(&skill.body);
+                    }
+                }
+                let source = apply_agent_instructions(source, &instructions);
                 let run_id = ids::new("run");
                 let harness: String = match &source {
                     RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl".into(),
@@ -865,10 +1101,12 @@ impl Kernel {
                     harness: harness.clone(),
                     compaction_count: 0,
                     after_compaction: false,
+                    queue_status: "dispatched".into(),
+                    retry_count: 0,
+                    chat_id: chat_id.clone(),
+                    trigger: if trigger.is_empty() { "issue".into() } else { trigger },
+                    prompt: prompt_event.clone().unwrap_or_default(),
                 });
-                if let Some(task) = world.task_mut(&task_id) {
-                    task.status = "running".into();
-                }
                 if let Some(prompt) = prompt_event {
                     ingest_event(
                         &mut world,
@@ -934,11 +1172,7 @@ impl Kernel {
                 }
                 if let Some(active) = world.run_mut(&run_id) {
                     active.status = "cancelled".into();
-                }
-                if let Some(task) = world.task_mut(&run.task_id) {
-                    if task.status == "running" {
-                        task.status = "open".into();
-                    }
+                    active.queue_status = "cancelled".into();
                 }
                 ingest_event(
                     &mut world,
@@ -1070,13 +1304,15 @@ impl Kernel {
                     return Err(CoordyError::not_found("inbox item"));
                 };
                 item.dismissed = true;
+                item.read = true;
                 Ok(Outcome::ok("dismissed", json!({ "item_id": item_id })))
             }
+            other => product::submit(&mut world, &actor, other),
         }
     }
 
     pub fn view_sync(&self, envelope: AuthorizedQuery) -> Result<View, CoordyError> {
-        let world = self.world.lock().expect("world lock");
+        let mut world = self.world.lock().expect("world lock");
         let actor = envelope.actor;
         match envelope.query {
             Query::Health => Ok(View::Health(health_view(&world))),
@@ -1084,21 +1320,34 @@ impl Kernel {
                 items: world
                     .workspaces
                     .iter()
-                    .map(|w| WorkspaceView {
-                        id: w.id.clone(),
-                        name: w.name.clone(),
-                        repo_path: w.repo_path.clone(),
-                    })
+                    .filter(|w| !w.archived)
+                    .map(product::workspace_view)
                     .collect(),
             }),
+            Query::Workspace { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                let ws = world
+                    .workspace(&workspace_id)
+                    .ok_or_else(|| CoordyError::not_found("workspace"))?;
+                Ok(View::Workspace(product::workspace_view(ws)))
+            },
             Query::Board { workspace_id } => {
                 require_member(&world, &actor, &workspace_id)?;
+                let pending: Vec<String> = world
+                    .tasks
+                    .iter()
+                    .filter(|t| t.workspace_id == workspace_id && (t.number == 0 || t.identifier.is_empty()))
+                    .map(|t| t.id.clone())
+                    .collect();
+                for task_id in pending {
+                    product::backfill_task_identity(&mut world, &task_id);
+                }
                 Ok(View::Board {
                     tasks: world
                         .tasks
                         .iter()
-                        .filter(|t| t.workspace_id == workspace_id)
-                        .map(task_view)
+                        .filter(|t| t.workspace_id == workspace_id && !t.deleted && t.stage != "chat")
+                        .map(|t| product::task_view(&world, t, &actor))
                         .collect(),
                 })
             }
@@ -1133,6 +1382,7 @@ impl Kernel {
                             id: p.id.clone(),
                             workspace_id: p.workspace_id.clone(),
                             name: p.name.clone(),
+                            role: if p.role.is_empty() { "member".into() } else { p.role.clone() },
                         })
                         .collect(),
                 })
@@ -1152,6 +1402,16 @@ impl Kernel {
                             harness: a.harness.clone(),
                             description: a.description.clone(),
                             instructions: a.instructions.clone(),
+                            avatar: a.avatar.clone(),
+                            model: a.model.clone(),
+                            thinking: a.thinking.clone(),
+                            speed: a.speed.clone(),
+                            access: if a.access.is_empty() { "owner".into() } else { a.access.clone() },
+                            access_member_ids: a.access_member_ids.clone(),
+                            concurrency_limit: if a.concurrency_limit == 0 { 6 } else { a.concurrency_limit },
+                            cli_args: a.cli_args.clone(),
+                            mcp_servers: a.mcp_servers.clone(),
+                            skill_ids: a.skill_ids.clone(),
                         })
                         .collect(),
                 })
@@ -1273,13 +1533,15 @@ impl Kernel {
                     items: world
                         .inbox
                         .iter()
-                        .filter(|i| i.workspace_id == workspace_id && !i.dismissed)
+                        .filter(|i| i.workspace_id == workspace_id && !i.dismissed && !i.archived)
                         .map(|i| InboxView {
                             id: i.id.clone(),
                             kind: i.kind.clone(),
                             title: i.title.clone(),
                             body: i.body.clone(),
                             related_id: i.related_id.clone(),
+                            read: i.read,
+                            archived: i.archived,
                         })
                         .collect(),
                 })
@@ -1293,6 +1555,7 @@ impl Kernel {
                     daemon: health_view(&world),
                     repo_path,
                     llm_advisor_enabled: world.llm_advisor_enabled,
+                    notification_kinds: world.notification_kinds.clone(),
                 })
             }
             Query::AgentContext { agent_id } => {
@@ -1325,6 +1588,125 @@ impl Kernel {
                     },
                 })
             }
+            Query::Projects { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Projects {
+                    items: world
+                        .projects
+                        .iter()
+                        .filter(|p| p.workspace_id == workspace_id)
+                        .map(|p| product::project_view(p, &world))
+                        .collect(),
+                })
+            }
+            Query::Squads { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Squads {
+                    items: world
+                        .squads
+                        .iter()
+                        .filter(|s| s.workspace_id == workspace_id)
+                        .map(product::squad_view)
+                        .collect(),
+                })
+            }
+            Query::Skills { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Skills {
+                    items: world
+                        .skills
+                        .iter()
+                        .filter(|s| s.workspace_id == workspace_id)
+                        .map(product::skill_view)
+                        .collect(),
+                })
+            }
+            Query::Automations { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Automations {
+                    items: world
+                        .automations
+                        .iter()
+                        .filter(|a| a.workspace_id == workspace_id)
+                        .map(product::automation_view)
+                        .collect(),
+                })
+            }
+            Query::Comments { task_id } => {
+                let task = world
+                    .task(&task_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("task"))?;
+                require_member(&world, &actor, &task.workspace_id)?;
+                Ok(View::Comments {
+                    items: world
+                        .comments
+                        .iter()
+                        .filter(|c| c.task_id == task_id)
+                        .map(|c| product::comment_view(c, &world))
+                        .collect(),
+                })
+            }
+            Query::Chats { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Chats {
+                    items: world
+                        .chats
+                        .iter()
+                        .filter(|c| c.workspace_id == workspace_id && product::can_see_chat(&actor, c))
+                        .map(product::chat_view)
+                        .collect(),
+                })
+            }
+            Query::Chat { chat_id } => {
+                let chat = world
+                    .chat(&chat_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("chat"))?;
+                if !product::can_see_chat(&actor, &chat) {
+                    return Err(CoordyError::denied("private chat"));
+                }
+                Ok(View::Chat {
+                    chat: product::chat_view(&chat),
+                    messages: world
+                        .chat_messages
+                        .iter()
+                        .filter(|m| m.chat_id == chat_id)
+                        .map(product::chat_message_view)
+                        .collect(),
+                })
+            }
+            Query::Labels { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Labels {
+                    items: world
+                        .labels
+                        .iter()
+                        .filter(|l| l.workspace_id == workspace_id)
+                        .map(product::label_view)
+                        .collect(),
+                })
+            }
+            Query::Stats { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Stats {
+                    stats: product::stats_view(&world, &workspace_id),
+                })
+            }
+            Query::Computers { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::Computers {
+                    items: world
+                        .computers
+                        .iter()
+                        .filter(|c| c.workspace_id == workspace_id)
+                        .map(product::computer_view)
+                        .collect(),
+                })
+            }
+            Query::Account => Ok(View::Account {
+                account: product::account_view(&world, &actor)?,
+            }),
         }
     }
 }
@@ -1334,7 +1716,7 @@ const SUPERSEDING_AUTHORITY: &[&str] = &["USER", "SPEC", "REPOSITORY_FACT", "AUT
 fn allowed_task_status(status: &str) -> bool {
     matches!(
         status,
-        "open" | "running" | "review" | "blocked" | "done" | "cancelled"
+        "backlog" | "open" | "running" | "review" | "blocked" | "done" | "cancelled"
     )
 }
 
@@ -1358,19 +1740,6 @@ fn require_member(world: &World, actor: &Actor, workspace_id: &str) -> Result<()
     Err(CoordyError::denied("not a workspace member"))
 }
 
-fn task_view(task: &Task) -> TaskView {
-    TaskView {
-        id: task.id.clone(),
-        workspace_id: task.workspace_id.clone(),
-        title: task.title.clone(),
-        description: task.description.clone(),
-        status: task.status.clone(),
-        assignee_agent_id: task.assignee_agent_id.clone(),
-        worktree_path: task.worktree_path.clone(),
-        blocked_reason: task.blocked_reason.clone(),
-    }
-}
-
 fn run_view(run: &Run) -> RunView {
     RunView {
         id: run.id.clone(),
@@ -1379,6 +1748,14 @@ fn run_view(run: &Run) -> RunView {
         status: run.status.clone(),
         harness: run.harness.clone(),
         compaction_count: run.compaction_count,
+        queue_status: if run.queue_status.is_empty() {
+            run.status.clone()
+        } else {
+            run.queue_status.clone()
+        },
+        retry_count: run.retry_count,
+        chat_id: run.chat_id.clone(),
+        trigger: run.trigger.clone(),
     }
 }
 
@@ -1400,7 +1777,7 @@ fn push_inbox(
     body: &str,
     related_id: Option<String>,
 ) {
-    let item = InboxItem {
+                let item = InboxItem {
         id: ids::new("inb"),
         workspace_id: workspace_id.into(),
         kind: kind.into(),
@@ -1408,6 +1785,8 @@ fn push_inbox(
         body: body.into(),
         related_id: related_id.clone(),
         dismissed: false,
+        read: false,
+        archived: false,
     };
     Kernel::emit(
         world,
@@ -1418,6 +1797,8 @@ fn push_inbox(
                 title: item.title.clone(),
                 body: item.body.clone(),
                 related_id: item.related_id.clone(),
+                read: false,
+                archived: false,
             },
         },
     );
@@ -1541,7 +1922,7 @@ fn ingest_event(
             exit_code,
             ..
         } => {
-            if name == coordy_protocol::HARNESS_SESSION_TOOL {
+                if name == coordy_protocol::HARNESS_SESSION_TOOL {
                 if let Some(active) = world.run_mut(run_id) {
                     if active.status == "running" {
                         active.status = if exit_code.unwrap_or(0) == 0 {
@@ -1549,19 +1930,18 @@ fn ingest_event(
                         } else {
                             "failed".into()
                         };
+                        active.queue_status = active.status.clone();
                     }
                 }
-                if let Some(task) = world.task_mut(&run.task_id) {
-                    if task.status == "running" {
-                        task.status = if exit_code.unwrap_or(0) == 0 {
-                            "review".into()
-                        } else {
-                            "blocked".into()
-                        };
-                        if exit_code.unwrap_or(0) != 0 && task.blocked_reason.is_none() {
-                            task.blocked_reason = Some(output.clone());
-                        }
-                    }
+                if exit_code.unwrap_or(0) != 0 {
+                    product::push_notice(
+                        world,
+                        &run.workspace_id,
+                        "agent_failed",
+                        "智能体这一轮失败了",
+                        &output,
+                        Some(run.task_id.clone()),
+                    );
                 }
             }
             if matches!(name.as_str(), "git" | "test" | "patch_apply") {

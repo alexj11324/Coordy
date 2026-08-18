@@ -3,6 +3,7 @@ import { isPlaceholderHarness } from "./views";
 
 /** Status words follow Multica's issue status meanings. */
 export const TASK_STATUS_ITEMS: Record<string, string> = {
+  backlog: "待办箱",
   open: "待办",
   running: "进行中",
   review: "待验收",
@@ -155,6 +156,14 @@ export function runStatusLabel(status: string): string {
       return "已停止";
     case "paused":
       return "已暂停";
+    case "queued":
+      return "排队中";
+    case "dispatched":
+      return "已派出";
+    case "waiting_local_directory":
+      return "等本机目录";
+    case "deferred":
+      return "已推迟";
     default:
       return status;
   }
@@ -224,6 +233,22 @@ export function inboxKindLabel(kind: string): string {
       return "需要重做计划";
     case "drift":
       return "计划和约定不一致";
+    case "assignment":
+      return "指派";
+    case "mention":
+      return "提到你";
+    case "comment":
+      return "评论";
+    case "status":
+      return "状态变了";
+    case "priority":
+      return "优先级变了";
+    case "date":
+      return "日期变了";
+    case "agent_failed":
+      return "智能体失败";
+    case "automation":
+      return "自动化";
     default:
       return kind;
   }

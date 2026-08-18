@@ -23,11 +23,6 @@ export function GlobalShortcuts() {
         return;
       }
       if (paletteOpen) return;
-      if (action === "toggle-sidebar") {
-        event.preventDefault();
-        useLayoutStore.getState().toggleSidebar();
-        return;
-      }
       if (action === "new-task") {
         event.preventDefault();
         useLayoutStore.getState().requestNewTaskFocus();

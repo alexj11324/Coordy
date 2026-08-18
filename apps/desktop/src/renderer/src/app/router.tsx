@@ -13,10 +13,17 @@ import {
   ConflictsPage,
   ContractsPage,
   DependenciesPage,
+  AutomationsPage,
+  ChatPage,
   InboxPage,
   MemoryPage,
+  MyIssuesPage,
   PrincipalsPage,
+  ProjectsPage,
   RunsPage,
+  SkillsPage,
+  SquadsPage,
+  StatsPage,
 } from "../features/pages";
 
 function FlushCanvas() {
@@ -58,6 +65,13 @@ export function AppRouter() {
           <Route path="/conflicts" element={<ConflictsPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/inbox" element={<InboxPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/mine" element={<MyIssuesPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/automations" element={<AutomationsPage />} />
+          <Route path="/squads" element={<SquadsPage />} />
+          <Route path="/stats" element={<StatsPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>

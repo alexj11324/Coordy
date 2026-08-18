@@ -56,9 +56,40 @@ pub enum Command {
     CreateWorkspace {
         name: String,
     },
+    UpdateWorkspace {
+        workspace_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        context: Option<String>,
+        #[serde(default)]
+        slug: Option<String>,
+        #[serde(default)]
+        issue_prefix: Option<String>,
+    },
+    DeleteWorkspace {
+        workspace_id: String,
+    },
+    LeaveWorkspace {
+        workspace_id: String,
+    },
     CreatePrincipal {
         workspace_id: String,
         name: String,
+    },
+    InvitePrincipal {
+        workspace_id: String,
+        name: String,
+        #[serde(default)]
+        role: String,
+    },
+    SetPrincipalRole {
+        principal_id: String,
+        role: String,
     },
     CreateAgent {
         workspace_id: String,
@@ -76,8 +107,29 @@ pub enum Command {
         instructions: Option<String>,
         #[serde(default)]
         harness: Option<String>,
+        #[serde(default)]
+        avatar: Option<String>,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        thinking: Option<String>,
+        #[serde(default)]
+        speed: Option<String>,
+        #[serde(default)]
+        access: Option<String>,
+        #[serde(default)]
+        access_member_ids: Option<Vec<String>>,
+        #[serde(default)]
+        concurrency_limit: Option<u32>,
+        #[serde(default)]
+        cli_args: Option<String>,
+        #[serde(default)]
+        mcp_servers: Option<Vec<String>>,
     },
     ArchiveAgent {
+        agent_id: String,
+    },
+    DuplicateAgent {
         agent_id: String,
     },
     Grant {
@@ -106,16 +158,65 @@ pub enum Command {
         task_id: String,
         agent_id: String,
     },
+    AssignIssue {
+        task_id: String,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        principal_id: Option<String>,
+        #[serde(default)]
+        squad_id: Option<String>,
+        #[serde(default)]
+        project_id: Option<String>,
+        #[serde(default)]
+        parent_id: Option<String>,
+        #[serde(default)]
+        stage: Option<String>,
+    },
     UpdateTask {
         task_id: String,
         #[serde(default)]
         title: Option<String>,
         #[serde(default)]
         description: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        start_date: Option<String>,
+        #[serde(default)]
+        due_date: Option<String>,
+        #[serde(default)]
+        labels: Option<Vec<String>>,
+        #[serde(default)]
+        custom_fields: Option<Vec<CustomFieldValue>>,
+        #[serde(default)]
+        sort_key: Option<i64>,
     },
     SetTaskStatus {
         task_id: String,
         status: String,
+    },
+    DeleteTask {
+        task_id: String,
+    },
+    SubscribeTask {
+        task_id: String,
+    },
+    UnsubscribeTask {
+        task_id: String,
+    },
+    ReorderTasks {
+        workspace_id: String,
+        status: String,
+        task_ids: Vec<String>,
+    },
+    AddAttachment {
+        task_id: String,
+        name: String,
+        path: String,
+    },
+    RemoveAttachment {
+        attachment_id: String,
     },
     BindRepository {
         workspace_id: String,
@@ -161,6 +262,12 @@ pub enum Command {
     StartRun {
         task_id: String,
         source: RunSource,
+        #[serde(default)]
+        agent_id: Option<String>,
+        #[serde(default)]
+        chat_id: Option<String>,
+        #[serde(default)]
+        trigger: String,
     },
     CancelRun {
         run_id: String,
@@ -185,6 +292,201 @@ pub enum Command {
     },
     DismissInbox {
         item_id: String,
+    },
+    ArchiveInbox {
+        item_id: String,
+    },
+    SetInboxRead {
+        item_id: String,
+        read: bool,
+    },
+    SetNotificationPrefs {
+        workspace_id: String,
+        kinds: Vec<String>,
+    },
+    CreateProject {
+        workspace_id: String,
+        name: String,
+        #[serde(default)]
+        icon: String,
+        #[serde(default)]
+        description: String,
+    },
+    UpdateProject {
+        project_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        icon: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        status: Option<String>,
+        #[serde(default)]
+        priority: Option<String>,
+        #[serde(default)]
+        lead_id: Option<String>,
+        #[serde(default)]
+        start_date: Option<String>,
+        #[serde(default)]
+        due_date: Option<String>,
+        #[serde(default)]
+        resource: Option<String>,
+    },
+    DeleteProject {
+        project_id: String,
+    },
+    CreateSquad {
+        workspace_id: String,
+        name: String,
+        leader_agent_id: String,
+    },
+    UpdateSquad {
+        squad_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        leader_agent_id: Option<String>,
+    },
+    SetSquadMembers {
+        squad_id: String,
+        agent_ids: Vec<String>,
+    },
+    DeleteSquad {
+        squad_id: String,
+    },
+    CreateSkill {
+        workspace_id: String,
+        name: String,
+        body: String,
+    },
+    UpdateSkill {
+        skill_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        body: Option<String>,
+    },
+    DeleteSkill {
+        skill_id: String,
+    },
+    SetAgentSkills {
+        agent_id: String,
+        skill_ids: Vec<String>,
+    },
+    CreateAutomation {
+        workspace_id: String,
+        name: String,
+        runbook: String,
+        #[serde(default)]
+        assignee_agent_id: Option<String>,
+        #[serde(default)]
+        schedule: String,
+        #[serde(default)]
+        create_issue: bool,
+    },
+    UpdateAutomation {
+        automation_id: String,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        runbook: Option<String>,
+        #[serde(default)]
+        assignee_agent_id: Option<String>,
+        #[serde(default)]
+        schedule: Option<String>,
+        #[serde(default)]
+        create_issue: Option<bool>,
+    },
+    TriggerAutomation {
+        automation_id: String,
+    },
+    DeleteAutomation {
+        automation_id: String,
+    },
+    AddComment {
+        task_id: String,
+        body: String,
+        #[serde(default)]
+        parent_id: Option<String>,
+        #[serde(default)]
+        mentions: Vec<Mention>,
+    },
+    ResolveComment {
+        comment_id: String,
+        resolved: bool,
+    },
+    SetCommentConclusion {
+        comment_id: String,
+    },
+    AddReaction {
+        target_id: String,
+        emoji: String,
+    },
+    CreateChat {
+        workspace_id: String,
+        agent_id: String,
+        #[serde(default)]
+        project_id: Option<String>,
+    },
+    SendChatMessage {
+        chat_id: String,
+        body: String,
+    },
+    StopChat {
+        chat_id: String,
+    },
+    ArchiveChat {
+        chat_id: String,
+    },
+    StartMentionRun {
+        task_id: String,
+        agent_id: String,
+        prompt: String,
+    },
+    RetryRun {
+        run_id: String,
+    },
+    SetDirectoryLock {
+        workspace_id: String,
+        path: String,
+        locked: bool,
+    },
+    RegisterComputer {
+        workspace_id: String,
+        name: String,
+        #[serde(default)]
+        kind: String,
+        #[serde(default)]
+        concurrency_limit: u32,
+    },
+    CreateLabel {
+        workspace_id: String,
+        name: String,
+        #[serde(default)]
+        color: String,
+    },
+    DeleteLabel {
+        workspace_id: String,
+        name: String,
+    },
+    SetCustomPropertyDef {
+        workspace_id: String,
+        key: String,
+        value_type: String,
+    },
+    LinkPullRequest {
+        task_id: String,
+        number: u32,
+        #[serde(default)]
+        url: String,
+    },
+    SetIntegration {
+        workspace_id: String,
+        kind: String,
+        enabled: bool,
+        #[serde(default)]
+        config: String,
     },
 }
 
@@ -221,6 +523,18 @@ pub enum HarnessEvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CustomFieldValue {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Mention {
+    pub kind: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum Query {
     Health,
@@ -239,6 +553,18 @@ pub enum Query {
     Settings { workspace_id: String },
     AgentContext { agent_id: String },
     Workspaces,
+    Workspace { workspace_id: String },
+    Projects { workspace_id: String },
+    Squads { workspace_id: String },
+    Skills { workspace_id: String },
+    Automations { workspace_id: String },
+    Comments { task_id: String },
+    Chats { workspace_id: String },
+    Chat { chat_id: String },
+    Labels { workspace_id: String },
+    Stats { workspace_id: String },
+    Computers { workspace_id: String },
+    Account,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -314,9 +640,46 @@ pub enum View {
         daemon: HealthView,
         repo_path: Option<String>,
         llm_advisor_enabled: bool,
+        #[serde(default)]
+        notification_kinds: Vec<String>,
     },
     AgentContext {
         context: AgentContextView,
+    },
+    Workspace(WorkspaceView),
+    Projects {
+        items: Vec<ProjectView>,
+    },
+    Squads {
+        items: Vec<SquadView>,
+    },
+    Skills {
+        items: Vec<SkillView>,
+    },
+    Automations {
+        items: Vec<AutomationView>,
+    },
+    Comments {
+        items: Vec<CommentView>,
+    },
+    Chats {
+        items: Vec<ChatView>,
+    },
+    Chat {
+        chat: ChatView,
+        messages: Vec<ChatMessageView>,
+    },
+    Labels {
+        items: Vec<LabelView>,
+    },
+    Stats {
+        stats: StatsView,
+    },
+    Computers {
+        items: Vec<ComputerView>,
+    },
+    Account {
+        account: AccountView,
     },
 }
 
@@ -334,6 +697,18 @@ pub struct WorkspaceView {
     pub id: String,
     pub name: String,
     pub repo_path: Option<String>,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub context: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub issue_prefix: String,
+    #[serde(default)]
+    pub next_issue_number: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -347,6 +722,38 @@ pub struct TaskView {
     pub assignee_agent_id: Option<String>,
     pub worktree_path: Option<String>,
     pub blocked_reason: Option<String>,
+    #[serde(default)]
+    pub identifier: String,
+    #[serde(default)]
+    pub number: u64,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub custom_fields: Vec<CustomFieldValue>,
+    #[serde(default)]
+    pub assignee_principal_id: Option<String>,
+    #[serde(default)]
+    pub assignee_squad_id: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub stage: String,
+    #[serde(default)]
+    pub sort_key: i64,
+    #[serde(default)]
+    pub subscribed: bool,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentView>,
+    #[serde(default)]
+    pub pull_requests: Vec<PullRequestView>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -366,6 +773,8 @@ pub struct PrincipalView {
     pub id: String,
     pub workspace_id: String,
     pub name: String,
+    #[serde(default)]
+    pub role: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -379,6 +788,26 @@ pub struct AgentView {
     pub description: String,
     #[serde(default)]
     pub instructions: String,
+    #[serde(default)]
+    pub avatar: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub thinking: String,
+    #[serde(default)]
+    pub speed: String,
+    #[serde(default)]
+    pub access: String,
+    #[serde(default)]
+    pub access_member_ids: Vec<String>,
+    #[serde(default)]
+    pub concurrency_limit: u32,
+    #[serde(default)]
+    pub cli_args: String,
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub skill_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -435,6 +864,14 @@ pub struct RunView {
     pub status: String,
     pub harness: String,
     pub compaction_count: usize,
+    #[serde(default)]
+    pub queue_status: String,
+    #[serde(default)]
+    pub retry_count: u32,
+    #[serde(default)]
+    pub chat_id: Option<String>,
+    #[serde(default)]
+    pub trigger: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -451,6 +888,167 @@ pub struct InboxView {
     pub title: String,
     pub body: String,
     pub related_id: Option<String>,
+    #[serde(default)]
+    pub read: bool,
+    #[serde(default)]
+    pub archived: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectView {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub priority: String,
+    #[serde(default)]
+    pub lead_id: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub due_date: Option<String>,
+    #[serde(default)]
+    pub resource: String,
+    #[serde(default)]
+    pub progress: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SquadView {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub leader_agent_id: String,
+    #[serde(default)]
+    pub member_agent_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillView {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub body: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AutomationView {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub runbook: String,
+    #[serde(default)]
+    pub assignee_agent_id: Option<String>,
+    #[serde(default)]
+    pub schedule: String,
+    #[serde(default)]
+    pub create_issue: bool,
+    #[serde(default)]
+    pub last_run_id: Option<String>,
+    #[serde(default)]
+    pub run_count: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommentView {
+    pub id: String,
+    pub task_id: String,
+    pub author_id: String,
+    pub body: String,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub resolved: bool,
+    #[serde(default)]
+    pub conclusion: bool,
+    #[serde(default)]
+    pub reactions: Vec<String>,
+    #[serde(default)]
+    pub mentions: Vec<Mention>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatView {
+    pub id: String,
+    pub workspace_id: String,
+    pub agent_id: String,
+    pub owner_principal_id: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatMessageView {
+    pub id: String,
+    pub chat_id: String,
+    pub role: String,
+    pub body: String,
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LabelView {
+    pub name: String,
+    #[serde(default)]
+    pub color: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AttachmentView {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PullRequestView {
+    pub number: u32,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ComputerView {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub online: bool,
+    #[serde(default)]
+    pub concurrency_limit: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatsView {
+    pub issue_count: usize,
+    pub open_count: usize,
+    pub done_count: usize,
+    pub agent_count: usize,
+    pub run_count: usize,
+    pub project_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AccountView {
+    pub principal_id: String,
+    pub name: String,
+    #[serde(default)]
+    pub notify_desktop: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

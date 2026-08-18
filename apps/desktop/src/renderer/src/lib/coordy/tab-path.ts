@@ -18,8 +18,22 @@ export function titleFromPath(path: string): string {
       return "开始";
     case "/inbox":
       return "收件箱";
+    case "/chat":
+      return "聊天";
+    case "/mine":
+      return "我的任务";
     case "/board":
       return "任务";
+    case "/projects":
+      return "项目";
+    case "/automations":
+      return "自动化";
+    case "/squads":
+      return "小队";
+    case "/stats":
+      return "统计";
+    case "/skills":
+      return "Skills";
     case "/agents":
       return "智能体";
     case "/agents/new":

@@ -1,21 +1,41 @@
 import type {
+  AccountView,
   AgentView,
+  AutomationView,
+  ChatMessageView,
+  ChatView,
+  CommentView,
+  ComputerView,
   CommitmentView,
   ConflictView,
   ContractView,
   DependencyView,
   GrantView,
   InboxView,
+  LabelView,
   MemoryView,
   PrincipalView,
+  ProjectView,
   RunEventView,
   RunView,
+  SkillView,
+  SquadView,
+  StatsView,
   TaskView,
   View,
+  WorkspaceView,
 } from "@coordy/protocol";
 
 export function asTasks(view: View | undefined): TaskView[] {
   return view?.type === "Board" ? view.tasks : [];
+}
+
+export function asWorkspaces(view: View | undefined): WorkspaceView[] {
+  return view?.type === "Workspaces" ? view.items : [];
+}
+
+export function asWorkspace(view: View | undefined): WorkspaceView | null {
+  return view?.type === "Workspace" ? view : null;
 }
 
 export function asCommitments(view: View | undefined): CommitmentView[] {
@@ -62,6 +82,52 @@ export function asRunDetail(
 
 export function asInbox(view: View | undefined): InboxView[] {
   return view?.type === "Inbox" ? view.items : [];
+}
+
+export function asProjects(view: View | undefined): ProjectView[] {
+  return view?.type === "Projects" ? view.items : [];
+}
+
+export function asSquads(view: View | undefined): SquadView[] {
+  return view?.type === "Squads" ? view.items : [];
+}
+
+export function asSkills(view: View | undefined): SkillView[] {
+  return view?.type === "Skills" ? view.items : [];
+}
+
+export function asAutomations(view: View | undefined): AutomationView[] {
+  return view?.type === "Automations" ? view.items : [];
+}
+
+export function asComments(view: View | undefined): CommentView[] {
+  return view?.type === "Comments" ? view.items : [];
+}
+
+export function asChats(view: View | undefined): ChatView[] {
+  return view?.type === "Chats" ? view.items : [];
+}
+
+export function asChatDetail(
+  view: View | undefined,
+): { chat: ChatView; messages: ChatMessageView[] } | null {
+  return view?.type === "Chat" ? { chat: view.chat, messages: view.messages } : null;
+}
+
+export function asLabels(view: View | undefined): LabelView[] {
+  return view?.type === "Labels" ? view.items : [];
+}
+
+export function asStats(view: View | undefined): StatsView | null {
+  return view?.type === "Stats" ? view.stats : null;
+}
+
+export function asComputers(view: View | undefined): ComputerView[] {
+  return view?.type === "Computers" ? view.items : [];
+}
+
+export function asAccount(view: View | undefined): AccountView | null {
+  return view?.type === "Account" ? view.account : null;
 }
 
 export function outcomeId(ids: Record<string, unknown>, key: string): string {

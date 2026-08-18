@@ -27,14 +27,21 @@ import {
 import type { LucideIcon } from "lucide-react";
 import {
   AlertTriangle,
+  BarChart3,
   FileText,
+  FolderKanban,
   GitBranch,
   Inbox,
+  MessageSquare,
   Play,
   Plus,
+  Puzzle,
   Shield,
   StickyNote,
+  User,
   Users,
+  UsersRound,
+  Workflow,
 } from "lucide-react";
 import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
@@ -758,5 +765,88 @@ export function Page({ title, children }: { title: string; children: ReactNode }
       <h1 className="mb-4 text-2xl font-semibold tracking-tight">{title}</h1>
       {children}
     </section>
+  );
+}
+
+function ProductPlaceholder({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+}) {
+  return (
+    <section>
+      <PageHeader title={title} description={description} />
+      <EmptyList icon={Icon} title={`还没有${title}`} description={description} />
+    </section>
+  );
+}
+
+export function ChatPage() {
+  return (
+    <ProductPlaceholder
+      icon={MessageSquare}
+      title="聊天"
+      description="和智能体一对一对话，不依附某一条事项。这一页会按对照清单补上。"
+    />
+  );
+}
+
+export function MyIssuesPage() {
+  return (
+    <ProductPlaceholder
+      icon={User}
+      title="我的任务"
+      description="只看指派给你或你正在跟的事项。现在先从侧栏「任务」进入看板。"
+    />
+  );
+}
+
+export function ProjectsPage() {
+  return (
+    <ProductPlaceholder
+      icon={FolderKanban}
+      title="项目"
+      description="用项目把事项、仓库和进度收在一起。"
+    />
+  );
+}
+
+export function AutomationsPage() {
+  return (
+    <ProductPlaceholder
+      icon={Workflow}
+      title="自动化"
+      description="Runbook、时间表和 Webhook 会从这里跑。"
+    />
+  );
+}
+
+export function SquadsPage() {
+  return (
+    <ProductPlaceholder
+      icon={UsersRound}
+      title="小队"
+      description="小队有一个领队智能体，领队负责把活派给成员。"
+    />
+  );
+}
+
+export function StatsPage() {
+  return (
+    <ProductPlaceholder icon={BarChart3} title="统计" description="工作区事项和执行的汇总会显示在这里。" />
+  );
+}
+
+export function SkillsPage() {
+  return (
+    <ProductPlaceholder
+      icon={Puzzle}
+      title="Skills"
+      description="工作区 Skills 库，可以挂到智能体上启用或停用。"
+    />
   );
 }

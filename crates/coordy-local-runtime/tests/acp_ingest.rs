@@ -160,6 +160,9 @@ fn acp_session_ingests_and_key_stays_out_of_sqlite() {
                 source: RunSource::Acp {
                     prompt: "hello".into(),
                 },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
             },
         })
         .unwrap();

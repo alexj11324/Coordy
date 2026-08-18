@@ -1,14 +1,12 @@
-import { Button, cn } from "@coordy/ui";
-import { PanelLeft, Plus, X } from "lucide-react";
+import { Button, cn, Separator, SidebarTrigger } from "@coordy/ui";
+import { Plus, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useLayoutStore } from "../state/layout-store";
 import { useTabStore } from "../state/tab-store";
 
-export function TabBar({ showSidebarTrigger }: { showSidebarTrigger: boolean }) {
+export function TabBar() {
   const navigate = useNavigate();
   const tabs = useTabStore((s) => s.tabs);
   const activeId = useTabStore((s) => s.activeId);
-  const toggleSidebar = useLayoutStore((s) => s.toggleSidebar);
 
   const open = (path: string) => {
     useTabStore.getState().ensure(path);
@@ -20,20 +18,13 @@ export function TabBar({ showSidebarTrigger }: { showSidebarTrigger: boolean }) 
       className="flex h-11 shrink-0 items-stretch gap-1 border-b border-border bg-muted/40 px-1"
       style={{ WebkitAppRegion: "drag" } as React.CSSProperties}
     >
-      {showSidebarTrigger ? (
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          className="mt-1.5"
-          aria-label="展开侧栏"
-          title="展开侧栏"
-          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
-          onClick={toggleSidebar}
-        >
-          <PanelLeft />
-        </Button>
-      ) : null}
+      <SidebarTrigger
+        className="mt-1.5"
+        aria-label="收起或展开侧栏"
+        title="收起或展开侧栏"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      />
+      <Separator orientation="vertical" className="my-2 data-vertical:h-4 data-vertical:self-auto" />
       <div className="flex min-w-0 flex-1 items-stretch gap-0.5 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.id === activeId;

@@ -1,4 +1,4 @@
-import { Button, Input } from "@coordy/ui";
+import { Input } from "@coordy/ui";
 import { Bot, LayoutDashboard, PanelLeft, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -160,35 +160,5 @@ export function CommandPalette({ os }: { os?: string }) {
         </ul>
       </div>
     </div>
-  );
-}
-
-export function SearchTrigger({
-  collapsed,
-  os,
-}: {
-  collapsed: boolean;
-  os?: string;
-}) {
-  const setOpen = useLayoutStore((s) => s.setPaletteOpen);
-  const mod = modifierSymbol(os);
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size={collapsed ? "icon-sm" : "sm"}
-      className={collapsed ? "mx-auto" : "w-full justify-start text-muted-foreground"}
-      aria-label="搜索"
-      title={`搜索 ${mod}+K`}
-      onClick={() => setOpen(true)}
-    >
-      <Search data-icon="inline-start" />
-      {collapsed ? null : (
-        <>
-          <span className="flex-1 text-left">搜索</span>
-          <kbd className="rounded border border-border px-1 text-[10px]">{`${mod}+K`}</kbd>
-        </>
-      )}
-    </Button>
   );
 }
