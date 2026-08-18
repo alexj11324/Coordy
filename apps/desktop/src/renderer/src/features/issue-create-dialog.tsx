@@ -40,7 +40,7 @@ import { asAgents, asProjects, asWorkspaces, outcomeId } from "../lib/coordy/vie
 import { useLayoutStore } from "../state/layout-store";
 import { useSession } from "../state/session-store";
 import { StatusGlyph } from "./issue-status";
-import { ProviderLogo } from "./provider-logo";
+import { AgentAvatar, NamedAgent } from "./agent-avatar";
 
 const pillTrigger = "h-7 w-auto max-w-52 gap-1.5 rounded-md px-2";
 
@@ -127,7 +127,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      if (!workspaceId) throw new Error("还没准备好，请稍等一下");
+      if (!workspaceId) throw new Error("工作区尚未就绪。");
       const trimmed = title.trim();
       if (!trimmed) throw new Error("先写任务标题");
       const created = await submit({
@@ -280,7 +280,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
             <Select value={agentId} items={agentItems} onValueChange={(value) => value && setAgentId(value)}>
               <SelectTrigger size="sm" className={pillTrigger}>
                 {selectedAgent ? (
-                  <ProviderLogo provider={selectedAgent.harness} className="size-3.5" />
+                  <AgentAvatar agent={selectedAgent} className="size-3.5" />
                 ) : (
                   <UserRound className="size-3.5" />
                 )}
@@ -292,7 +292,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
                 <SelectItem value="none">未指派</SelectItem>
                 {agentList.map((agent) => (
                   <SelectItem key={agent.id} value={agent.id}>
-                    {agentDisplayName(agent, catalog.data)}
+                    <NamedAgent agent={agent} catalog={catalog.data} />
                   </SelectItem>
                 ))}
               </SelectContent>

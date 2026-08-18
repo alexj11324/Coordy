@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::SecretEnv;
 
-pub const ACP_STUB_REPLY: &str = "内置演示智能体已接通。这不是云端模型：在「新建智能体」里选一个本机运行时，并填入你自己的 API 密钥即可用真智能体。";
+pub const ACP_STUB_REPLY: &str = "内置演示智能体已接通。这不是云端模型：在「新建智能体」里选一个本机 harness，并填入你自己的 API 密钥即可用真智能体。";
 
 pub fn resolve_acp_command(configured: Option<&str>) -> Result<(String, Vec<String>), CoordyError> {
     crate::discovery::resolve_launch("acp", configured, None)
@@ -23,6 +23,7 @@ pub fn spawn_acp_session(
     args: &[String],
     worktree: &str,
     prompt: &str,
+    model: &str,
     secrets: &SecretEnv,
     run_id: Option<&str>,
     mut on_event: impl FnMut(HarnessEvent),
@@ -57,7 +58,7 @@ pub fn spawn_acp_session(
         });
     }
     let cwd = PathBuf::from(if worktree.is_empty() { "." } else { worktree });
-    let result = drive_session(stdout, stdin, prompt, &cwd, &mut on_event);
+    let result = drive_session(stdout, stdin, prompt, model, &cwd, &mut on_event);
     if let Some(run_id) = run_id {
         crate::children::unregister_child(run_id);
     }
@@ -70,6 +71,7 @@ pub fn drive_session<R: Read, W: Write>(
     reader: R,
     mut writer: W,
     prompt: &str,
+    model: &str,
     cwd: &Path,
     on_event: &mut impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
@@ -104,6 +106,16 @@ pub fn drive_session<R: Read, W: Write>(
         .unwrap_or("default")
         .to_string();
     next_id += 1;
+    if !model.trim().is_empty() {
+        write_rpc(
+            &mut writer,
+            next_id,
+            "session/set_model",
+            json!({ "sessionId": session_id, "modelId": model.trim() }),
+        )?;
+        let _set_model = wait_response(&mut lines, &mut writer, next_id, cwd, on_event)?;
+        next_id += 1;
+    }
     write_rpc(
         &mut writer,
         next_id,
@@ -375,6 +387,9 @@ pub fn serve_fake_acp<R: Read, W: Write>(
             "session/new" => {
                 sessions.insert("s1".into(), ());
                 write_result(&mut writer, &id, json!({ "sessionId": "s1" }))?;
+            }
+            "session/set_model" => {
+                write_result(&mut writer, &id, json!({}))?;
             }
             "session/prompt" => {
                 let note = json!({

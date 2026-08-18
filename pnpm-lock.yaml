@@ -20,6 +20,12 @@ importers:
       '@coordy/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@dicebear/core':
+        specifier: ^10.6.1
+        version: 10.6.1
+      '@dicebear/styles':
+        specifier: ^10.5.0
+        version: 10.5.0
       '@tanstack/react-query':
         specifier: ^5.74.4
         version: 5.101.4(react@19.2.8)
@@ -277,6 +283,13 @@ packages:
   '@csstools/css-tokenizer@3.0.4':
     resolution: {integrity: sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==}
     engines: {node: '>=18'}
+
+  '@dicebear/core@10.6.1':
+    resolution: {integrity: sha512-AMhre1Hj83y3KTyhdOQeU0Dc81pw3rMCvm7tKBz+pE+N3nOusRDcQBfRsf67w+GYBI/dHq7eeezzDQHUjoC5XA==}
+    engines: {node: '>=22.0.0'}
+
+  '@dicebear/styles@10.5.0':
+    resolution: {integrity: sha512-CV5rBIe/wECQua/jct3oJCN7aNNMb7H1TUFQr5x0DWMI+82KZDeLOgw50OzEjDIW0qGHfwvfz9tRh61ZEyardA==}
 
   '@electron/get@2.0.3':
     resolution: {integrity: sha512-Qkzpg2s9GnVV2I2BjRksUi43U5e6+zaQMcjoJy0C+C5oxaKl+fmckGDQFtRpZpZV0NQekuZZ+tGz7EA9TVnQtQ==}
@@ -1999,6 +2012,10 @@ snapshots:
       '@csstools/css-tokenizer': 3.0.4
 
   '@csstools/css-tokenizer@3.0.4': {}
+
+  '@dicebear/core@10.6.1': {}
+
+  '@dicebear/styles@10.5.0': {}
 
   '@electron/get@2.0.3':
     dependencies:

@@ -45,7 +45,7 @@ export const workspaceNav: NavItem[] = [
 ];
 
 export const configNav: NavItem[] = [
-  { to: "/runtimes", label: "运行时", icon: Monitor },
+  { to: "/harnesses", label: "Harness", icon: Monitor },
   { to: "/skills", label: "Skills", icon: Puzzle },
   { to: "/settings", label: "设置", icon: Settings },
 ];

@@ -1174,8 +1174,13 @@ impl Kernel {
                             })
                             .unwrap_or_else(|| ".".into());
                         drop(world);
-                        self.ports
-                            .spawn_harness(&harness, &worktree, &prompt, &run_id)?;
+                        self.ports.spawn_harness(
+                            &harness,
+                            &worktree,
+                            &prompt,
+                            &run_id,
+                            &agent.model,
+                        )?;
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }
                 };

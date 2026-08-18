@@ -72,6 +72,7 @@ import {
   outcomeId,
 } from "../lib/coordy/views";
 import { ActivityLine } from "./activity-marker";
+import { AgentAvatar, NamedAgent } from "./agent-avatar";
 
 export function useWorkspaceQuery(make: (workspace_id: string) => Query) {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -1040,7 +1041,7 @@ export function ChatPage() {
               <SelectContent>
                 {agentList.map((agent) => (
                   <SelectItem key={agent.id} value={agent.id}>
-                    {agentDisplayName(agent)}
+                    <NamedAgent agent={agent} />
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1074,7 +1075,10 @@ export function ChatPage() {
                 className="text-left"
                 onClick={() => useLayoutStore.getState().openChatDock(chat.id)}
               >
-                <CardTitle>{chat.title?.trim() || "对话"}</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  {agent ? <AgentAvatar agent={agent} className="size-6" /> : null}
+                  {chat.title?.trim() || "对话"}
+                </CardTitle>
                 <CardDescription>{agent ? agentDisplayName(agent) : chat.agent_id}</CardDescription>
               </button>
             </CardHeader>
@@ -1207,7 +1211,7 @@ export function SquadsPage() {
                 <SelectContent>
                   {agentList.map((agent) => (
                     <SelectItem key={agent.id} value={agent.id}>
-                      {agentDisplayName(agent)}
+                      <NamedAgent agent={agent} />
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1251,7 +1255,10 @@ export function SquadsPage() {
         return (
           <Card key={squad.id} size="sm" className="mb-2">
             <CardHeader>
-              <CardTitle>{squad.name}</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                {leader ? <AgentAvatar agent={leader} className="size-6" /> : null}
+                {squad.name}
+              </CardTitle>
               <CardDescription>
                 领队 {leader ? agentDisplayName(leader) : squad.leader_agent_id}
                 {members > 0 ? ` · ${members} 名成员` : ""}

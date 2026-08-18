@@ -6,6 +6,8 @@ import {
   DEFAULT_MODEL_VALUE,
   draftAgentFromGoal,
   EMPTY_AGENT_DRAFT,
+  emptyAgentDraft,
+  modelsForHarness,
   modelSelectValue,
 } from "../lib/coordy/agent-draft";
 import {
@@ -19,7 +21,7 @@ import {
   readManualDraft,
   type BuilderSession,
 } from "../lib/coordy/builder-sessions";
-import { osShortLabel, runtimeChipLabel } from "../lib/coordy/labels";
+import { osShortLabel, runtimeChipLabel, runtimeSubtitle } from "../lib/coordy/labels";
 
 function session(partial: Partial<BuilderSession> & Pick<BuilderSession, "id">): BuilderSession {
   return {
@@ -38,7 +40,7 @@ describe("agent creation studio helpers", () => {
     expect(draft.instructions).toContain("只看 TypeScript");
   });
 
-  it("clears the model when the runtime changes", () => {
+    it("clears the model when the harness changes", () => {
     const next = applyDraftRuntimeChange(
       { ...EMPTY_AGENT_DRAFT, harness: "claude-acp", model: "opus" },
       "codex-acp",
@@ -52,7 +54,7 @@ describe("agent creation studio helpers", () => {
     expect(modelSelectValue("gpt-5")).toBe("gpt-5");
   });
 
-  it("fills the live draft locally without calling a runtime", () => {
+  it("fills the live draft locally without calling a harness", () => {
     const first = applyBuilderTurn(EMPTY_AGENT_DRAFT, 0, "审查前端 Pull Request");
     expect(first.draft.name).toBe("审查前端 Pull Request");
     expect(first.reply).toContain("不该做什么");
@@ -99,8 +101,25 @@ describe("agent creation studio helpers", () => {
     expect(readManualDraft("ws", store)?.name).toBe("助手");
   });
 
-  it("labels a runtime chip with the host OS", () => {
+  it("seeds a local DiceBear avatar and keeps a stored seed stable", () => {
+    const draft = emptyAgentDraft();
+    expect(draft.avatar.startsWith("dicebear:bottts-neutral:")).toBe(true);
+    const store = memoryStore();
+    writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "审查员", avatar: "dicebear:bottts-neutral:kept" }, store);
+    expect(readManualDraft("ws", store)?.avatar).toBe("dicebear:bottts-neutral:kept");
+    writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "审查员" }, store);
+    expect(readManualDraft("ws", store)?.avatar).toBe("dicebear:bottts-neutral:审查员");
+  });
+
+  it("labels a harness chip with the host OS and hides the binary path", () => {
     expect(osShortLabel("darwin")).toBe("Mac");
     expect(runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin")).toBe("Claude Code (Mac)");
+    expect(runtimeSubtitle({ command: "/usr/local/bin/claude acp" })).toBe("本机");
+  });
+
+  it("offers models for Claude and Codex harnesses", () => {
+    expect(modelsForHarness("claude-acp").map((item) => item.id)).toContain("claude-opus-4-6");
+    expect(modelsForHarness("codex-acp").map((item) => item.id)).toContain("gpt-5.4");
+    expect(modelsForHarness("coordy-stub")).toEqual([]);
   });
 });

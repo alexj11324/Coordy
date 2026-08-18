@@ -6,13 +6,13 @@ export const ISSUE_BOARD_COLUMNS = [
   { id: "open", title: "待办" },
   { id: "running", title: "进行中" },
   { id: "review", title: "审核中" },
-  { id: "blocked", title: "暂时做不了" },
+  { id: "blocked", title: "受阻" },
   { id: "done", title: "已完成" },
 ] as const;
 
 export const ISSUE_LIST_GROUPS = [
   ...ISSUE_BOARD_COLUMNS,
-  { id: "cancelled", title: "不做了" },
+  { id: "cancelled", title: "已取消" },
 ] as const;
 
 export const PRIORITY_ITEMS: Record<string, string> = {

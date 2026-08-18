@@ -14,4 +14,5 @@ export const IPC = {
     discoverAgents: "coordy:discover-agents",
     importAgents: "coordy:import-agents",
     listDirectory: "coordy:list-directory",
+    quit: "coordy:quit",
 } as const;

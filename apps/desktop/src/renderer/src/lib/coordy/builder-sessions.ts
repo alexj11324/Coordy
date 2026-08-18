@@ -1,3 +1,4 @@
+import { formatAgentAvatar } from "./agent-avatar";
 import { EMPTY_AGENT_DRAFT, type AgentDraft, type BuilderMessage } from "./agent-draft";
 
 export const BUILDER_SESSION_KEY_PREFIX = "coordy.agent-builder.";
@@ -128,12 +129,18 @@ function asBuilderSession(value: unknown): BuilderSession | null {
 function asAgentDraft(value: unknown): AgentDraft | null {
   if (!value || typeof value !== "object") return { ...EMPTY_AGENT_DRAFT };
   const row = value as Partial<AgentDraft>;
+  const name = typeof row.name === "string" ? row.name : "";
+  const description = typeof row.description === "string" ? row.description : "";
+  const instructions = typeof row.instructions === "string" ? row.instructions : "";
+  const harness = typeof row.harness === "string" ? row.harness : "";
+  const storedAvatar = typeof row.avatar === "string" ? row.avatar.trim() : "";
   return {
-    name: typeof row.name === "string" ? row.name : "",
-    description: typeof row.description === "string" ? row.description : "",
-    instructions: typeof row.instructions === "string" ? row.instructions : "",
-    harness: typeof row.harness === "string" ? row.harness : "",
+    name,
+    description,
+    instructions,
+    harness,
     model: typeof row.model === "string" ? row.model : "",
+    avatar: storedAvatar || formatAgentAvatar([name, harness, instructions].filter(Boolean).join("|") || "agent"),
     access: row.access === "workspace" ? "workspace" : "owner",
   };
 }

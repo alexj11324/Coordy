@@ -73,7 +73,8 @@ export function AppRouter() {
           <Route path="/principals" element={<PrincipalsPage />} />
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/agents/:agentId" element={<AgentDetailPage />} />
-          <Route path="/runtimes" element={<RuntimesPage />} />
+          <Route path="/harnesses" element={<RuntimesPage />} />
+          <Route path="/runtimes" element={<Navigate to="/harnesses" replace />} />
           <Route path="/authority" element={<AuthorityPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/contracts" element={<ContractsPage />} />

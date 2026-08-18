@@ -68,7 +68,7 @@ describe("board view helpers", () => {
     ).toBe("Claude Code");
   });
 
-  it("only offers installed tools as selectable runtimes", () => {
+  it("only offers installed tools as selectable harnesses", () => {
     expect(
       selectableRuntimes([
         { id: "claude-acp", name: "Claude Code", installed: true, command: "claude acp", source: "path" },
@@ -98,8 +98,8 @@ describe("board view helpers", () => {
   });
 
   it("writes empty-state copy for catalog create actions", () => {
-    expect(emptyCreateHint("小队")).toBe("还没有小队，创建一个开始吧。");
-    expect(emptyCreateHint("Skill")).toBe("还没有 Skill，创建一个开始吧。");
+    expect(emptyCreateHint("小队")).toBe("暂无小队。");
+    expect(emptyCreateHint("Skill")).toBe("暂无 Skill。");
     expect(createActionLabel("小队")).toBe("新建小队");
     expect(createActionLabel("Skill")).toBe("新建 Skill");
   });

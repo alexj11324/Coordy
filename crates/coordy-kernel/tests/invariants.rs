@@ -1079,6 +1079,7 @@ fn start_run_acp_spawns_against_bound_repo() {
     assert_eq!(spawns[0].0, "claude-acp");
     assert_eq!(spawns[0].1, "/tmp/coordy-acp-repo");
     assert_eq!(spawns[0].2, "hello acp");
+    assert_eq!(spawns[0].4, "");
 }
 
 #[test]

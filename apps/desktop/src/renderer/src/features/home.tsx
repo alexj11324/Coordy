@@ -32,7 +32,7 @@ import { agentDisplayName, listableAgents, runStatusLabel } from "../lib/coordy/
 import { asAgents, asRunDetail, asRuns } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { ActivityLine } from "./activity-marker";
-import { NamedWithLogo } from "./provider-logo";
+import { NamedAgent } from "./agent-avatar";
 
 export function HomePage() {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -84,7 +84,7 @@ export function HomePage() {
 
   const start = useMutation({
     mutationFn: async () => {
-      if (!workspaceId || !principalId) throw new Error("还没准备好，请稍等一下");
+      if (!workspaceId || !principalId) throw new Error("工作区尚未就绪。");
       return startAcpRun({
         workspaceId,
         principalId,
@@ -114,7 +114,7 @@ export function HomePage() {
             </EmptyMedia>
             <EmptyTitle>还没有智能体</EmptyTitle>
             <EmptyDescription>
-              不会把本机检测到的工具直接摆进来。先新建智能体，再在创建流程里选运行时。
+              不会把本机检测到的工具直接摆进来。先新建智能体，再在创建流程里选 harness。
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
@@ -147,9 +147,7 @@ export function HomePage() {
                   <SelectContent>
                     {agentList.map((agent) => (
                       <SelectItem key={agent.id} value={agent.id}>
-                        <NamedWithLogo provider={agent.harness}>
-                          {agentDisplayName(agent, catalog.data)}
-                        </NamedWithLogo>
+                        <NamedAgent agent={agent} catalog={catalog.data} />
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { classifyCreateAgentError, EMPTY_AGENT_DRAFT, type AgentDraft } from "../../lib/coordy/agent-draft";
+import { classifyCreateAgentError, emptyAgentDraft, type AgentDraft } from "../../lib/coordy/agent-draft";
 import {
   browserStore,
   clearManualDraft,
@@ -27,7 +27,7 @@ export function ManualCreateAgentPage() {
     queryFn: () => window.coordy.getAppInfo(),
   });
   const os = appInfo.data?.os;
-  const [draft, setDraft] = useState<AgentDraft>(EMPTY_AGENT_DRAFT);
+  const [draft, setDraft] = useState<AgentDraft>(emptyAgentDraft);
   const [hydrated, setHydrated] = useState(false);
   const [creating, setCreating] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
@@ -44,7 +44,9 @@ export function ManualCreateAgentPage() {
       saved?.harness && pickerRuntimes(catalog.data, saved.harness).some((item) => item.id === saved.harness)
         ? saved.harness
         : first;
-    setDraft({ ...(saved ?? EMPTY_AGENT_DRAFT), harness });
+    const next = { ...(saved ?? emptyAgentDraft()), harness };
+    if (!next.avatar) next.avatar = emptyAgentDraft().avatar;
+    setDraft(next);
     setHydrated(true);
   }, [workspaceId, catalog.data, catalog.isLoading, hydrated]);
 
@@ -63,7 +65,7 @@ export function ManualCreateAgentPage() {
 
   const create = async () => {
     if (!workspaceId || !principalId) {
-      setFormError("还没准备好，请稍等一下");
+      setFormError("工作区尚未就绪。");
       return;
     }
     setCreating(true);
@@ -78,6 +80,7 @@ export function ManualCreateAgentPage() {
         description: draft.description,
         instructions: draft.instructions,
         model: draft.model,
+        avatar: draft.avatar,
         access: draft.access,
       });
       const store = browserStore();

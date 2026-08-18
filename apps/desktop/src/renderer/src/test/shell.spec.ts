@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { closeTab, openNewTab, replaceActiveTab, titleFromPath } from "../lib/coordy/tab-path";
-import { matchShortcut, modifierSymbol } from "../lib/coordy/shortcuts";
+import { formatShortcut, matchShortcut, modifierSymbol, SHORTCUTS } from "../lib/coordy/shortcuts";
 import { filterIssues, issuesInColumn, taskIdentifier } from "../lib/coordy/issues";
 import { canGoBack, canGoForward, emptyHistory, historyBack, historyForward, recordVisit } from "../lib/coordy/nav-history";
 import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
@@ -61,6 +61,8 @@ describe("tabs", () => {
     expect(titleFromPath("/agents/new/blank")).toBe("创建智能体");
     expect(titleFromPath("/agents/new/ai")).toBe("创建智能体");
     expect(titleFromPath("/agents/new/ai/session-1")).toBe("创建智能体");
+    expect(titleFromPath("/harnesses")).toBe("Harness");
+    expect(titleFromPath("/runtimes")).toBe("Harness");
   });
 
   it("only adds a tab when opening one explicitly", () => {
@@ -90,16 +92,27 @@ describe("sidebar nav", () => {
 });
 
 describe("shortcuts", () => {
-  it("matches Multica-style search and new-task keys", () => {
+  it("matches search, new-task, sidebar, chat, tabs, and zoom", () => {
     expect(matchShortcut({ key: "k", metaKey: true, ctrlKey: false, altKey: false })).toBe("search");
     expect(matchShortcut({ key: "k", metaKey: false, ctrlKey: true, altKey: false })).toBe("search");
     expect(matchShortcut({ key: "c", metaKey: false, ctrlKey: false, altKey: false })).toBe("new-task");
     expect(matchShortcut({ key: "j", metaKey: true, ctrlKey: false, altKey: false })).toBe("toggle-chat");
-    expect(matchShortcut({ key: "j", metaKey: false, ctrlKey: true, altKey: false })).toBe("toggle-chat");
     expect(matchShortcut({ key: "b", metaKey: true, ctrlKey: false, altKey: false })).toBe("toggle-sidebar");
     expect(matchShortcut({ key: "w", metaKey: true, ctrlKey: false, altKey: false })).toBe("close-tab");
+    expect(matchShortcut({ key: ",", metaKey: true, ctrlKey: false, altKey: false })).toBe("open-settings");
+    expect(matchShortcut({ key: "[", metaKey: true, ctrlKey: false, altKey: false })).toBe("go-back");
+    expect(matchShortcut({ key: "4", code: "Digit4", metaKey: true, ctrlKey: false, altKey: false, shiftKey: true })).toBe("go-board");
+    expect(matchShortcut({ key: "=", metaKey: true, ctrlKey: false, altKey: false })).toBe("zoom-in");
     expect(modifierSymbol("darwin")).toBe("⌘");
     expect(modifierSymbol("linux")).toBe("Ctrl");
+    expect(formatShortcut({ key: "k", mod: true }, "darwin")).toBe("⌘K");
+    expect(formatShortcut({ key: "4", mod: true, shift: true }, "linux")).toBe("Ctrl+Shift+4");
+  });
+
+  it("lists general, navigation, and fixed actions", () => {
+    expect(SHORTCUTS.filter((item) => item.category === "navigation").length).toBeGreaterThanOrEqual(12);
+    expect(SHORTCUTS.map((item) => item.id)).toContain("go-harnesses");
+    expect(SHORTCUTS.map((item) => item.id)).toContain("open-settings");
   });
 
   it("ignores composing and modifier-only C", () => {

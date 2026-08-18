@@ -1,3 +1,5 @@
+import { newAgentAvatarRef } from "./agent-avatar";
+
 export const BUILDER_STARTER_PROMPTS = [
   "审查前端 Pull Request",
   "研究竞品并整理结论",
@@ -14,6 +16,7 @@ export type AgentDraft = {
   instructions: string;
   harness: string;
   model: string;
+  avatar: string;
   access: AgentAccess;
 };
 
@@ -23,8 +26,13 @@ export const EMPTY_AGENT_DRAFT: AgentDraft = {
   instructions: "",
   harness: "",
   model: "",
+  avatar: "",
   access: "owner",
 };
+
+export function emptyAgentDraft(): AgentDraft {
+  return { ...EMPTY_AGENT_DRAFT, avatar: newAgentAvatarRef() };
+}
 
 export type BuilderMessage = {
   id: string;
@@ -62,7 +70,34 @@ export function modelSelectValue(model: string): string {
   return model.trim() ? model : DEFAULT_MODEL_VALUE;
 }
 
-/** Local Agent Builder turn. Fills the live draft; does not call a runtime. */
+export type HarnessModelOption = { id: string; label: string };
+
+export function modelsForHarness(harness: string): HarnessModelOption[] {
+  switch (harness) {
+    case "claude-acp":
+    case "claude":
+      return [
+        { id: "claude-opus-4-6", label: "Opus 4.6" },
+        { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
+        { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+      ];
+    case "codex-acp":
+    case "codex":
+      return [
+        { id: "gpt-5.4", label: "GPT-5.4" },
+        { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      ];
+    case "gemini":
+      return [
+        { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+      ];
+    default:
+      return [];
+  }
+}
+
+/** Local Agent Builder turn. Fills the live draft; does not call a harness. */
 export function applyBuilderTurn(
   draft: AgentDraft,
   previousUserCount: number,

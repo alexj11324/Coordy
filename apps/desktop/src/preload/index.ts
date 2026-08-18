@@ -21,6 +21,7 @@ const bridge: CoordyDesktopBridge = {
   clearSecret: () => ipcRenderer.invoke(IPC.clearSecret),
   discoverAgents: (refresh = false) => ipcRenderer.invoke(IPC.discoverAgents, refresh),
   importAgents: (input) => ipcRenderer.invoke(IPC.importAgents, input),
+  quit: () => ipcRenderer.invoke(IPC.quit),
 };
 
 contextBridge.exposeInMainWorld("coordy", bridge);

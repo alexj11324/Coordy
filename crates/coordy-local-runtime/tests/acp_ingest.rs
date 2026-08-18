@@ -42,6 +42,8 @@ for raw in sys.stdin:
         }})
     elif method == "session/new":
         send({"jsonrpc": "2.0", "id": ident, "result": {"sessionId": "s1"}})
+    elif method == "session/set_model":
+        send({"jsonrpc": "2.0", "id": ident, "result": {}})
     elif method == "session/prompt":
         send({"jsonrpc": "2.0", "method": "session/update", "params": {
             "sessionId": "s1",

@@ -18,6 +18,7 @@ pub trait Ports: Send + Sync {
         worktree: &str,
         prompt: &str,
         run_id: &str,
+        model: &str,
     ) -> Result<(), CoordyError>;
 
     fn cancel_harness(&self, run_id: &str) -> Result<(), CoordyError>;
@@ -45,6 +46,7 @@ impl Ports for NoopPorts {
         _worktree: &str,
         _prompt: &str,
         _run_id: &str,
+        _model: &str,
     ) -> Result<(), CoordyError> {
         if kind == "codex" || kind == "claude_code" || kind == "opencode" || kind == "acp" {
             return Err(CoordyError::unavailable(format!(
@@ -63,7 +65,7 @@ impl Ports for NoopPorts {
 pub struct RecordingPorts {
     pub worktrees: std::sync::Mutex<Vec<String>>,
     pub patches: std::sync::Mutex<Vec<String>>,
-    pub spawns: std::sync::Mutex<Vec<(String, String, String, String)>>,
+    pub spawns: std::sync::Mutex<Vec<(String, String, String, String, String)>>,
     pub cancelled: std::sync::Mutex<Vec<String>>,
 }
 
@@ -89,12 +91,14 @@ impl Ports for RecordingPorts {
         worktree: &str,
         prompt: &str,
         run_id: &str,
+        model: &str,
     ) -> Result<(), CoordyError> {
         self.spawns.lock().unwrap().push((
             kind.to_string(),
             worktree.to_string(),
             prompt.to_string(),
             run_id.to_string(),
+            model.to_string(),
         ));
         Ok(())
     }

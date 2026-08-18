@@ -40,8 +40,9 @@ export function titleFromPath(path: string): string {
     case "/agents/new/blank":
     case "/agents/new/ai":
       return "创建智能体";
+    case "/harnesses":
     case "/runtimes":
-      return "运行时";
+      return "Harness";
     case "/settings":
       return "设置";
     case "/runs":

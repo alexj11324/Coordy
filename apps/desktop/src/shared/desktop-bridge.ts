@@ -37,4 +37,5 @@ export interface CoordyDesktopBridge {
     principal_id: string;
     ids?: string[] | null;
   }): Promise<ImportAgentsResult>;
+  quit(): Promise<void>;
 }

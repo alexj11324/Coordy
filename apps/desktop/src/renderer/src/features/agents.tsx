@@ -28,7 +28,7 @@ import {
 } from "../lib/coordy/labels";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
-import { ProviderLogo } from "./provider-logo";
+import { AgentAvatar } from "./agent-avatar";
 import { StatusLamp } from "./status-lamp";
 
 export function AgentsPage() {
@@ -50,7 +50,7 @@ export function AgentsPage() {
     <section className="space-y-4">
       <PageHeader
         title="智能体"
-        description="智能体是工作区里反复使用的身份。它决定谁来做、按什么方式做；运行时决定在这台电脑上用哪款工具执行。"
+        description="智能体是工作区里反复使用的身份。它决定谁来做、按什么方式做；harness 决定在这台电脑上用哪款工具执行。"
       >
         <Button onClick={() => navigate("/agents/new")}>
           <Plus data-icon="inline-start" />
@@ -64,7 +64,7 @@ export function AgentsPage() {
               <Bot />
             </EmptyMedia>
             <EmptyTitle>还没有智能体</EmptyTitle>
-            <EmptyDescription>先新建一个，再选这台电脑上的运行时。未安装的工具不会出现在这里。</EmptyDescription>
+            <EmptyDescription>先新建一个，再选这台电脑上的 harness。未安装的工具不会出现在这里。</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <Button onClick={() => navigate("/agents/new")}>新建智能体</Button>
@@ -78,7 +78,7 @@ export function AgentsPage() {
               <CardHeader>
                 <button type="button" className="text-left" onClick={() => navigate(`/agents/${agent.id}`)}>
                   <CardTitle className="flex items-center gap-2">
-                    <ProviderLogo provider={agent.harness} className="size-4" />
+                    <AgentAvatar agent={agent} className="size-8" />
                     {agentDisplayName(agent, catalog.data)}
                     <Badge variant={presence === "online" || presence === "demo" ? "outline" : "secondary"}>
                       <StatusLamp tone={presenceLampTone(presence)} />

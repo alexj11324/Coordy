@@ -5,15 +5,15 @@ import { queryClient } from "./app/query-client";
 import { AppRouter } from "./app/router";
 import { submitAsDaemon, viewAsDaemon } from "./lib/coordy/client";
 import { useSession } from "./state/session-store";
-import { applyTheme, useThemeStore } from "./state/theme-store";
+import { applyAppearance, useThemeStore } from "./state/theme-store";
 
 export function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    applyTheme(useThemeStore.getState().preference);
+    applyAppearance(useThemeStore.getState().preference, useThemeStore.getState().fontSizePx);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const onChange = () => applyTheme(useThemeStore.getState().preference);
+    const onChange = () => applyAppearance(useThemeStore.getState().preference, useThemeStore.getState().fontSizePx);
     media.addEventListener("change", onChange);
     bootstrap()
       .then(() => setReady(true))
@@ -38,7 +38,7 @@ export function App() {
   if (!ready) {
     return (
       <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-muted-foreground">
-        正在打开…
+        正在初始化…
       </div>
     );
   }

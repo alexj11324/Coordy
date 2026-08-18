@@ -16,7 +16,7 @@ describe("daemonConnectionStatus", () => {
   it("is yellow while the socket has not answered", () => {
     expect(daemonConnectionStatus({ isError: false, status: undefined })).toEqual({
       tone: "yellow",
-      label: "正在连接",
+      label: "连接中",
     });
     expect(daemonConnectionStatus({ isError: false, status: "connecting" })).toEqual({
       tone: "yellow",
@@ -37,7 +37,7 @@ describe("daemonConnectionStatus", () => {
 });
 
 describe("presenceLampTone", () => {
-  it("maps installed / demo / missing runtimes to traffic-light tones", () => {
+  it("maps installed / demo / missing harnesses to traffic-light tones", () => {
     expect(presenceLampTone("online")).toBe("green");
     expect(presenceLampTone("demo")).toBe("yellow");
     expect(presenceLampTone("offline")).toBe("red");

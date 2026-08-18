@@ -15,19 +15,19 @@ import {
   useSidebar,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, User } from "lucide-react";
-import { NamedWithLogo } from "../features/provider-logo";
+import { User } from "lucide-react";
+import { AgentAvatar, NamedAgent } from "../features/agent-avatar";
 import { viewAsDaemon } from "../lib/coordy/client";
 import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
 import { asAgents, asPrincipals } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { moreNav } from "./nav";
 
-function personLabel(name: string): string {
+export function personLabel(name: string): string {
   return name === "Local user" ? "我" : name;
 }
 
-function initials(name: string): string {
+export function initials(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return "我";
   const parts = trimmed.split(/\s+/);
@@ -35,7 +35,7 @@ function initials(name: string): string {
   return Array.from(trimmed).slice(0, 2).join("");
 }
 
-function avatarTone(seed: string): string {
+export function avatarTone(seed: string): string {
   let hash = 0;
   for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
   const hues = [
@@ -92,9 +92,13 @@ export function SidebarHelp() {
             <DropdownMenuGroup>
               <DropdownMenuLabel className="p-0 font-normal">
                 <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                  <Avatar>
-                    <AvatarFallback className={avatarTone(name)}>{initials(name)}</AvatarFallback>
-                  </Avatar>
+                  {currentAgent ? (
+                    <AgentAvatar agent={currentAgent} className="size-8" />
+                  ) : (
+                    <Avatar>
+                      <AvatarFallback className={avatarTone(name)}>{initials(name)}</AvatarFallback>
+                    </Avatar>
+                  )}
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{name}</span>
                     <span className="truncate text-xs">{subtitle}</span>
@@ -125,8 +129,7 @@ export function SidebarHelp() {
                       key={agent.id}
                       onClick={() => useSession.getState().setAgent(agent.id, agent.principal_id)}
                     >
-                      <Bot />
-                      <NamedWithLogo provider={agent.harness}>{agentDisplayName(agent)}</NamedWithLogo>
+                      <NamedAgent agent={agent} />
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuGroup>

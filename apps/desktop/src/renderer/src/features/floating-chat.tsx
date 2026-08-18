@@ -21,7 +21,7 @@ import { asAgents, asChatDetail, asChats, asRunDetail, asRuns, latestRunForTask,
 import { useLayoutStore } from "../state/layout-store";
 import { useSession } from "../state/session-store";
 import { ActivityLine } from "./activity-marker";
-import { ProviderLogo } from "./provider-logo";
+import { AgentAvatar } from "./agent-avatar";
 
 const SUGGESTIONS = [
   "按优先级列出我未完成的任务",
@@ -86,8 +86,8 @@ export function FloatingChat() {
   );
 
   const ensureChat = async () => {
-    if (!workspaceId) throw new Error("还没准备好，请稍等一下");
-    if (!agent) throw new Error("先新建一个智能体，才能聊天");
+    if (!workspaceId) throw new Error("工作区尚未就绪。");
+    if (!agent) throw new Error("请先创建智能体后再开始聊天。");
     if (current) return current;
     const created = await submit({ type: "CreateChat", workspace_id: workspaceId, agent_id: agent.id });
     const id = outcomeId(created.ids, "chat_id");
@@ -123,8 +123,8 @@ export function FloatingChat() {
 
   const startNew = useMutation({
     mutationFn: async () => {
-      if (!workspaceId) throw new Error("还没准备好，请稍等一下");
-      if (!agent) throw new Error("先新建一个智能体，才能聊天");
+      if (!workspaceId) throw new Error("工作区尚未就绪。");
+      if (!agent) throw new Error("请先创建智能体后再开始聊天。");
       const created = await submit({ type: "CreateChat", workspace_id: workspaceId, agent_id: agent.id });
       return outcomeId(created.ids, "chat_id");
     },
@@ -219,7 +219,7 @@ export function FloatingChat() {
         <div className="space-y-3 p-4">
           {!agent ? (
             <div className="space-y-2 text-sm">
-              <p>还没有智能体，没法开聊天。</p>
+              <p>工作区中还没有智能体，无法开始聊天。</p>
               <Button size="sm" onClick={() => navigate("/agents/new")}>
                 新建智能体
               </Button>
@@ -282,7 +282,7 @@ export function FloatingChat() {
           disabled={!agent}
           onChange={(event) => setDraft(event.target.value)}
         />
-        {agent ? <ProviderLogo provider={agent.harness} className="size-6 shrink-0" /> : null}
+        {agent ? <AgentAvatar agent={agent} className="size-6" /> : null}
         <Button type="submit" size="icon-sm" disabled={!agent || send.isPending || !draft.trim()} aria-label="发送">
           <SendHorizonal />
         </Button>

@@ -159,6 +159,10 @@ app.whenReady().then(async () => {
       ids?: string[] | null;
     });
   });
+  ipcMain.handle(IPC.quit, (event) => {
+    guard(event);
+    app.quit();
+  });
   createWindow();
   let cursor = 0;
   const timer = setInterval(async () => {
@@ -183,7 +187,7 @@ app.whenReady().then(async () => {
 }).catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(error);
-  dialog.showErrorBox("Coordy 打不开", message);
+  dialog.showErrorBox("Coordy 无法启动", message);
   app.quit();
 });
 

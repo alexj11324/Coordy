@@ -43,7 +43,12 @@ import {
   listableAgents,
   osShortLabel,
 } from "../lib/coordy/labels";
-import { modifierSymbol as shortcutMod } from "../lib/coordy/shortcuts";
+import {
+  formatShortcut,
+  modifierSymbol as shortcutMod,
+  SHORTCUT_CATEGORIES,
+  SHORTCUTS,
+} from "../lib/coordy/shortcuts";
 import {
   asAccount,
   asAgents,
@@ -55,7 +60,7 @@ import {
 } from "../lib/coordy/views";
 import { StatusLamp } from "./status-lamp";
 import { useSession } from "../state/session-store";
-import { applyTheme, useThemeStore, type ThemePreference } from "../state/theme-store";
+import { applyTheme, FONT_SIZE_OPTIONS, useThemeStore, type ThemePreference } from "../state/theme-store";
 
 const ACCOUNT_TABS = [
   { id: "profile", label: "个人资料", icon: User },
@@ -261,7 +266,7 @@ function SettingsPane({
     case "preferences":
       return <PreferencesPane />;
     case "shortcuts":
-      return <ShortcutsPane mod={mod} />;
+      return <ShortcutsPane os={info?.os} />;
     case "issue":
       return (
         <Pane title="任务" description="看板列和优先级是 Coordy 内置的，不能像云产品那样自定义工作流引擎。">
@@ -514,8 +519,10 @@ function ProfilePane({
 function PreferencesPane() {
   const preference = useThemeStore((s) => s.preference);
   const setPreference = useThemeStore((s) => s.setPreference);
+  const fontSizePx = useThemeStore((s) => s.fontSizePx);
+  const setFontSizePx = useThemeStore((s) => s.setFontSizePx);
   return (
-    <Pane title="偏好设置" description="外观留在这台电脑。">
+    <Pane title="偏好设置" description="外观仅保存在本机。">
       <div>
         <Label>主题</Label>
         <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -538,6 +545,26 @@ function PreferencesPane() {
           ))}
         </div>
       </div>
+      <div>
+        <Label>界面字号</Label>
+        <p className="mt-1 text-xs text-muted-foreground">默认 18px。也可使用 Ctrl/⌘ +、−、0 调整。</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {FONT_SIZE_OPTIONS.map((item) => (
+            <button
+              key={item.px}
+              type="button"
+              className={cn(
+                "rounded-lg border px-3 py-2 text-sm",
+                fontSizePx === item.px ? "border-foreground bg-muted/60" : "border-border hover:bg-muted/40",
+              )}
+              onClick={() => setFontSizePx(item.px)}
+            >
+              {item.label}
+              <span className="ml-1 text-xs text-muted-foreground">{item.px}px</span>
+            </button>
+          ))}
+        </div>
+      </div>
       <Row label="语言" hint="当前版本只提供简体中文。">
         <span className="text-sm">简体中文</span>
       </Row>
@@ -545,15 +572,17 @@ function PreferencesPane() {
   );
 }
 
-function ShortcutsPane({ mod }: { mod: string }) {
+function ShortcutsPane({ os }: { os?: string }) {
   return (
-    <Pane title="快捷键" description="在输入框里打字时，单键快捷键不会触发。">
-      <ShortcutRow keys={`${mod}K`} action="打开搜索" />
-      <ShortcutRow keys="C" action="新建任务" />
-      <ShortcutRow keys={`${mod}B`} action="收起或展开侧栏" />
-      <ShortcutRow keys={`${mod}J`} action="开关悬浮聊天" />
-      <ShortcutRow keys={`${mod}T`} action="新标签页" />
-      <ShortcutRow keys={`${mod}W`} action="关闭当前标签页" />
+    <Pane title="快捷键" description="在输入框中输入时，仅允许在编辑区触发的快捷键会生效。">
+      {SHORTCUT_CATEGORIES.map((category) => (
+        <div key={category.id} className="space-y-2">
+          <h3 className="text-sm font-medium">{category.label}</h3>
+          {SHORTCUTS.filter((item) => item.category === category.id).map((item) => (
+            <ShortcutRow key={item.id} keys={formatShortcut(item.chord, os)} action={item.label} />
+          ))}
+        </div>
+      ))}
     </Pane>
   );
 }
@@ -609,7 +638,7 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
   return (
     <Pane
       title="模型密钥"
-      description="给本机运行时用的 BYOK。不是 Multica 设置里那个登录账号的 API Token。"
+      description="给本机 harness 用的 BYOK。不是 Multica 设置里那个登录账号的 API Token。"
     >
       <p className="text-sm text-muted-foreground">
         Multica 的 API Token 是 <code className="font-mono text-xs">mul_</code>{" "}

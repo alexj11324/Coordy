@@ -19,7 +19,7 @@ const MODES: {
   {
     icon: MessageSquare,
     title: "通过对话起草",
-    description: "本地引导提问，把你的描述填进名称和指令。不会调用所选运行时。",
+    description: "本地引导提问，把你的描述填进名称和指令。不会调用所选 harness。",
     href: "/agents/new/ai",
     recommended: true,
   },
@@ -43,7 +43,7 @@ export function CreateMethodChooser() {
         <div className="text-xs font-medium tracking-wider text-muted-foreground uppercase">创建智能体</div>
         <h2 className="mt-2 text-3xl font-semibold tracking-tight text-balance sm:text-4xl">你想从哪里开始？</h2>
         <p className="mt-3 text-sm text-pretty text-muted-foreground">
-          从空白配置开始，或者用几轮本地提问起草指令。真正开工才用运行时。
+          从空白配置开始，或者用几轮本地提问起草指令。真正开工才用 harness。
         </p>
       </div>
       <div className="mx-auto mt-9 grid max-w-3xl gap-4 md:grid-cols-2">

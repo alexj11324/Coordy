@@ -10,11 +10,13 @@ import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
+import { formatAgentAvatar } from "../lib/coordy/agent-avatar";
 import { agentDisplayName, listableAgents, pickerRuntimes } from "../lib/coordy/labels";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { ModelDropdown } from "./create-agent/agent-create-form";
 import { RuntimePicker } from "./runtime-picker";
-import { ProviderLogo } from "./provider-logo";
+import { AgentAvatar, AgentAvatarField } from "./agent-avatar";
 import { useTabTitle } from "../shell/use-tab-title";
 
 export function AgentDetailPage() {
@@ -36,6 +38,8 @@ export function AgentDetailPage() {
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
   const [harness, setHarness] = useState("");
+  const [model, setModel] = useState("");
+  const [avatar, setAvatar] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const runtimes = useMemo(
     () => pickerRuntimes(catalog.data, harness || agent?.harness),
@@ -50,6 +54,8 @@ export function AgentDetailPage() {
     setDescription(agent.description ?? "");
     setInstructions(agent.instructions ?? "");
     setHarness(agent.harness);
+    setModel(agent.model ?? "");
+    setAvatar(agent.avatar ?? "");
   }, [agent]);
 
   const save = useMutation({
@@ -62,6 +68,8 @@ export function AgentDetailPage() {
         description,
         instructions,
         harness: harness || agent.harness,
+        model,
+        avatar: avatar.trim() || formatAgentAvatar(agent.id),
       });
     },
     onSuccess: async () => {
@@ -93,10 +101,10 @@ export function AgentDetailPage() {
           智能体
         </Link>
         <div className="flex items-start gap-3">
-          <ProviderLogo provider={agent.harness} className="mt-1 size-8" />
+          <AgentAvatar agent={{ ...agent, avatar }} className="mt-1 size-10" />
           <PageHeader
             title={displayName ?? agentDisplayName(agent, catalog.data)}
-            description="名称、描述和运行时决定它是谁、在哪执行。指令每次开工都会带上。"
+            description="名称、描述和 harness 决定它是谁、在哪执行。指令每次开工都会带上。"
           />
         </div>
       </div>
@@ -108,6 +116,10 @@ export function AgentDetailPage() {
           save.mutate();
         }}
       >
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-edit-avatar">头像</Label>
+          <AgentAvatarField id="agent-edit-avatar" value={avatar} fallbackSeed={agent.id} onChange={setAvatar} />
+        </div>
         <div className="space-y-1.5">
           <Label htmlFor="edit-agent-name">名称</Label>
           <Input id="edit-agent-name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -131,8 +143,23 @@ export function AgentDetailPage() {
           />
         </div>
         <div className="space-y-1.5">
-          <Label>运行时</Label>
-          <RuntimePicker items={runtimes} value={harness || agent.harness} onChange={setHarness} />
+          <Label>Harness</Label>
+          <RuntimePicker
+            items={runtimes}
+            value={harness || agent.harness}
+            onChange={(id) => {
+              setHarness(id);
+              setModel("");
+            }}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <ModelDropdown
+            harness={harness || agent.harness}
+            value={model}
+            disabled={!(harness || agent.harness)}
+            onChange={setModel}
+          />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={save.isPending || !name.trim()}>

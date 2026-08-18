@@ -47,8 +47,8 @@ export function RuntimesPage() {
   return (
     <section className="space-y-4">
       <PageHeader
-        title="运行时"
-        description="运行时是这台电脑加上一款 AI 编程工具。智能体在这里执行；离线只是现在跑不了，并不是被删了。"
+        title="Harness"
+        description="Harness 是这台电脑上的一款 AI 编程工具。智能体用它执行；离线只是现在跑不了，并不是被删了。"
       >
         <Button
           variant="secondary"
@@ -71,7 +71,7 @@ export function RuntimesPage() {
             <EmptyMedia variant="icon">
               <Monitor />
             </EmptyMedia>
-            <EmptyTitle>还没有检测到运行时</EmptyTitle>
+            <EmptyTitle>还没有检测到 harness</EmptyTitle>
             <EmptyDescription>
               先安装 Claude Code、Codex 或 Gemini CLI，并确认能在终端里运行，再点刷新。
             </EmptyDescription>
@@ -90,7 +90,7 @@ export function RuntimesPage() {
                 </Badge>
               </CardTitle>
               <CardDescription>
-                {item.command}
+                这台电脑
                 {item.version ? ` · ${item.version}` : ""}
               </CardDescription>
               <CardAction>
@@ -117,7 +117,7 @@ export function RuntimesPage() {
                     {presenceLabel("offline")}
                   </Badge>
                 </CardTitle>
-                <CardDescription>{item.command}</CardDescription>
+                <CardDescription>这台电脑</CardDescription>
               </CardHeader>
             </Card>
           ))}

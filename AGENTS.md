@@ -12,7 +12,7 @@
 
 ## Product intent (Multica)
 
-Coordy 要对齐 Multica 的**产品体验**：侧栏、标签页、任务/Issue、智能体、运行时、设置，以及聊天、项目、自动化、小队、Skills、统计等用户能看见的能力。
+Coordy 要对齐 Multica 的**产品体验**：侧栏、标签页、任务/Issue、智能体、harness、设置，以及聊天、项目、自动化、小队、Skills、统计等用户能看见的能力。
 
 这是**对照重写**，不是克隆：
 

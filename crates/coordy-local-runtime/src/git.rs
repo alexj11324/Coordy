@@ -69,6 +69,7 @@ impl Ports for GitPorts {
         worktree: &str,
         prompt: &str,
         _run_id: &str,
+        _model: &str,
     ) -> Result<(), CoordyError> {
         if detect_on_path().iter().all(|d| d.kind != kind) {
             return Err(CoordyError::unavailable(format!(

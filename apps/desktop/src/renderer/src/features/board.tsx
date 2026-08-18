@@ -30,12 +30,12 @@ import {
   writeIssueViewMode,
   type IssueViewMode,
 } from "../lib/coordy/issues";
-import { agentDisplayName, listableAgents, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
+import { listableAgents, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { useSession } from "../state/session-store";
 import { useLayoutStore } from "../state/layout-store";
 import { asAgents, asProjects, asRuns, asTasks, latestRunForTask } from "../lib/coordy/views";
 import type { AgentView, DiscoveredAgentView, ProjectView, Query, TaskView } from "@coordy/protocol";
-import { NamedWithLogo, ProviderLogo } from "./provider-logo";
+import { NamedAgent } from "./agent-avatar";
 import { StatusGlyph } from "./issue-status";
 import { ColumnMenu, IssueComposerButton } from "./issue-create-dialog";
 import { priorityTone } from "../lib/coordy/issues";
@@ -369,10 +369,12 @@ function IssueCard({
           <span />
         )}
         {agent ? (
-          <span className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground">
-            <ProviderLogo provider={agent.harness} className="size-3.5" />
-            <span className="max-w-[7rem] truncate">{agentDisplayName(agent, catalog)}</span>
-          </span>
+          <NamedAgent
+            agent={agent}
+            catalog={catalog}
+            className="min-w-0 text-[11px] text-muted-foreground"
+            avatarClassName="size-4"
+          />
         ) : (
           <span className="text-[11px] text-muted-foreground">未指派</span>
         )}
@@ -431,9 +433,12 @@ function IssueList({
                       </Badge>
                     ) : null}
                     {agent ? (
-                      <NamedWithLogo provider={agent.harness} className="max-w-[9rem] shrink-0 text-xs text-muted-foreground">
-                        {agentDisplayName(agent, catalog)}
-                      </NamedWithLogo>
+                      <NamedAgent
+                        agent={agent}
+                        catalog={catalog}
+                        className="max-w-[9rem] shrink-0 text-xs text-muted-foreground"
+                        avatarClassName="size-4"
+                      />
                     ) : (
                       <span className="shrink-0 text-xs text-muted-foreground">未指派</span>
                     )}

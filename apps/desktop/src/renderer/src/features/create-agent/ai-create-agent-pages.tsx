@@ -5,9 +5,11 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   applyBuilderTurn,
+  applyDraftModelChange,
+  applyDraftRuntimeChange,
   BUILDER_STARTER_PROMPTS,
   classifyCreateAgentError,
-  EMPTY_AGENT_DRAFT,
+  emptyAgentDraft,
   type AgentDraft,
   type BuilderMessage,
 } from "../../lib/coordy/agent-draft";
@@ -24,7 +26,7 @@ import {
 import { pickerRuntimes, runtimeChipLabel, selectableRuntimes } from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
-import { AgentConfigurationPanel, CreateAgentFooter, RuntimeDropdown } from "./agent-create-form";
+import { AgentConfigurationPanel, CreateAgentFooter, HarnessDropdown, ModelDropdown } from "./agent-create-form";
 import { AgentCreateChip, AgentCreateShell } from "./create-shell";
 
 export function AiCreateAgentPage() {
@@ -39,7 +41,7 @@ export function AiCreateAgentPage() {
     queryFn: () => window.coordy.getAppInfo(),
   });
   const os = appInfo.data?.os;
-  const [draft, setDraft] = useState<AgentDraft>(EMPTY_AGENT_DRAFT);
+  const [draft, setDraft] = useState<AgentDraft>(emptyAgentDraft);
   const [sessions, setSessions] = useState<BuilderSession[]>([]);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +62,7 @@ export function AiCreateAgentPage() {
 
   const startConversation = () => {
     if (!workspaceId) {
-      setError("还没准备好，请稍等一下");
+      setError("工作区尚未就绪。");
       return;
     }
     setStarting(true);
@@ -98,17 +100,23 @@ export function AiCreateAgentPage() {
             <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <MessageSquare className="size-5" />
             </span>
-            <h2 className="mt-5 text-xl font-semibold">选好新智能体的运行时</h2>
+            <h2 className="mt-5 text-xl font-semibold">选好新智能体的 harness 和模型</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              这场对话在本机进行，不会调用运行时。运行时只在你点创建、之后开工时使用。
+              这场对话在本机进行，不会调用 harness。Harness 和模型只在你点创建、之后开工时使用。
             </p>
             <div className="mt-6 space-y-4">
-              <RuntimeDropdown
+              <HarnessDropdown
                 items={runtimes}
                 loading={catalog.isLoading}
                 value={draft.harness}
                 os={os}
-                onChange={(harness) => setDraft((current) => ({ ...current, harness, model: "" }))}
+                onChange={(harness) => setDraft((current) => applyDraftRuntimeChange(current, harness))}
+              />
+              <ModelDropdown
+                harness={draft.harness}
+                value={draft.model}
+                disabled={!draft.harness}
+                onChange={(model) => setDraft((current) => applyDraftModelChange(current, model))}
               />
             </div>
             {error ? (
@@ -208,6 +216,7 @@ export function AiBuilderSessionPage() {
         description: session.draft.description,
         instructions: session.draft.instructions,
         model: session.draft.model,
+        avatar: session.draft.avatar,
         access: session.draft.access,
       });
       const store = browserStore();
@@ -329,7 +338,7 @@ function BuilderConversation({
         </div>
         <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className={cn("size-2 rounded-full", runtimeOnline ? "bg-emerald-500" : "bg-muted-foreground/40")} />
-          {runtimeOnline ? "开工运行时在线" : "还没选在线运行时"}
+          {runtimeOnline ? "开工 harness 在线" : "还没选在线 harness"}
         </div>
       </header>
       {messages.length > 0 ? (

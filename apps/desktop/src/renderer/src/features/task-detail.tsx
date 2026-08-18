@@ -27,7 +27,7 @@ import { asAgents, asRunDetail, asRuns, asTasks, latestRunForTask } from "../lib
 import { useSession } from "../state/session-store";
 import { useTabTitle } from "../shell/use-tab-title";
 import { ActivityLine } from "./activity-marker";
-import { NamedWithLogo } from "./provider-logo";
+import { NamedAgent } from "./agent-avatar";
 import { StatusGlyph } from "./issue-status";
 
 export function TaskDetailPage() {
@@ -246,20 +246,14 @@ export function TaskDetailPage() {
                     {(value: string | null) => {
                       const agent = agentList.find((item) => item.id === value);
                       if (!agent) return "未指派";
-                      return (
-                        <NamedWithLogo provider={agent.harness}>
-                          {agentDisplayName(agent, catalog.data)}
-                        </NamedWithLogo>
-                      );
+                      return <NamedAgent agent={agent} catalog={catalog.data} />;
                     }}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {agentList.map((agent) => (
                     <SelectItem key={agent.id} value={agent.id}>
-                      <NamedWithLogo provider={agent.harness}>
-                        {agentDisplayName(agent, catalog.data)}
-                      </NamedWithLogo>
+                      <NamedAgent agent={agent} catalog={catalog.data} />
                     </SelectItem>
                   ))}
                 </SelectContent>

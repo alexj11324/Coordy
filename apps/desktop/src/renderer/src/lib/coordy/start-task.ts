@@ -1,4 +1,5 @@
 import type { Outcome } from "@coordy/protocol";
+import { storedAgentAvatar } from "./agent-avatar";
 import { submit, view } from "./client";
 import { asAgents, isPlaceholderHarness, outcomeId } from "./views";
 
@@ -15,6 +16,7 @@ export async function createNamedAgent(input: {
   instructions?: string;
   model?: string;
   access?: string;
+  avatar?: string;
 }): Promise<string> {
   const created = await submit({
     type: "CreateAgent",
@@ -28,16 +30,16 @@ export async function createNamedAgent(input: {
   const instructions = input.instructions?.trim() ?? "";
   const model = input.model?.trim() ?? "";
   const access = input.access?.trim() ?? "";
-  if (description || instructions || model || access) {
-    await submit({
-      type: "UpdateAgent",
-      agent_id: agentId,
-      description: description || null,
-      instructions: instructions || null,
-      model: model || null,
-      access: access || null,
-    });
-  }
+  const avatar = storedAgentAvatar(input.avatar, agentId);
+  await submit({
+    type: "UpdateAgent",
+    agent_id: agentId,
+    description: description || null,
+    instructions: instructions || null,
+    model: model || null,
+    access: access || null,
+    avatar,
+  });
   return agentId;
 }
 
@@ -49,7 +51,7 @@ export async function pickAgentId(workspaceId: string, preferredId?: string | nu
     agents.find((agent) => !isPlaceholderHarness(agent.harness)) ??
     agents[0];
   if (live) return live.id;
-  throw new Error("还没有智能体。请先打开「智能体」页，点新建智能体。");
+  throw new Error("工作区中还没有智能体。请先在「智能体」页创建。");
 }
 
 export async function startAcpRun(input: {

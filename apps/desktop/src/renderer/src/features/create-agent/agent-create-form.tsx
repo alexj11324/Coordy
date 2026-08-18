@@ -14,11 +14,16 @@ import type { DiscoveredAgentView } from "@coordy/protocol";
 import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
+  applyDraftModelChange,
   applyDraftRuntimeChange,
+  DEFAULT_MODEL_VALUE,
+  modelSelectValue,
+  modelsForHarness,
   type AgentAccess,
   type AgentDraft,
 } from "../../lib/coordy/agent-draft";
 import { runtimeChipLabel, runtimeSubtitle } from "../../lib/coordy/labels";
+import { AgentAvatarField } from "../agent-avatar";
 import { ProviderLogo } from "../provider-logo";
 
 const ACCESS_OPTIONS: { id: AgentAccess; title: string; description: string }[] = [
@@ -46,7 +51,10 @@ export function AgentConfigurationPanel({
   const set = <K extends keyof AgentDraft>(key: K, value: AgentDraft[K]) => onChange({ ...draft, [key]: value });
   return (
     <div className={cn("space-y-8", compact && "space-y-6")}>
-      <SettingsBlock title="身份" description="为智能体设置容易识别的名称和简洁的用途。">
+      <SettingsBlock title="身份" description="名称、头像与用途构成智能体身份。头像由 DiceBear bottts-neutral 在本机生成。">
+        <FieldRow label="头像" htmlFor="agent-create-avatar" compact={compact}>
+          <AgentAvatarField value={draft.avatar} onChange={(avatar) => set("avatar", avatar)} />
+        </FieldRow>
         <FieldRow label="名称" htmlFor="agent-create-name" compact={compact}>
           <div>
             <Input
@@ -91,17 +99,22 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择开工时用的运行时。模型由该运行时自己决定，这里不能另选。"
+        description="选择开工时用的 harness 和模型。模型会写进智能体，开工时通过 ACP session/set_model 交给它。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
-          <RuntimeDropdown
+          <HarnessDropdown
             items={runtimes}
             loading={runtimesLoading}
             value={draft.harness}
             os={os}
             onChange={(harness) => onChange(applyDraftRuntimeChange(draft, harness))}
           />
-          <p className="text-sm text-muted-foreground sm:self-end sm:pb-2">模型：运行时默认</p>
+          <ModelDropdown
+            harness={draft.harness}
+            value={draft.model}
+            disabled={!draft.harness}
+            onChange={(model) => onChange(applyDraftModelChange(draft, model))}
+          />
         </div>
       </SettingsBlock>
 
@@ -142,7 +155,7 @@ export function AgentConfigurationPanel({
   );
 }
 
-export function RuntimeDropdown({
+export function HarnessDropdown({
   items,
   value,
   onChange,
@@ -161,15 +174,15 @@ export function RuntimeDropdown({
   const itemMap = Object.fromEntries(items.map((item) => [item.id, runtimeChipLabel(item, os)]));
   return (
     <div className="min-w-0 space-y-1.5">
-      <Label>运行时</Label>
+      <Label>Harness</Label>
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {loading ? "正在读取运行时…" : "暂无可用运行时。到「运行时」页点刷新，或先安装 Claude Code、Codex 或 Gemini CLI。"}
+          {loading ? "正在读取 harness…" : "暂无可用 harness。到「Harness」页点刷新，或先安装 Claude Code、Codex 或 Gemini CLI。"}
         </p>
       ) : (
         <Select value={value || undefined} items={itemMap} onValueChange={(next) => next && onChange(next)} disabled={disabled}>
           <SelectTrigger className="h-auto min-h-10 py-1.5">
-            <SelectValue placeholder="选择运行时">
+            <SelectValue placeholder="选择 harness">
               {selected ? (
                 <span className="flex min-w-0 items-center gap-2">
                   <ProviderLogo provider={selected.id} className="size-4 shrink-0" />
@@ -193,6 +206,59 @@ export function RuntimeDropdown({
                 </span>
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
+  );
+}
+
+export function ModelDropdown({
+  harness,
+  value,
+  onChange,
+  disabled,
+}: {
+  harness: string;
+  value: string;
+  onChange: (model: string) => void;
+  disabled?: boolean;
+}) {
+  const presets = modelsForHarness(harness);
+  const items: Record<string, string> = { [DEFAULT_MODEL_VALUE]: "默认（harness）" };
+  for (const preset of presets) items[preset.id] = preset.label;
+  if (value.trim() && !items[value]) items[value] = value;
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <Label>模型</Label>
+      {presets.length === 0 ? (
+        <Input
+          value={value}
+          disabled={disabled}
+          autoComplete="off"
+          placeholder={disabled ? "请先选择 harness" : "模型 id，留空则用 harness 默认"}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      ) : (
+        <Select
+          value={modelSelectValue(value)}
+          items={items}
+          onValueChange={(next) => next && onChange(next === DEFAULT_MODEL_VALUE ? "" : next)}
+          disabled={disabled}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={disabled ? "请先选择 harness" : "默认（harness）"} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={DEFAULT_MODEL_VALUE}>默认（harness）</SelectItem>
+            {presets.map((preset) => (
+              <SelectItem key={preset.id} value={preset.id}>
+                {preset.label}
+              </SelectItem>
+            ))}
+            {value.trim() && !presets.some((preset) => preset.id === value) ? (
+              <SelectItem value={value}>{value}</SelectItem>
+            ) : null}
           </SelectContent>
         </Select>
       )}
