@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Coordy · 因果人工复核</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">C</div>
+          <div>
+            <p class="eyebrow">COORDY / 只做选择，不用读代码</p>
+            <h1>判断这件事有没有“压缩后跑偏”</h1>
+          </div>
+        </div>
+        <div class="topbar-status">
+          <span class="local-dot" aria-hidden="true"></span>
+          <span>只在本机保存</span>
+          <span class="divider" aria-hidden="true"></span>
+          <span id="save-status" role="status">正在读取队列…</span>
+        </div>
+      </header>
+
+      <main class="workbench">
+        <aside class="queue-column" aria-label="人工复核队列">
+          <div class="queue-heading">
+            <div>
+              <p class="eyebrow">TRIAGED QUEUE</p>
+              <h2>待审核案例</h2>
+            </div>
+            <span id="queue-total" class="count-pill">—</span>
+          </div>
+          <p class="queue-description">当前队列中的案例需要你确认。系统只是先帮忙筛选，你的选择才会被记录。</p>
+          <div class="progress-block" aria-label="复核进度">
+            <div class="progress-line"><strong id="progress-count">0 / 0</strong><span id="progress-percent">0%</span></div>
+            <div class="progress-track"><span id="progress-fill"></span></div>
+          </div>
+          <div class="queue-filters" role="tablist" aria-label="按类型筛选">
+            <button class="filter-button is-active" data-filter="ALL" role="tab" aria-selected="true">全部 <span id="filter-all-count">—</span></button>
+            <button class="filter-button" data-filter="CONFIRMED_OR_PROBABLE_POSITIVE" role="tab" aria-selected="false">候选阳性 <span id="filter-positive-count">—</span></button>
+            <button class="filter-button" data-filter="DRIFT_NEAR_MISS" role="tab" aria-selected="false">近失 <span id="filter-near-count">—</span></button>
+            <button class="filter-button" data-filter="DIFFICULT_NEGATIVE_OR_UNASSESSABLE" role="tab" aria-selected="false">困难阴性 <span id="filter-negative-count">—</span></button>
+          </div>
+          <label class="search-box">
+            <span class="sr-only">搜索案例</span>
+            <input id="queue-search" type="search" placeholder="搜索 topic 或 episode…" autocomplete="off" />
+          </label>
+          <nav id="item-list" class="item-list" aria-label="案例列表"></nav>
+          <div id="queue-empty" class="empty-state is-hidden">
+            <strong>没有匹配项</strong>
+            <span>换一个筛选条件或清空搜索词。</span>
+          </div>
+        </aside>
+
+        <section class="review-column" aria-label="当前案例复核内容">
+          <div id="loading-state" class="panel-message">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>正在装载来源绑定的复核队列</strong>
+          </div>
+          <div id="error-state" class="panel-message error-message is-hidden" role="alert">
+            <strong>审核网页无法读取队列</strong>
+            <span id="error-copy"></span>
+            <button id="retry-button" class="button button-secondary">重试</button>
+          </div>
+          <div id="review-content" class="is-hidden">
+            <div class="review-header">
+              <div class="review-heading-copy">
+                <p class="eyebrow" id="item-kicker">请判断这一项</p>
+                <h2 id="item-title">选择一个案例开始</h2>
+                <p id="item-subtitle" class="muted-copy"></p>
+              </div>
+              <div class="review-actions">
+                <button id="copy-machine-button" class="button button-secondary">先用系统建议</button>
+                <button id="save-button" class="button button-primary">保存这一项 <span class="shortcut">⌘S</span></button>
+              </div>
+            </div>
+
+            <div id="machine-card" class="machine-card"></div>
+            <div id="source-card" class="source-card"></div>
+
+            <form id="review-form" novalidate>
+              <section class="form-section">
+                <div class="section-heading">
+                  <div>
+                    <p class="eyebrow">第一步</p>
+                    <h3>先选你的判断</h3>
+                  </div>
+                  <span class="section-note">不用一次看懂全部内容，保存前随时可以改。</span>
+                </div>
+                <div class="decision-grid">
+                  <label class="field field-wide">
+                    <span>你觉得发生了什么？ <span class="required">*</span></span>
+                    <select id="classification" required></select>
+                    <small>不确定时选“证据不够”，这也是有效答案。</small>
+                  </label>
+                  <label class="field">
+                    <span>你有多确定？ <span class="required">*</span></span>
+                    <select id="confidence" required>
+                      <option value="">请选择</option>
+                      <option value="0.9">非常确定</option>
+                      <option value="0.7">比较确定</option>
+                      <option value="0.4">不太确定</option>
+                      <option value="0.1">几乎无法判断</option>
+                    </select>
+                  </label>
+                </div>
+                <details class="flag-details">
+                  <summary>补充几个小判断（可以先不管）</summary>
+                  <div class="flag-grid" id="flag-fields"></div>
+                </details>
+                <label class="field">
+                  <span>人工理由 / 仍然不确定的地方</span>
+                  <textarea id="rationale" rows="4" maxlength="1600" placeholder="用一句话说明你为什么这样判断；不确定时写明缺失的证据。"></textarea>
+                </label>
+              </section>
+
+              <section class="form-section phase-section">
+                <div class="section-heading">
+                  <div>
+                    <p class="eyebrow">第二步（需要时再展开）</p>
+                    <h3>看看证据，确认细节</h3>
+                  </div>
+                  <span class="section-note">每个阶段只需选“有 / 没有 / 看不出来”。</span>
+                </div>
+                <details class="detail-review" id="detail-review">
+                  <summary>展开六个小问题（T0–T5）</summary>
+                  <p class="detail-intro">如果你选了“明确压缩导致跑偏”，这里需要把相应证据勾出来；如果证据不足，可以直接选“看不出来”。</p>
+                  <div id="phase-fields"></div>
+                </details>
+              </section>
+            </form>
+
+            <div class="review-footer">
+              <button id="previous-button" class="button button-secondary">← 上一项</button>
+              <div class="footer-center"><span id="footer-position">1 / 1</span><span class="save-hint">Ctrl/⌘ + S 保存</span></div>
+              <button id="next-button" class="button button-secondary">下一项 →</button>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="bottom-bar">
+        <div><span class="footer-label">最终记录</span><span id="ground-truth-copy">完成全部案例后，系统会保存最终结果。</span></div>
+        <button id="finalize-button" class="button button-finalize" disabled>全部完成，保存最终结果</button>
+      </footer>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

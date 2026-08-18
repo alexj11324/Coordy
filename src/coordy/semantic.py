@@ -81,7 +81,10 @@ CAUSAL_JUDGE_INSTRUCTIONS = (
     "T1 compaction summary, T2 post-compaction plan, T3 actions, T4 program-verified outcomes, and "
     "T5 follow-up when available. The State Diff was produced blind to outcomes. Decide whether a "
     "wrong action occurred, whether it had a program-verified engineering consequence, and whether "
-    "state loss caused it. Assistant or user prose may support intent/correction but can never establish "
+    "the agent did it because it forgot or distorted still-active important state across compaction. "
+    "A summary omission alone, a normal plan update or phase transition, and ordinary reasoning or "
+    "implementation error are not temporal drift. Assistant or user prose may support intent/correction "
+    "but can never establish "
     "an engineering consequence; only verified_engineering_outcomes can. Type A requires correct "
     "pre-state, no relevant external change, material post-compaction loss, wrong action, and a traced "
     "causal chain. Type B requires a previously valid plan, a located external change that invalidated "
@@ -388,6 +391,32 @@ def _response_output_text(envelope: dict[str, Any]) -> str:
 _IMAGE_ENVELOPE = re.compile(r"<image(?P<attributes>[^>]*)>\s*(?P<body>.*?)\s*</image>", re.DOTALL)
 
 
+def _omit_embedded_image_bytes(event: dict[str, Any]) -> dict[str, Any]:
+    event = json.loads(json.dumps(event))
+    content = event.get("content")
+    if not isinstance(content, str) or "<image" not in content:
+        return event
+    image_count = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal image_count
+        try:
+            descriptor = json.loads(match.group("body"))
+        except json.JSONDecodeError:
+            return match.group(0)
+        image_url = descriptor.get("image_url") if isinstance(descriptor, dict) else None
+        if not isinstance(image_url, str) or not image_url.startswith("data:image/"):
+            return match.group(0)
+        image_count += 1
+        return (
+            f"[embedded image {image_count} bytes omitted; "
+            f"evidence_id={event.get('evidence_id')}; visual content unassessed]"
+        )
+
+    event["content"] = _IMAGE_ENVELOPE.sub(replace, content)
+    return event
+
+
 def _responses_multimodal_input(input_payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Keep complete message text while replacing embedded image bytes with evidence markers."""
     payload = json.loads(json.dumps(input_payload))
@@ -501,7 +530,11 @@ def _claim_api_dispatch(
     configuration_sha256: str,
     packet: dict[str, Any],
     allow_http_504_retry: bool = False,
+    maximum_http_504_attempts: int = 3,
+    allow_http_502_retry: bool = False,
+    maximum_http_502_attempts: int = 2,
     allow_semantic_normalization: bool = False,
+    allow_validated_recovery: bool = False,
 ) -> Path:
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(directory, 0o700)
@@ -524,10 +557,19 @@ def _claim_api_dispatch(
         if (
             allow_semantic_normalization
             and existing.get("status") == "SEMANTIC_VALIDATION_FAILED_NO_RETRY"
-            and isinstance(existing.get("rejected_result"), list)
+            and isinstance(existing.get("rejected_result"), (list, dict))
         ):
             return path
-        if allow_http_504_retry:
+        if (
+            allow_validated_recovery
+            and existing.get("status") == "RESPONSE_VALIDATED_PENDING_CHECKPOINT"
+        ):
+            # The caller must verify the accepted-result digest and all
+            # packet/configuration bindings before using this path. Returning
+            # it here makes a crash between semantic validation and the JSONL
+            # checkpoint recoverable without permitting an unvalidated resend.
+            return path
+        if allow_http_504_retry or allow_http_502_retry:
             same_request = all(existing.get(key) == record.get(key) for key in (
                 "scan_run_id",
                 "opportunity_id_hash",
@@ -535,6 +577,26 @@ def _claim_api_dispatch(
                 "judge_configuration_sha256",
                 "input_packet_sha256",
             ))
+            prior_attempts = list(existing.get("prior_attempts") or [])
+            recorded_attempts = [*prior_attempts, existing]
+            http_504_attempts = sum(
+                1 for attempt in recorded_attempts
+                if attempt.get("status") == "HTTP_ERROR_NO_RETRY"
+                and attempt.get("http_status") == 504
+            )
+            http_502_attempts = sum(
+                1 for attempt in recorded_attempts
+                if attempt.get("status") == "HTTP_ERROR_NO_RETRY"
+                and attempt.get("http_status") == 502
+            )
+            dns_attempts = sum(
+                1 for attempt in recorded_attempts
+                if attempt.get("status") in {
+                    "NOT_DISPATCHED_DNS_FAILURE",
+                    "TRANSPORT_OUTCOME_UNKNOWN_NO_RETRY",
+                }
+                and attempt.get("transport_error_type") == "gaierror"
+            )
             retryable_504 = (
                 same_request
                 and existing.get("status") == "HTTP_ERROR_NO_RETRY"
@@ -542,7 +604,16 @@ def _claim_api_dispatch(
                 and not existing.get("api_request_id")
                 and not existing.get("api_response_id")
                 and not existing.get("api_usage")
-                and existing.get("judge_attempt", 1) < 3
+                and http_504_attempts < maximum_http_504_attempts
+            )
+            retryable_502 = (
+                allow_http_502_retry
+                and same_request
+                and existing.get("status") == "HTTP_ERROR_NO_RETRY"
+                and existing.get("http_status") == 502
+                and not existing.get("api_response_id")
+                and not existing.get("api_usage")
+                and http_502_attempts < maximum_http_502_attempts
             )
             retryable_dns = (
                 same_request
@@ -551,11 +622,10 @@ def _claim_api_dispatch(
                     "TRANSPORT_OUTCOME_UNKNOWN_NO_RETRY",
                 }
                 and existing.get("transport_error_type") == "gaierror"
-                and existing.get("judge_attempt", 1) < 3
+                and dns_attempts < 3
             )
-            retryable = retryable_504 or retryable_dns
+            retryable = retryable_504 or retryable_502 or retryable_dns
             if retryable:
-                prior_attempts = list(existing.get("prior_attempts") or [])
                 if not prior_attempts and existing.get("prior_attempt"):
                     prior_attempts.append(existing["prior_attempt"])
                 prior_attempt = {
@@ -731,6 +801,12 @@ def _run_responses_api_structured(
         api_response_id=response_id,
         api_status=envelope.get("status"),
         api_usage=usage,
+        # Keep the parsed structured payload beside its response digest.  A
+        # process crash after this write but before the caller's checkpoint
+        # update can therefore be recovered and revalidated without replaying
+        # an already-dispatched request.
+        parsed_result=structured,
+        parsed_result_sha256=_hash(json.dumps(structured, ensure_ascii=False, sort_keys=True)),
     )
     metadata = {
         "api_response_id": response_id,
@@ -922,7 +998,7 @@ class ResponsesAPICausalJudge:
         judge_id: str,
         api_key: str,
         base_url: str,
-        model: str = "gpt-5.6-sol",
+        model: str = "gpt-5.6-luna",
         reasoning_effort: str = "medium",
         timeout_seconds: int = 300,
         dispatch_log_dir: Path,
@@ -1092,34 +1168,6 @@ def _is_assistant_plan(row: dict[str, Any]) -> bool:
     ) or (record_type == "event_msg" and payload_type == "agent_message")
 
 
-def _is_action_boundary(row: dict[str, Any]) -> bool:
-    record_type = str(row.get("type") or row.get("record_type") or "")
-    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-    payload_type = str(payload.get("type") or "")
-    return (
-        record_type == "response_item"
-        and payload_type in {"function_call", "custom_tool_call"}
-    ) or (record_type == "event_msg" and payload_type in {"patch_apply_end", "tool_error"})
-
-
-def _bounded_state_window(events: list[dict[str, Any]], limit: int = 48) -> list[dict[str, Any]]:
-    """Retain temporal coverage plus recency instead of silently taking the last N messages."""
-    if len(events) <= limit:
-        return list(events)
-    recent_count = min(16, limit // 2)
-    earlier = events[:-recent_count]
-    spread_count = limit - recent_count
-    if spread_count == 1:
-        spread = [earlier[0]]
-    else:
-        indices = {
-            round(index * (len(earlier) - 1) / (spread_count - 1))
-            for index in range(spread_count)
-        }
-        spread = [earlier[index] for index in sorted(indices)]
-    return spread + events[-recent_count:]
-
-
 def _packets_for_session(
     session: dict[str, Any], opportunities: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -1172,7 +1220,10 @@ def _packets_for_session(
                         "source_prefix_sha256": opportunity["source_prefix_sha256"],
                         "cutoff": opportunity["cutoff"],
                         "required_state_types": list(STATE_TYPES),
-                        "pre_compaction_events": _bounded_state_window(pre_events),
+                        # This is the complete event-time history visible at the
+                        # boundary. Topic selection happens after extraction;
+                        # an arbitrary message cap must not define recall.
+                        "pre_compaction_events": list(pre_events),
                         "compaction_summary_events": [_semantic_event(row, line_number)],
                         "post_compaction_plan_events": [],
                         "blinding": {
@@ -1186,9 +1237,7 @@ def _packets_for_session(
                 continue
 
             if active is not None:
-                if _is_action_boundary(row):
-                    active = None
-                elif _is_assistant_plan(row) and len(active["post_compaction_plan_events"]) < 3:
+                if _is_assistant_plan(row):
                     active["post_compaction_plan_events"].append(_semantic_event(row, line_number))
 
             if _is_state_evidence(row):
@@ -1529,6 +1578,12 @@ def validate_causal_result(
         raise ValueError("causal result requires evidence")
     if len(evidence_ids) > 12:
         raise ValueError("causal result cites too many evidence IDs")
+    action_ids = {
+        str(row["evidence_id"])
+        for row in packet.get("action_events", [])
+    }
+    if result["wrong_action"] == "YES" and not action_ids.intersection(evidence_ids):
+        raise ValueError("a wrong action must cite an actual post-compaction action")
     confidence = result.get("confidence")
     if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
         raise ValueError("causal confidence must be between zero and one")
@@ -2613,12 +2668,13 @@ def _causal_packets_for_session(
                 raise RuntimeError(f"frozen source line {line_number} is not an object")
             if _is_compaction(row):
                 boundary_hash = _hash(_event_basis(row, line_number))
+                state_packet = target_by_boundary.get(boundary_hash)
                 if active is not None and _timestamps_are_close(
                     active_cutoff_timestamp, row.get("timestamp")
-                ):
+                ) and state_packet is None:
                     continue
                 active = None
-                state_packet = target_by_boundary.get(boundary_hash)
+                calls = {}
                 if state_packet is not None:
                     active = {
                         "stage": "S0b_CAUSAL_GRADING",
@@ -2652,7 +2708,7 @@ def _causal_packets_for_session(
                 call["operation_kind"] = _operation_kind(call["tool_name"], _call_arguments(payload))
                 if isinstance(call_id, str):
                     calls[call_id] = call
-                if active is not None and len(active["action_events"]) < 20:
+                if active is not None:
                     active["action_events"].append(call)
                 continue
             if (
@@ -2663,15 +2719,20 @@ def _causal_packets_for_session(
                 and call_id in calls
             ):
                 for outcome in _verified_tool_outcome(row, line_number, calls[call_id]):
-                    if len(active["verified_engineering_outcomes"]) < 20:
-                        active["verified_engineering_outcomes"].append(outcome)
+                    active["verified_engineering_outcomes"].append(outcome)
                 continue
             if active is not None:
                 patch_outcome = _verified_patch_outcome(row, line_number)
-                if patch_outcome is not None and len(active["verified_engineering_outcomes"]) < 20:
+                if patch_outcome is not None:
+                    active["action_events"].append({
+                        "evidence_id": patch_outcome["evidence_id"],
+                        "timestamp": patch_outcome["timestamp"],
+                        "tool_name": "apply_patch",
+                        "operation_kind": "patch",
+                    })
                     active["verified_engineering_outcomes"].append(patch_outcome)
                     continue
-                if _is_state_evidence(row) and payload.get("role") == "user" and len(active["user_followup_events"]) < 5:
+                if _is_state_evidence(row) and payload.get("role") == "user":
                     active["user_followup_events"].append(_semantic_event(row, line_number))
 
     after = path.stat()
@@ -2685,28 +2746,21 @@ def _causal_packets_for_session(
 def _prepare_s0b_causal_inputs_locked(workspace: Path) -> dict[str, Any]:
     output = workspace / "data/screening"
     manifest, state_inputs = _read_bound_state_inputs(output)
-    consensus_path = output / "s0b_state_diff_consensus.jsonl"
     primary_path = output / "s0b_primary_state_diffs.jsonl"
-    secondary_path = output / "s0b_secondary_state_diffs.jsonl"
     session_path = output / "eligible_sessions.jsonl"
-    for path in (consensus_path, primary_path, secondary_path, session_path):
+    for path in (primary_path, session_path):
         if not path.is_file():
             raise RuntimeError("missing completed state-diff artifacts")
-    consensus = _read_jsonl(consensus_path)
     primary = _read_jsonl(primary_path)
-    secondary = _read_jsonl(secondary_path)
     if (
-        manifest.get("state_diff_consensus_sha256") != _hash(consensus_path.read_bytes())
-        or manifest.get("primary_state_diffs_sha256") != _hash(primary_path.read_bytes())
-        or manifest.get("secondary_state_diffs_sha256") != _hash(secondary_path.read_bytes())
+        manifest.get("primary_state_diffs_sha256") != _hash(primary_path.read_bytes())
         or manifest.get("primary_state_diff_count") != len(primary)
-        or manifest.get("secondary_state_diff_count") != len(secondary)
     ):
         raise RuntimeError("state-diff artifacts are not bound to the semantic manifest")
     suspect_ids = {
         str(row["opportunity_id_hash"])
-        for row in consensus
-        if row.get("status") == "AGREED" and row.get("suspected_state_change") is True
+        for row in primary
+        if row.get("assessment_status") == "SUSPECT"
     }
     packet_by_id = {
         str(packet["opportunity_id_hash"]): packet
@@ -2742,14 +2796,28 @@ def _prepare_s0b_causal_inputs_locked(workspace: Path) -> dict[str, Any]:
         causal_packets.extend(_causal_packets_for_session(session, packets))
     causal_by_id = {str(packet["opportunity_id_hash"]): packet for packet in causal_packets}
     if set(causal_by_id) != suspect_ids or len(causal_by_id) != len(causal_packets):
-        raise RuntimeError("causal evidence did not reconstruct every agreed state-change suspect")
+        missing = sorted(suspect_ids - set(causal_by_id))
+        unexpected = sorted(set(causal_by_id) - suspect_ids)
+        raise RuntimeError(
+            "causal evidence did not reconstruct every final primary suspect: "
+            f"missing={missing}, unexpected={unexpected}"
+        )
     primary_by_id = {str(row["opportunity_id_hash"]): row for row in primary}
-    secondary_by_id = {str(row["opportunity_id_hash"]): row for row in secondary}
     ordered = []
     for opportunity_id in sorted(suspect_ids):
         packet = causal_by_id[opportunity_id]
+        for section in (
+            "pre_compaction_events",
+            "compaction_summary_events",
+            "post_compaction_plan_events",
+            "action_events",
+            "verified_engineering_outcomes",
+            "user_followup_events",
+        ):
+            packet[section] = [
+                _omit_embedded_image_bytes(event) for event in packet[section]
+            ]
         packet["primary_state_diff"] = primary_by_id[opportunity_id]
-        packet["secondary_state_diff"] = secondary_by_id[opportunity_id]
         packet["engineering_consequence_policy"] = (
             "Only verified_engineering_outcomes may establish an engineering consequence; "
             "plan or user text is contextual evidence only."
@@ -2771,11 +2839,14 @@ def _prepare_s0b_causal_inputs_locked(workspace: Path) -> dict[str, Any]:
     content = "".join(json.dumps(packet, sort_keys=True) + "\n" for packet in ordered)
     path = output / "s0b_causal_inputs.jsonl"
     _secure_write(path, content)
+    for key in tuple(manifest):
+        if key.startswith(("primary_causal_", "secondary_causal_", "causal_consensus_", "causal_human_review_", "machine_confirmed_causal_")):
+            manifest.pop(key)
     manifest.update({
         "status": "PENDING_CAUSAL_JUDGE",
         "causal_input_count": len(ordered),
         "causal_inputs_sha256": _hash(content),
-        "causal_selection": "agreed high-confidence state-change suspects only",
+        "causal_selection": "every final primary State Diff SUSPECT",
         "engineering_consequence_source": "structured tool results and patch_apply_end only",
     })
     _secure_write(
@@ -2984,30 +3055,40 @@ def _run_s0b_causal_judges_locked(
             "machine_judges_are_ground_truth": False,
         }
         consensus.append(row)
-        if confirmed or not agreed or low_confidence:
-            packet = packet_by_id[opportunity_id]
-            review_queue.append({
-                "opportunity_id_hash": opportunity_id,
-                "reason": row["status"] if not confirmed else "MACHINE_CONFIRMED_PRELABEL",
-                "causal_chain": _human_causal_chain(packet),
-                "judgment_reason": {
-                    "primary": {
-                        "failure_type": first["failure_type"],
-                        "ordinary_reasoning_alternative": first["ordinary_reasoning_alternative"],
-                        "counterfactual": first["counterfactual"],
-                    },
-                    "secondary": {
-                        "failure_type": second["failure_type"],
-                        "ordinary_reasoning_alternative": second["ordinary_reasoning_alternative"],
-                        "counterfactual": second["counterfactual"],
-                    },
+        packet = packet_by_id[opportunity_id]
+        review_reason = (
+            "MACHINE_CONFIRMED_PRELABEL" if confirmed else
+            "AGREED_NEGATIVE_PRELABEL" if agreed and not low_confidence else
+            row["status"]
+        )
+        review_queue.append({
+            "opportunity_id_hash": opportunity_id,
+            "reason": review_reason,
+            "causal_chain": _human_causal_chain(packet),
+            "judgment_reason": {
+                "primary": {
+                    "wrong_action": first["wrong_action"],
+                    "engineering_consequence": first["engineering_consequence"],
+                    "caused_by_state_loss": first["caused_by_state_loss"],
+                    "failure_type": first["failure_type"],
+                    "ordinary_reasoning_alternative": first["ordinary_reasoning_alternative"],
+                    "counterfactual": first["counterfactual"],
                 },
-                "allowed_answers": ["YES", "NO", "UNCERTAIN"],
-                "question": (
-                    "Does the full T0–T5 evidence show that cross-compaction state loss caused "
-                    "a wrong action with a program-verified engineering consequence?"
-                ),
-            })
+                "secondary": {
+                    "wrong_action": second["wrong_action"],
+                    "engineering_consequence": second["engineering_consequence"],
+                    "caused_by_state_loss": second["caused_by_state_loss"],
+                    "failure_type": second["failure_type"],
+                    "ordinary_reasoning_alternative": second["ordinary_reasoning_alternative"],
+                    "counterfactual": second["counterfactual"],
+                },
+            },
+            "allowed_answers": ["YES", "NO", "UNCERTAIN"],
+            "question": (
+                "Did the agent take a wrong action because it forgot or distorted still-active "
+                "important state across compaction, with a program-verified consequence?"
+            ),
+        })
     primary_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in primary)
     secondary_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in secondary)
     consensus_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in consensus)

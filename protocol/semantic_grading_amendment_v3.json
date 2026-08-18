@@ -13,7 +13,9 @@
     ]
   },
   "S0b": {
-    "causal_judge_scope": "agreed high-confidence state-change suspects",
+    "causal_judge_scope": "every final primary State Diff SUSPECT; secondary disagreement cannot filter a case out",
+    "causal_core_question": "did the agent act incorrectly because it forgot or distorted still-active important state across compaction",
+    "detection_gate_scope": "necessary first gate only; DETECTED requires subsequent State Probe, Action Probe, and baseline comparison before answering full Question A",
     "causal_packet": "direct T0-T5 sections; T0/T1 are not reconstructed from derived State Diff output",
     "causal_answer_ingestion": "hash-bound HUMAN_CONFIRMED answers required",
     "classification_bridge": "a human causal YES plus two agreeing evidence-bound judges may write system Type A/B/C classification into re-hashed S0 evidence cards",

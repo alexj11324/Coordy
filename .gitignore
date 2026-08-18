@@ -9,6 +9,7 @@ __pycache__/
 dist/
 build/
 .coordy/
+.local-specs/
 data/raw/
 data/snapshots/
 data/index.sqlite

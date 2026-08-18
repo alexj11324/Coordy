@@ -11,13 +11,61 @@ from collections import Counter
 from pathlib import Path
 from unittest.mock import patch
 
+import coordy.incidents as incidents_module
 from coordy.cli import _judge_api_settings
+from coordy.action import (
+    action_check_schema,
+    action_probe_schema,
+    _action_repeats_candidate,
+    _normalize_action_probe_warning,
+    _packet_digest,
+    prepare_incident_action_packets,
+    run_action_check,
+    validate_action_probe,
+    validate_action_probe_warning,
+    validate_action_check,
+)
 from coordy.ingest import ingest
+from coordy.incidents import (
+    _deduplicate_incident_fragment_ids,
+    _assignments_to_incident_link_result,
+    _source_events_from_trajectory_windows,
+    incident_fragment_schema,
+    incident_causal_prelabel_schema,
+    incident_link_schema,
+    prepare_cross_shard_incident_link_inputs,
+    prepare_goal_global_incident_link_inputs,
+    prepare_incident_fragment_inputs,
+    prepare_incident_causal_inputs,
+    prepare_incident_causal_review,
+    run_incident_causal_prelabels,
+    adjudicate_incident_causal_review,
+    prepare_incident_link_inputs,
+    validate_incident_fragment_result,
+    validate_incident_causal_prelabel,
+    validate_incident_causal_review_answer,
+    validate_incident_link_result,
+)
+from coordy.incident_cutoff import (
+    IncompleteIncidentHistory,
+    build_commitment_ledger,
+    build_incident_cutoff_context,
+    build_incident_history_index,
+)
 from coordy.discovery import discover_codex_environment
-from coordy.models import CanonicalEvent
+from coordy.models import CanonicalEvent, Check, Commitment
+from coordy.commitments import (
+    active_commitments,
+    classify_topic_checks,
+    events_through_cutoff,
+    should_continue_topic_tracking,
+    supersede_commitment,
+    validate_check_at_cutoff,
+)
 from coordy.pipeline import run
 from coordy.protocol import initialize
 from coordy.redaction import redact_value
+from coordy.replay import _replacement_history, prepare_incident_detection_replay
 from coordy.review import adjudicate_s0, prepare_s0_review
 from coordy.semantic import (
     STATE_JUDGE_INSTRUCTIONS,
@@ -25,7 +73,10 @@ from coordy.semantic import (
     NonRetryableJudgeError,
     ResponsesAPIStateJudge,
     _claim_api_dispatch,
+    _causal_packets_for_session,
     _evaluate_state_smoke,
+    _event_basis,
+    _hash,
     _run_judge_batches,
     _responses_multimodal_input,
     _deduplicate_result_evidence_ids,
@@ -35,6 +86,7 @@ from coordy.semantic import (
     _human_causal_chain,
     _semantic_event,
     _normalize_state_diff_top_level,
+    _packets_for_session,
     _select_state_smoke_packets,
     adjudicate_s0b_causal_review,
     adjudicate_s0b_state_calibration,
@@ -50,9 +102,2105 @@ from coordy.semantic import (
 from coordy.sources import JsonExportSource
 from coordy.screening import run_s0_screening
 from coordy.state import update_state
+from coordy.trajectory import (
+    _normalize_trajectory_result,
+    aggregate_trajectory_discovery,
+    build_natural_compaction_windows,
+    build_no_compaction_session_window,
+    prepare_trajectory_windows,
+    shard_natural_window,
+    trajectory_schema,
+    validate_trajectory_result,
+)
 
 
 class CoordyTests(unittest.TestCase):
+    def write_action_manifest(self, workspace: Path, packet: dict) -> None:
+        output = workspace / "data/screening"
+        output.mkdir(parents=True, exist_ok=True)
+        packet_content = (json.dumps(packet, ensure_ascii=False, sort_keys=True) + "\n").encode()
+        labels_content = (json.dumps({"case_id": packet["case_id"]}, sort_keys=True) + "\n").encode()
+        (output / "incident_action_packets_v1.jsonl").write_bytes(packet_content)
+        (output / "incident_action_labels_v1.jsonl").write_bytes(labels_content)
+        (output / "incident_action_manifest_v1.json").write_text(json.dumps({
+            "status": "READY_FOR_ACTION_CHECK",
+            "scan_run_id": packet.get("scan_run_id"),
+            "action_packet_count": 1,
+            "action_packets_sha256": _hash(packet_content),
+            "action_labels_sha256": _hash(labels_content),
+        }))
+
+    def commitment(self, **overrides):
+        values = {
+            "commitment_id": "c-current-book",
+            "goal_root_id": "goal-readey",
+            "topic": "ebook-search-scope",
+            "type": "CONSTRAINT",
+            "claim": "Search only the currently open book",
+            "polarity": "MUST",
+            "authority": "USER",
+            "scope": "product-search",
+            "valid_from_event_id": "event-user-scope",
+            "source_event_ids": ["event-user-scope"],
+        }
+        values.update(overrides)
+        return Commitment(**values)
+
+    def test_commitment_requires_real_source_reference(self):
+        with self.assertRaisesRegex(ValueError, "valid-from source event"):
+            self.commitment(source_event_ids=[])
+
+    def test_agent_plan_cannot_supersede_user_commitment(self):
+        original = self.commitment()
+        proposed = self.commitment(
+            commitment_id="c-whole-library",
+            claim="Search the whole library",
+            authority="AGENT",
+            valid_from_event_id="event-agent-plan",
+            source_event_ids=["event-agent-plan"],
+        )
+        with self.assertRaisesRegex(ValueError, "cannot supersede"):
+            supersede_commitment([original], old_id=original.commitment_id, replacement=proposed)
+        self.assertEqual(original.status, "ACTIVE")
+
+    def test_authoritative_commitment_can_be_superseded(self):
+        original = self.commitment()
+        replacement = self.commitment(
+            commitment_id="c-new-user-scope",
+            claim="Search the whole library",
+            valid_from_event_id="event-user-changed-scope",
+            source_event_ids=["event-user-changed-scope"],
+        )
+        ledger = supersede_commitment(
+            [original], old_id=original.commitment_id, replacement=replacement
+        )
+        self.assertEqual(original.status, "SUPERSEDED")
+        self.assertEqual(original.superseded_by, replacement.commitment_id)
+        self.assertEqual(active_commitments(ledger), [replacement])
+
+    def test_cutoff_excludes_future_events_without_truncating_visible_history(self):
+        events = [
+            CanonicalEvent(
+                event_id=f"event-{index}", session_id="session", timestamp="2026-08-17T00:00:00Z",
+                sequence_number=index, actor="user", event_type="message", content=str(index),
+            )
+            for index in range(80)
+        ]
+        visible = events_through_cutoff(events, session_id="session", cutoff_sequence=70)
+        self.assertEqual(len(visible), 71)
+        self.assertEqual(visible[0].event_id, "event-0")
+        self.assertEqual(visible[-1].event_id, "event-70")
+        self.assertNotIn("event-71", {row.event_id for row in visible})
+
+    def test_local_no_change_does_not_stop_anchored_or_action_tracking(self):
+        local = Check(
+            check_id="check-local", goal_root_id="goal-readey", topic="ebook-search-scope",
+            kind="LOCAL", verdict="CONSISTENT", observed_event_ids=["summary-1", "summary-2"],
+        )
+        self.assertTrue(should_continue_topic_tracking([local]))
+
+    def test_e_books_agent_scope_expansion_is_candidate_not_valid_update(self):
+        # Frozen from the corrected Reathm timeline. Current-book-only is the
+        # authoritative scope; the later whole-library expansion is an agent
+        # plan, and the user correction reaffirms rather than replaces that scope.
+        # T0-T5 outcome review must still decide near miss versus confirmed drift.
+        initial_event = "msg_019fd415-de3b-7701-9d32-1698baa51343"
+        agent_whole_library_decision = "msg_067e29c622e5045f016a746c662e1881979d85ac219235394c"
+        correction_event = "msg_019fd6ca-45b2-7af3-a365-0e151f51edf4"
+        restored_current_book_action = "msg_067e29c622e5045f016a746d2a7c60819799caf7ee8831b3a9"
+        original = self.commitment(
+            commitment_id="c-current-book",
+            claim="Search only the currently open book; whole-library search is out of scope",
+            valid_from_event_id=initial_event,
+            source_event_ids=[initial_event],
+        )
+        checks = [
+            Check(
+                check_id="check-agent-whole-library-decision", goal_root_id="goal-readey",
+                topic="ebook-search-scope", kind="ACTION", verdict="CONTRADICTED",
+                observed_event_ids=[agent_whole_library_decision],
+                commitment_ids=[original.commitment_id],
+                action_event_ids=[agent_whole_library_decision],
+            ),
+            Check(
+                check_id="check-user-reaffirms-current-book", goal_root_id="goal-readey",
+                topic="ebook-search-scope", kind="ANCHORED", verdict="CONSISTENT",
+                observed_event_ids=[correction_event],
+                commitment_ids=[original.commitment_id],
+            ),
+            Check(
+                check_id="check-current-book-action", goal_root_id="goal-readey",
+                topic="ebook-search-scope", kind="ACTION", verdict="CONSISTENT",
+                observed_event_ids=[restored_current_book_action],
+                commitment_ids=[original.commitment_id],
+                action_event_ids=[restored_current_book_action],
+            ),
+        ]
+        self.assertEqual(active_commitments([original]), [original])
+        self.assertEqual(classify_topic_checks(checks), "DRIFT_CANDIDATE")
+
+    def test_check_rejects_future_evidence_at_cutoff(self):
+        commitment = self.commitment()
+        visible = [CanonicalEvent(
+            event_id="event-user-scope", session_id="session", timestamp="2026-08-17T00:00:00Z",
+            sequence_number=0, actor="user", event_type="message", content="current book only",
+        )]
+        check = Check(
+            check_id="future-action", goal_root_id="goal-readey", topic="ebook-search-scope",
+            kind="ACTION", verdict="CONTRADICTED", observed_event_ids=["future-plan"],
+            commitment_ids=[commitment.commitment_id], action_event_ids=["future-plan"],
+        )
+        with self.assertRaisesRegex(ValueError, "outside the cutoff"):
+            validate_check_at_cutoff(check, commitments=[commitment], visible_events=visible)
+
+    def test_state_packet_has_no_48_pre_3_post_or_first_tool_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-17T00:00:00Z", "type": "session_meta", "payload": {"id": "session"}},
+                *[
+                    {"timestamp": "2026-08-17T00:00:01Z", "type": "response_item", "payload": {
+                        "id": f"pre-{index}", "type": "message", "role": "user", "content": f"Constraint {index}",
+                    }}
+                    for index in range(80)
+                ],
+                {"timestamp": "2026-08-17T00:01:00Z", "type": "compacted", "payload": {"id": "boundary", "content": "summary"}},
+                {"timestamp": "2026-08-17T00:01:01Z", "type": "response_item", "payload": {
+                    "id": "tool", "type": "function_call", "name": "exec_command", "arguments": "{}",
+                }},
+                *[
+                    {"timestamp": "2026-08-17T00:01:02Z", "type": "response_item", "payload": {
+                        "id": f"post-{index}", "type": "message", "role": "assistant", "content": f"Plan {index}",
+                    }}
+                    for index in range(5)
+                ],
+            ]
+            content = "".join(json.dumps(row) + "\n" for row in rows).encode()
+            path.write_bytes(content)
+            opportunity = {
+                "scan_run_id": "scan", "episode_id_hash": "opportunity",
+                "session_id_hash": _hash("session"), "source_prefix_sha256": hashlib.sha256(content).hexdigest(),
+                "cutoff": {"boundary_id_hash": _hash(_event_basis(rows[81], 82))},
+            }
+            packets = _packets_for_session({
+                "source_path": str(path), "scanned_bytes": len(content),
+                "scanned_prefix_sha256": hashlib.sha256(content).hexdigest(),
+            }, [opportunity])
+            self.assertEqual(len(packets[0]["pre_compaction_events"]), 80)
+            self.assertEqual(len(packets[0]["post_compaction_plan_events"]), 5)
+
+    def test_action_check_is_cutoff_and_commitment_bound(self):
+        packet = {
+            "case_id": "authorized-update-fixture",
+            "commitments": [{"commitment_id": "approved-scope"}],
+            "visible_events": [{"event_id": "user-scope"}, {"event_id": "agent-plan"}],
+        }
+        schema = action_check_schema(packet)
+        item = schema["properties"]["results"]["items"]
+        self.assertEqual(
+            item["properties"]["source_event_ids"]["items"]["enum"],
+            ["agent-plan", "user-scope"],
+        )
+        valid = {
+            "case_id": "authorized-update-fixture", "decision": "NO_ALERT",
+            "action": "authorized scoped search",
+            "conflicting_commitment_ids": [], "reason": "authorized update",
+            "source_event_ids": ["user-scope", "agent-plan"], "confidence": 0.99,
+        }
+        validate_action_check(packet, valid)
+        future = {**valid, "source_event_ids": ["future-correction"]}
+        with self.assertRaisesRegex(ValueError, "outside the cutoff"):
+            validate_action_check(packet, future)
+
+    def test_action_check_cache_is_bound_and_does_not_recall_judge(self):
+        class Judge:
+            configuration_sha256 = "config"
+            calls = 0
+
+            def grade(self, packet):
+                self.calls += 1
+                return {
+                    "case_id": packet["case_id"], "decision": "NO_ALERT", "action": "safe",
+                    "conflicting_commitment_ids": [], "reason": "consistent",
+                    "source_event_ids": ["event"], "confidence": 1.0,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            packet = root / "packet.json"
+            packet_data = {
+                "case_id": "case", "scan_run_id": "legacy-fixture",
+                "commitments": [{"commitment_id": "c"}],
+                "visible_events": [{"event_id": "event", "sequence": 1}],
+            }
+            packet.write_text(json.dumps(packet_data))
+            self.write_action_manifest(root / "out", packet_data)
+            judge = Judge()
+            first = run_action_check(packet_path=packet, workspace=root / "out", judge=judge)
+            second = run_action_check(packet_path=packet, workspace=root / "out", judge=judge)
+            self.assertEqual(first, second)
+            self.assertEqual(judge.calls, 1)
+
+    def test_action_probe_is_source_bound_and_requires_concrete_next_step(self):
+        packet = {
+            "case_id": "probe-case",
+            "visible_events": [{"event_id": "e1", "sequence": 1}],
+        }
+        schema = action_probe_schema(packet)
+        self.assertEqual(
+            schema["properties"]["result"]["properties"]["source_event_ids"]["items"]["enum"],
+            ["e1"],
+        )
+        valid = {
+            "case_id": "probe-case", "next_action": "re-read the commitment event",
+            "reread_required": True, "replan_required": True, "avoid_actions": ["apply the old plan"],
+            "reason": "the cutoff evidence is insufficient", "source_event_ids": ["e1"],
+            "confidence": 0.8,
+        }
+        validate_action_probe(packet, valid)
+        invalid = {**valid, "source_event_ids": ["future"]}
+        with self.assertRaisesRegex(ValueError, "outside the cutoff"):
+            validate_action_probe(packet, invalid)
+
+    def test_action_packet_embedded_digest_is_checked_before_cached_execution(self):
+        class Judge:
+            configuration_sha256 = "config"
+            def grade(self, packet):
+                return {
+                    "case_id": packet["case_id"], "decision": "NO_ALERT", "action": "safe",
+                    "conflicting_commitment_ids": [], "reason": "consistent",
+                    "source_event_ids": ["event"], "confidence": 1.0,
+                }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            packet = root / "packet.json"
+            unsigned = {
+                "case_id": "case", "scan_run_id": "legacy-fixture",
+                "commitments": [{"commitment_id": "c"}],
+                "visible_events": [{"event_id": "event"}],
+            }
+            packet_data = {**unsigned, "packet_sha256": _hash(json.dumps(unsigned, sort_keys=True).encode())}
+            packet.write_text(json.dumps(packet_data))
+            self.write_action_manifest(root / "out", packet_data)
+            run_action_check(packet_path=packet, workspace=root / "out", judge=Judge())
+            packet.write_text(json.dumps({**unsigned, "packet_sha256": "tampered"}))
+            with self.assertRaisesRegex(ValueError, "digest"):
+                run_action_check(packet_path=packet, workspace=root / "out", judge=Judge())
+
+    def test_generated_action_packet_cannot_bypass_ready_gate_by_removing_protocol(self):
+        class Judge:
+            configuration_sha256 = "config"
+
+            def grade(self, packet):
+                raise AssertionError("READY gate must run before the judge")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            packet = root / "packet.json"
+            generated = {
+                "case_id": "case", "protocol_version": "incident-action-packet-v1-cutoff-bound",
+                "scan_run_id": "run", "future_information_excluded": True,
+                "cutoff": {"cutoff_order_mode": "sequence", "cutoff_sequence": 1},
+                "visible_events": [{"event_id": "event", "sequence": 1}],
+            }
+            tampered = dict(generated)
+            tampered.pop("protocol_version")
+            tampered.pop("scan_run_id")
+            tampered.pop("future_information_excluded")
+            tampered["packet_sha256"] = _packet_digest(tampered)
+            packet.write_text(json.dumps(tampered))
+            with self.assertRaisesRegex(RuntimeError, "complete action packet manifest"):
+                run_action_check(packet_path=packet, workspace=root / "workspace", judge=Judge())
+
+    def test_incident_detection_replay_excludes_t3_and_future_outcomes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            packet = {
+                "incident_case_id_hash": "case",
+                "goal_thread_id_hash": "root",
+                "scan_run_id": "run",
+                "topic": "scope",
+                "complete_history_prefix": True,
+                "source_session_id_hash": "session",
+                "source_parent_opportunity_id_hashes": ["parent"],
+                "source_events": [
+                    {"evidence_id": "e0", "sequence": 1, "actor": "user", "content": "must stay local"},
+                    {"evidence_id": "e1", "sequence": 2, "actor": "assistant", "content": "plan"},
+                    {"evidence_id": "e2", "sequence": 4, "actor": "assistant", "content": "wrong plan"},
+                    {"evidence_id": "e3", "sequence": 5, "actor": "tool", "content": "patch"},
+                    {"evidence_id": "e4", "sequence": 6, "actor": "user", "content": "correction"},
+                ],
+                "compaction_opportunities": [{
+                    "boundary_id_hash": "b1",
+                    "compaction_event": {"evidence_id": "b1", "sequence": 3, "content": ""},
+                }],
+            }
+            packet["source_history_prefix"] = list(packet["source_events"]) + [
+                {"evidence_id": "b1", "sequence": 3, "record_type": "compacted", "content": ""}
+            ]
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            input_path.write_text(json.dumps(packet) + "\n")
+            answer = {
+                "incident_case_id_hash": "case", "episode_key": "episode",
+                "classification": "CONFIRMED_COMPACTION_DRIFT",
+                "T0": {"status": "PRESENT", "summary": "must stay local", "evidence_ids": ["e0"]},
+                "T1": {"status": "PRESENT", "summary": "compaction", "evidence_ids": ["b1"]},
+                "T2": {"status": "PRESENT", "summary": "wrong plan", "evidence_ids": ["e2"]},
+                "T3": {"status": "PRESENT", "summary": "patch", "evidence_ids": ["e3"]},
+                "T4": {"status": "PRESENT", "summary": "correction", "evidence_ids": ["e4"]},
+                "T5": {"status": "ABSENT", "summary": "not supplied", "evidence_ids": []},
+                "compaction_caused": "YES", "wrong_action": "YES",
+                "engineering_consequence": "YES",
+                "ordinary_reasoning_better_explanation": "NO",
+                "confidence": 1.0, "rationale": "bound fixture",
+            }
+            gt = {
+                "review_item_id": "item", "incident_case_id_hash": "case",
+                "episode_key": "episode", "human_answer": answer, "ground_truth": True,
+            }
+            gt_path = output / "incident_causal_ground_truth_v1.jsonl"
+            gt_path.write_text(json.dumps(gt) + "\n")
+            manifest = {
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL",
+                    "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": _hash(input_path.read_bytes()),
+                },
+                "incident_causal_ground_truth_v1": {
+                    "status": "HUMAN_ADJUDICATION_COMPLETE",
+                    "review_scope": "FULL", "review_queue_kind": "FULL",
+                    "ground_truth_sha256": _hash(gt_path.read_bytes()),
+                    "review_context_sha256": _hash(input_path.read_bytes()),
+                },
+            }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            result = prepare_incident_detection_replay(workspace)
+            self.assertEqual(result["replay_case_count"], 1)
+            source = json.loads((output / "s0c_detection_replay_sources.jsonl").read_text())
+            visible = source["full_history_prefix"]
+            self.assertTrue(all(int(row.get("sequence") or 0) <= 4 for row in visible))
+            self.assertNotIn("e3", {row["evidence_id"] for row in visible})
+            self.assertNotIn("e4", {row["evidence_id"] for row in visible})
+            self.assertTrue(source["future_information_excluded"])
+            manifest["incident_causal_ground_truth_v1"].update({
+                "status": "HUMAN_ADJUDICATION_TRIAGE_COMPLETE",
+                "review_scope": "TRIAGED", "review_queue_kind": "TRIAGED",
+            })
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            triaged_result = prepare_incident_detection_replay(workspace)
+            self.assertEqual(triaged_result["human_ground_truth_scope"], "TRIAGED")
+            self.assertEqual(triaged_result["human_ground_truth_label_count"], 1)
+            manifest["incident_causal_ground_truth_v1"].update({
+                "status": "HUMAN_ADJUDICATION_COMPLETE",
+                "review_scope": "TRIAGED", "review_queue_kind": "TRIAGED",
+            })
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RuntimeError, "stale or not bound"):
+                prepare_incident_detection_replay(workspace)
+
+    def test_replay_status_separates_excluded_classification_from_missing_context(self):
+        def write_case(root: Path, classification: str, *, complete: bool) -> None:
+            output = root / "data/screening"
+            output.mkdir(parents=True)
+            packet = {
+                "incident_case_id_hash": "case", "goal_thread_id_hash": "root", "scan_run_id": "run",
+                "source_events": [
+                    {"evidence_id": "e0", "sequence": 1, "actor": "user", "content": "must local"},
+                    {"evidence_id": "e2", "sequence": 4, "actor": "assistant", "content": "action"},
+                ],
+                "compaction_opportunities": [{
+                    "boundary_id_hash": "b1", "compaction_event": {"evidence_id": "b1", "sequence": 3},
+                }],
+            }
+            if complete:
+                packet.update({
+                    "complete_history_prefix": True, "source_session_id_hash": "session",
+                    "source_parent_opportunity_id_hashes": ["parent"],
+                    "source_history_prefix": [*packet["source_events"], {"evidence_id": "b1", "sequence": 3}],
+                })
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            input_path.write_text(json.dumps(packet) + "\n")
+            answer = {
+                "classification": classification,
+                "T0": {"evidence_ids": ["e0"]}, "T1": {"evidence_ids": ["b1"]},
+                "T2": {"evidence_ids": ["e2"]}, "T3": {"evidence_ids": []},
+                "T4": {"evidence_ids": []}, "T5": {"evidence_ids": []},
+            }
+            gt_path = output / "incident_causal_ground_truth_v1.jsonl"
+            gt_path.write_text(json.dumps({
+                "review_item_id": "item", "incident_case_id_hash": "case",
+                "episode_key": "episode", "human_answer": answer,
+            }) + "\n")
+            (output / "trajectory_manifest.json").write_text(json.dumps({
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL", "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": _hash(input_path.read_bytes()),
+                },
+                "incident_causal_ground_truth_v1": {
+                    "status": "HUMAN_ADJUDICATION_COMPLETE",
+                    "review_scope": "FULL", "review_queue_kind": "FULL",
+                    "ground_truth_sha256": _hash(gt_path.read_bytes()),
+                    "review_context_sha256": _hash(input_path.read_bytes()),
+                },
+            }))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            excluded = Path(tmp) / "excluded"
+            write_case(excluded, "UNRESOLVED", complete=False)
+            result = prepare_incident_detection_replay(excluded)
+            self.assertEqual(result["status"], "NO_REPLAYABLE_CASES")
+            self.assertEqual(result["skipped_case_count"], 0)
+            self.assertEqual(result["excluded_non_replayable_classifications"], {"UNRESOLVED": 1})
+
+            missing = Path(tmp) / "missing"
+            write_case(missing, "VALID_PLAN_UPDATE", complete=False)
+            result = prepare_incident_detection_replay(missing)
+            self.assertEqual(result["status"], "INCOMPLETE_CONTEXT_CONSTRUCTION")
+            self.assertEqual(result["skipped_case_count"], 1)
+
+    def test_incident_action_packets_are_cutoff_bound_and_require_human_labels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            packet = {
+                "incident_case_id_hash": "case", "goal_thread_id_hash": "root", "scan_run_id": "run",
+                "topic": "scope",
+                "complete_history_prefix": True,
+                "source_session_id_hash": "session",
+                "source_parent_opportunity_id_hashes": ["parent"],
+                "source_events": [
+                    {"evidence_id": "e0", "sequence": 1, "actor": "user", "content": "local"},
+                    {"evidence_id": "e2", "sequence": 4, "actor": "assistant", "content": "global"},
+                    {"evidence_id": "e3", "sequence": 5, "actor": "tool", "content": "patch"},
+                ],
+                "compaction_opportunities": [{
+                    "boundary_id_hash": "b1", "compaction_event": {"sequence": 3},
+                }],
+            }
+            packet["source_history_prefix"] = list(packet["source_events"]) + [
+                {"evidence_id": "b1", "sequence": 3, "record_type": "compacted", "content": ""}
+            ]
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            input_path.write_text(json.dumps(packet) + "\n")
+            answer = {
+                "classification": "CONFIRMED_COMPACTION_DRIFT",
+                "T0": {"status": "PRESENT", "summary": "local", "evidence_ids": ["e0"]},
+                "T1": {"status": "PRESENT", "summary": "compact", "evidence_ids": ["b1"]},
+                "T2": {"status": "PRESENT", "summary": "global", "evidence_ids": ["e2"]},
+                "T3": {"status": "PRESENT", "summary": "patch", "evidence_ids": ["e3"]},
+                "T4": {"status": "ABSENT", "summary": "none", "evidence_ids": []},
+                "T5": {"status": "ABSENT", "summary": "none", "evidence_ids": []},
+                "compaction_caused": "YES", "wrong_action": "YES",
+                "engineering_consequence": "YES", "ordinary_reasoning_better_explanation": "NO",
+                "confidence": 1.0, "rationale": "fixture",
+            }
+            gt = {"review_item_id": "item", "incident_case_id_hash": "case", "episode_key": "episode", "human_answer": answer}
+            gt_path = output / "incident_causal_ground_truth_v1.jsonl"
+            gt_path.write_text(json.dumps(gt) + "\n")
+            manifest = {
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL", "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": _hash(input_path.read_bytes()),
+                },
+                "incident_causal_ground_truth_v1": {
+                    "status": "HUMAN_ADJUDICATION_COMPLETE",
+                    "review_scope": "FULL", "review_queue_kind": "FULL",
+                    "ground_truth_sha256": _hash(gt_path.read_bytes()),
+                    "review_context_sha256": _hash(input_path.read_bytes()),
+                },
+            }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            result = prepare_incident_action_packets(workspace)
+            self.assertEqual(result["status"], "READY_FOR_ACTION_CHECK")
+            action_packet = json.loads((output / "incident_action_packets_v1.jsonl").read_text())
+            self.assertTrue(action_packet["future_information_excluded"])
+            self.assertNotIn("e3", {row["event_id"] for row in action_packet["visible_events"]})
+            self.assertEqual(action_packet["candidate_action"], "global")
+            manifest["incident_causal_ground_truth_v1"].update({
+                "status": "HUMAN_ADJUDICATION_TRIAGE_COMPLETE",
+                "review_scope": "TRIAGED", "review_queue_kind": "TRIAGED",
+            })
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            triaged_result = prepare_incident_action_packets(workspace)
+            self.assertEqual(triaged_result["human_ground_truth_scope"], "TRIAGED")
+            self.assertEqual(triaged_result["human_ground_truth_label_count"], 1)
+            manifest["incident_causal_ground_truth_v1"].update({
+                "status": "HUMAN_ADJUDICATION_COMPLETE",
+                "review_scope": "TRIAGED", "review_queue_kind": "TRIAGED",
+            })
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RuntimeError, "stale or not bound"):
+                prepare_incident_action_packets(workspace)
+
+    def test_commitment_ledger_is_source_derived_and_tracks_explicit_lifecycle(self):
+        events = [
+            {"evidence_id": "e1", "sequence": 1, "actor": "user", "topic": "scope", "content": "Must keep X"},
+            {"evidence_id": "chat", "sequence": 2, "actor": "user", "topic": "scope", "content": "How are you?"},
+            {"evidence_id": "e2", "sequence": 3, "actor": "user", "topic": "scope", "content": "Cancel X; use Y instead"},
+        ]
+        rows = build_commitment_ledger(
+            events, goal_root_id="root", topic="scope", id_prefix="case",
+        )
+        self.assertEqual({row["valid_from_event_id"] for row in rows}, {"e1", "e2"})
+        self.assertEqual(next(row for row in rows if row["valid_from_event_id"] == "e1")["status"], "SUPERSEDED")
+        self.assertEqual(next(row for row in rows if row["valid_from_event_id"] == "e2")["status"], "ACTIVE")
+        self.assertTrue(all(row.get("extraction_source") == "source_text_marker_fallback" for row in rows))
+
+    def test_machine_commitment_authority_requires_matching_source_actor(self):
+        events = [{
+            "evidence_id": "assistant-event", "sequence": 1, "actor": "assistant",
+            "payload_type": "message", "content": "keep the old plan",
+        }]
+        finding = {
+            "kind": "COMMITMENT", "authority": "USER", "topic": "scope",
+            "statement": "keep the old plan", "source_event_ids": ["assistant-event"],
+            "discovery_directions": ["forward"],
+        }
+        with self.assertRaisesRegex(ValueError, "source actors"):
+            build_commitment_ledger(
+                events, goal_root_id="root", topic="scope", id_prefix="case",
+                extracted_findings=[finding],
+            )
+        mixed_events = [
+            {"evidence_id": "user-event", "sequence": 1, "actor": "user", "content": "ok"},
+            {"evidence_id": "assistant-event", "sequence": 2, "actor": "assistant", "content": "build global"},
+        ]
+        with self.assertRaisesRegex(ValueError, "source actors"):
+            build_commitment_ledger(
+                mixed_events, goal_root_id="root", topic="scope", id_prefix="case",
+                extracted_findings=[{
+                    "kind": "COMMITMENT", "authority": "USER", "topic": "scope",
+                    "statement": "build global", "source_event_ids": ["user-event", "assistant-event"],
+                    "discovery_directions": ["forward"],
+                }],
+            )
+
+    def test_authorized_update_enters_commitment_lifecycle(self):
+        events = [
+            {"evidence_id": "e1", "sequence": 1, "actor": "user", "topic": "storage", "content": "Must use SQLite"},
+            {"evidence_id": "e2", "sequence": 2, "actor": "user", "topic": "storage", "content": "Replace SQLite with Postgres for this phase"},
+        ]
+        rows = build_commitment_ledger(
+            events, goal_root_id="root", topic="storage", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "storage",
+                 "statement": "Must use SQLite", "source_event_ids": ["e1"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "storage",
+                 "statement": "Replace SQLite with Postgres for this phase", "source_event_ids": ["e2"],
+                 "discovery_directions": ["forward"], "supersedes_event_ids": ["e1"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in rows], ["SUPERSEDED", "ACTIVE"])
+        unrelated = build_commitment_ledger(
+            [
+                {"evidence_id": "u1", "sequence": 1, "actor": "user", "topic": "ui", "content": "Must not use network"},
+                {"evidence_id": "u2", "sequence": 2, "actor": "user", "topic": "ui", "content": "Change the button color to blue"},
+            ],
+            goal_root_id="root", topic="ui", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "ui",
+                 "statement": "Must not use network", "source_event_ids": ["u1"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "ui",
+                 "statement": "Change the button color to blue", "source_event_ids": ["u2"],
+                 "discovery_directions": ["forward"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in unrelated], ["ACTIVE", "ACTIVE"])
+        qualifier_only = build_commitment_ledger(
+            [
+                {"evidence_id": "q1", "sequence": 1, "actor": "user", "topic": "ui", "content": "Must keep storage local"},
+                {"evidence_id": "q2", "sequence": 2, "actor": "user", "topic": "ui", "content": "Change local button color to blue"},
+            ],
+            goal_root_id="root", topic="ui", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "ui",
+                 "statement": "Must keep storage local", "source_event_ids": ["q1"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "ui",
+                 "statement": "Change local button color to blue", "source_event_ids": ["q2"],
+                 "discovery_directions": ["forward"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in qualifier_only], ["ACTIVE", "ACTIVE"])
+        domain_only = build_commitment_ledger(
+            [
+                {"evidence_id": "d1", "sequence": 1, "actor": "user", "topic": "storage", "content": "Must encrypt storage at rest"},
+                {"evidence_id": "d2", "sequence": 2, "actor": "user", "topic": "storage", "content": "Change storage backup frequency to daily"},
+            ],
+            goal_root_id="root", topic="storage", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "storage",
+                 "statement": "Must encrypt storage at rest", "source_event_ids": ["d1"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "storage",
+                 "statement": "Change storage backup frequency to daily", "source_event_ids": ["d2"],
+                 "discovery_directions": ["forward"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in domain_only], ["ACTIVE", "ACTIVE"])
+        strong_replacement = build_commitment_ledger(
+            [
+                {"evidence_id": "s1", "sequence": 1, "actor": "user", "topic": "storage", "content": "Must use SQLite"},
+                {"evidence_id": "s2", "sequence": 2, "actor": "user", "topic": "storage", "content": "Actually use Postgres instead"},
+            ],
+            goal_root_id="root", topic="storage", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "storage",
+                 "statement": "Must use SQLite", "source_event_ids": ["s1"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "storage",
+                 "statement": "Actually use Postgres instead", "source_event_ids": ["s2"],
+                 "discovery_directions": ["forward"], "supersedes_event_ids": ["s1"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in strong_replacement], ["SUPERSEDED", "ACTIVE"])
+        multi_source = build_commitment_ledger(
+            [
+                {"evidence_id": "m1", "sequence": 1, "actor": "user", "topic": "storage", "content": "Must use SQLite"},
+                {"evidence_id": "m2", "sequence": 2, "actor": "user", "topic": "storage", "content": "Keep SQLite for this phase"},
+                {"evidence_id": "m3", "sequence": 3, "actor": "user", "topic": "storage", "content": "Replace SQLite with Postgres"},
+            ],
+            goal_root_id="root", topic="storage", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "storage",
+                 "statement": "Must use SQLite", "source_event_ids": ["m1", "m2"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "storage",
+                 "statement": "Replace SQLite with Postgres", "source_event_ids": ["m3"],
+                 "discovery_directions": ["forward"], "supersedes_event_ids": ["m2"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in multi_source], ["SUPERSEDED", "ACTIVE"])
+        multi_source_origin_ids = build_commitment_ledger(
+            [
+                {"evidence_id": "v1", "source_evidence_id": "s1", "sequence": 1,
+                 "actor": "user", "topic": "storage", "content": "Must use SQLite"},
+                {"evidence_id": "v2", "source_evidence_id": "s2", "sequence": 2,
+                 "actor": "user", "topic": "storage", "content": "Keep SQLite for this phase"},
+                {"evidence_id": "v3", "source_evidence_id": "s3", "sequence": 3,
+                 "actor": "user", "topic": "storage", "content": "Replace SQLite with Postgres"},
+            ],
+            goal_root_id="root", topic="storage", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "storage",
+                 "statement": "Must use SQLite", "source_event_ids": ["s1", "s2"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "storage",
+                 "statement": "Replace SQLite with Postgres", "source_event_ids": ["s3"],
+                 "discovery_directions": ["forward"], "supersedes_event_ids": ["s2"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in multi_source_origin_ids], ["SUPERSEDED", "ACTIVE"])
+        unrelated_search = build_commitment_ledger(
+            [
+                {"evidence_id": "r1", "sequence": 1, "actor": "user", "topic": "ebook-search", "content": "Must scope search to current book"},
+                {"evidence_id": "r2", "sequence": 2, "actor": "user", "topic": "ebook-search", "content": "Change search result sort order to title"},
+            ],
+            goal_root_id="root", topic="ebook-search", id_prefix="case",
+            extracted_findings=[
+                {"kind": "COMMITMENT", "authority": "USER", "topic": "ebook-search",
+                 "statement": "Must scope search to current book", "source_event_ids": ["r1"],
+                 "discovery_directions": ["forward"]},
+                {"kind": "AUTHORIZED_UPDATE", "authority": "USER", "topic": "ebook-search",
+                 "statement": "Change search result sort order to title", "source_event_ids": ["r2"],
+                 "discovery_directions": ["forward"]},
+            ],
+        )
+        self.assertEqual([row["status"] for row in unrelated_search], ["ACTIVE", "ACTIVE"])
+
+    def test_action_repeat_signature_distinguishes_targets_and_normalizes_migrations(self):
+        self.assertFalse(_action_repeats_candidate("delete all tests", "delete all generated files"))
+        self.assertTrue(_action_repeats_candidate(
+            "switch persistence to SQLite", "migrate storage backend to SQLite"
+        ))
+        self.assertFalse(_action_repeats_candidate(
+            "delete database migration tests", "delete database migration files"
+        ))
+        self.assertFalse(_action_repeats_candidate(
+            "delete generated test files", "delete database files"
+        ))
+        self.assertFalse(_action_repeats_candidate(
+            "delete all tests", "do not delete all tests"
+        ))
+
+    def test_legacy_action_wrapper_cannot_be_rebound_to_a_new_packet(self):
+        with self.assertRaisesRegex(ValueError, "legacy action-check wrapper"):
+            _normalize_action_probe_warning(
+                {"case_id": "case"},
+                {"packet_sha256": "whole-file-hash", "result": {"decision": "NO_ALERT"}},
+            )
+
+    def test_goal_timestamp_action_cutoff_accepts_reset_sequence_across_sessions(self):
+        packet = {
+            "incident_case_id_hash": "case", "goal_thread_id_hash": "root", "topic": "scope",
+            "source_parent_opportunity_id_hashes": ["p1", "p2"],
+            "source_events": [
+                {"evidence_id": "e0", "source_evidence_id": "e0", "parent_opportunity_id_hash": "p1",
+                 "source_session_id_hash": "s1", "timestamp": "2026-01-01T00:00:00Z", "sequence": 100,
+                 "actor": "user", "content": "must keep local"},
+                {"evidence_id": "e2", "source_evidence_id": "e2", "parent_opportunity_id_hash": "p2",
+                 "source_session_id_hash": "s2", "timestamp": "2026-01-01T00:00:04Z", "sequence": 5,
+                 "actor": "assistant", "content": "build global index"},
+            ],
+            "compaction_opportunities": [{
+                "boundary_id_hash": "b2", "parent_opportunity_id_hash": "p2",
+                "compaction_event": {
+                    "evidence_id": "b2", "timestamp": "2026-01-01T00:00:03Z", "sequence": 4,
+                },
+            }],
+        }
+        history = {
+            "complete": {"p1": {"e0": packet["source_events"][0]}, "p2": {"e2": packet["source_events"][1]}},
+            "opportunities": {"p2": packet["compaction_opportunities"][0]},
+            "parent_sessions": {"p1": "s1", "p2": "s2"},
+            "parent_goals": {"p1": "root", "p2": "root"},
+            "goal_parents": {"root": ["p1", "p2"]},
+            "parent_max_orders": {
+                "p1": ("2026-01-01T00:00:00Z", 100, "s1", "e0"),
+                "p2": ("2026-01-01T00:00:04Z", 5, "s2", "e2"),
+            },
+            "commitment_findings": [{
+                "kind": "COMMITMENT", "authority": "USER", "topic": "scope",
+                "statement": "must keep local", "source_event_ids": ["e0"],
+                "parent_opportunity_id_hash": "p1",
+                "discovery_directions": ["forward"],
+            }],
+            "commitment_findings_sha256": "fixture",
+        }
+        answer = {
+            "T0": {"evidence_ids": ["e0"]}, "T1": {"evidence_ids": ["b2"]},
+            "T2": {"evidence_ids": ["e2"]}, "T3": {"evidence_ids": []},
+            "T4": {"evidence_ids": []}, "T5": {"evidence_ids": []},
+        }
+        context = build_incident_cutoff_context(packet, answer, history_index=history)
+        future_history = json.loads(json.dumps(history))
+        future_history["complete"]["p1"]["future"] = {
+            "evidence_id": "future", "source_evidence_id": "future",
+            "source_session_id_hash": "s1", "timestamp": "2026-01-01T00:00:05Z",
+            "sequence": 101, "actor": "assistant", "content": "test outcome",
+        }
+        future_context = build_incident_cutoff_context(packet, answer, history_index=future_history)
+        self.assertEqual(future_context["commitment_ledger"], [])
+        visible = [dict(row, event_id=row["evidence_id"]) for row in context["full_history_prefix"]]
+        action_packet = {
+            "case_id": "case", "cutoff_order_mode": context["cutoff_order_mode"],
+            "cutoff_order": context["cutoff_order"],
+            "scan_run_id": "fixture-run",
+            "cutoff": {
+                "boundary_id_hashes": context["t1_boundary_ids"],
+                "cutoff_sequence": context["cutoff_sequence"],
+                "cutoff_order_mode": context["cutoff_order_mode"],
+                "cutoff_order": context["cutoff_order"],
+            },
+            "commitments": context["commitment_ledger"], "visible_events": visible,
+        }
+        action_packet["packet_sha256"] = _packet_digest(action_packet)
+        commitment = action_packet["commitments"][0]
+        warning = {
+            "protocol_version": "action-check-v1-source-grounded", "case_id": "case",
+            "packet_sha256": action_packet["packet_sha256"], "cutoff": action_packet["cutoff"],
+            "future_information_excluded": True, "decision": "ALERT", "action": "build global index",
+            "conflicting_commitment_ids": [commitment["commitment_id"]], "reason": "scope conflict",
+            "source_event_ids": ["e0"], "confidence": 0.9,
+        }
+        validate_action_probe_warning(action_packet, warning)
+
+        class Judge:
+            configuration_sha256 = "fixture-config"
+
+            def grade(self, value):
+                return {
+                    "case_id": value["case_id"], "decision": "NO_ALERT", "action": "re-read",
+                    "conflicting_commitment_ids": [], "reason": "fixture",
+                    "source_event_ids": ["e0", "e2"], "confidence": 0.8,
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "packet.json"
+            path.write_text(json.dumps(action_packet))
+            action_workspace = Path(tmp) / "workspace"
+            action_output = action_workspace / "data/screening"
+            action_output.mkdir(parents=True)
+            packet_content = path.read_bytes()
+            labels_content = json.dumps({"case_id": "case"}) + "\n"
+            (action_output / "incident_action_packets_v1.jsonl").write_bytes(packet_content + b"\n")
+            (action_output / "incident_action_labels_v1.jsonl").write_text(labels_content)
+            (action_output / "incident_action_manifest_v1.json").write_text(json.dumps({
+                "status": "READY_FOR_ACTION_CHECK", "scan_run_id": "fixture-run",
+                "action_packet_count": 1,
+                "action_packets_sha256": _hash(packet_content + b"\n"),
+                "action_labels_sha256": _hash(labels_content.encode()),
+            }))
+            record = run_action_check(packet_path=path, workspace=action_workspace, judge=Judge())
+            validate_action_probe_warning(action_packet, record["warning"])
+
+    def test_history_index_requires_manifest_bindings_for_sessions_and_findings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            windows_path = root / "trajectory_windows.jsonl"
+            sessions_path = root / "eligible_sessions.jsonl"
+            findings_path = root / "trajectory_union_findings.jsonl"
+            window = {
+                "opportunity_id_hash": "parent", "goal_thread_id_hash": "root",
+                "session_id_hash": _hash("session"), "boundary_id_hash": "boundary",
+                "scan_run_id": "run", "compaction_event": {
+                    "evidence_id": "boundary", "timestamp": "2026-01-01T00:00:01Z", "sequence": 2,
+                }, "events_since_previous_compaction": [], "events_until_next_compaction": [],
+            }
+            windows_content = json.dumps(window) + "\n"
+            windows_path.write_text(windows_content)
+            sessions_content = json.dumps({
+                "session_id": "session", "goal_thread_id_hash": "root", "scan_run_id": "run",
+                "compaction_count_scanned": 1,
+            }) + "\n"
+            sessions_path.write_text(sessions_content)
+            findings_path.write_text("")
+            manifest = {
+                "trajectory_windows_sha256": _hash(windows_content.encode()),
+                "trajectory_union": {"union_findings_sha256": _hash(b"")},
+            }
+            (root / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(IncompleteIncidentHistory, "eligible session index hash"):
+                build_incident_history_index(windows_path, eligible_sessions_path=sessions_path)
+
+    def test_adjacent_state_diff_uses_last_t1_boundary(self):
+        packet = {
+            "incident_case_id_hash": "case", "goal_thread_id_hash": "root", "topic": "scope",
+            "source_parent_opportunity_id_hashes": ["p"],
+            "source_events": [
+                {"evidence_id": "e0", "parent_opportunity_id_hash": "p", "source_session_id_hash": "s",
+                 "timestamp": "2026-01-01T00:00:00Z", "sequence": 1, "actor": "user", "content": "must local"},
+                {"evidence_id": "e2", "parent_opportunity_id_hash": "p", "source_session_id_hash": "s",
+                 "timestamp": "2026-01-01T00:00:04Z", "sequence": 5, "actor": "assistant", "content": "candidate"},
+            ],
+            "compaction_opportunities": [
+                {"boundary_id_hash": "b1", "parent_opportunity_id_hash": "p",
+                 "compaction_event": {"evidence_id": "b1", "timestamp": "2026-01-01T00:00:01Z", "sequence": 2}},
+                {"boundary_id_hash": "b2", "parent_opportunity_id_hash": "p",
+                 "compaction_event": {"evidence_id": "b2", "timestamp": "2026-01-01T00:00:03Z", "sequence": 4}},
+            ],
+        }
+        history = {
+            "complete": {"p": {"e0": packet["source_events"][0], "e2": packet["source_events"][1]}},
+            "opportunities": {"p": {"boundary_id_hash": "b2", "compaction_event": packet["compaction_opportunities"][1]["compaction_event"]}},
+            "parent_sessions": {"p": "s"}, "parent_goals": {"p": "root"},
+            "goal_parents": {"root": ["p"]}, "commitment_findings": [],
+            "commitment_findings_sha256": "fixture",
+        }
+        # The packet's second boundary is the last T1 boundary; both are in the
+        # source packet so the adjacency code must choose b2, not b1.
+        packet["compaction_opportunities"][1]["parent_opportunity_id_hash"] = "p"
+        answer = {"T0": {"evidence_ids": ["e0"]}, "T1": {"evidence_ids": ["b1", "b2"]},
+                  "T2": {"evidence_ids": ["e2"]}, "T3": {"evidence_ids": []},
+                  "T4": {"evidence_ids": []}, "T5": {"evidence_ids": []}}
+        # Add b1 to the indexed opportunity's packet reconstruction through a
+        # second parent-shaped entry; this keeps the fixture cross-boundary.
+        history["opportunities"]["p"] = {
+            "boundary_id_hash": "b2", "compaction_event": packet["compaction_opportunities"][1]["compaction_event"],
+        }
+        # Use the sparse fallback for a compact assertion of the last-boundary
+        # behavior; the indexed path is covered by the cross-session test above.
+        packet["complete_history_prefix"] = True
+        packet["source_session_id_hash"] = "s"
+        packet["source_history_prefix"] = [
+            {"evidence_id": "e0", "sequence": 1, "timestamp": "2026-01-01T00:00:00Z", "content": "must local"},
+            {"evidence_id": "b1", "sequence": 2, "timestamp": "2026-01-01T00:00:01Z", "record_type": "compacted"},
+            {"evidence_id": "b2", "sequence": 4, "timestamp": "2026-01-01T00:00:03Z", "record_type": "compacted"},
+            {"evidence_id": "e2", "sequence": 5, "timestamp": "2026-01-01T00:00:04Z", "content": "candidate"},
+        ]
+        context = build_incident_cutoff_context(packet, answer, history_index=None)
+        self.assertEqual(context["last_boundary_id"], "b2")
+        self.assertEqual([row["evidence_id"] for row in context["adjacent_previous_state_events"]], ["b2"])
+        self.assertEqual([row["evidence_id"] for row in context["adjacent_current_state_events"]], ["e2"])
+
+    def test_natural_compaction_window_covers_all_events_without_fixed_caps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-17T00:00:00Z", "type": "session_meta", "payload": {"id": "session"}},
+                *[
+                    {"timestamp": "2026-08-17T00:00:01Z", "type": "response_item", "payload": {
+                        "id": f"pre-{index}", "type": "message", "role": "user", "content": f"Requirement {index}",
+                    }} for index in range(80)
+                ],
+                {"timestamp": "2026-08-17T00:01:00Z", "type": "compacted", "payload": {"id": "boundary", "content": "summary"}},
+                {"timestamp": "2026-08-17T00:01:01Z", "type": "response_item", "payload": {
+                    "id": "tool", "type": "function_call", "name": "exec_command", "arguments": {"cmd": "test"},
+                }},
+                *[
+                    {"timestamp": "2026-08-17T00:01:02Z", "type": "response_item", "payload": {
+                        "id": f"post-{index}", "type": "message", "role": "assistant", "content": f"Plan {index}",
+                    }} for index in range(5)
+                ],
+            ]
+            content = "".join(json.dumps(row) + "\n" for row in rows).encode()
+            path.write_bytes(content)
+            opportunity = {
+                "scan_run_id": "scan", "episode_id_hash": "opportunity",
+                "session_id_hash": _hash("session"),
+                "cutoff": {"boundary_id_hash": _hash(_event_basis(rows[81], 82))},
+            }
+            windows = build_natural_compaction_windows({
+                "source_path": str(path), "scanned_bytes": len(content),
+                "scanned_prefix_sha256": hashlib.sha256(content).hexdigest(),
+            }, [opportunity])
+            self.assertEqual(len(windows[0]["events_since_previous_compaction"]), 80)
+            self.assertEqual(len(windows[0]["events_until_next_compaction"]), 6)
+            self.assertIn('"cmd": "test"', windows[0]["events_until_next_compaction"][0]["content"])
+
+    def test_no_compaction_session_gets_a_luna_discovery_unit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-17T00:00:00Z", "type": "session_meta", "payload": {"id": "session"}},
+                {"timestamp": "2026-08-17T00:00:01Z", "type": "response_item", "payload": {
+                    "id": "user-1", "type": "message", "role": "user", "content": "Must keep the current book",
+                }},
+            ]
+            content = "".join(json.dumps(row) + "\n" for row in rows).encode()
+            path.write_bytes(content)
+            window = build_no_compaction_session_window({
+                "session_id": "session", "goal_thread_id_hash": "root", "scan_run_id": "run",
+                "source_path": str(path), "scanned_bytes": len(content),
+                "scanned_prefix_sha256": hashlib.sha256(content).hexdigest(),
+                "compaction_count_scanned": 0,
+            })
+            self.assertTrue(window["synthetic_no_compaction"])
+            self.assertEqual(window["parent_opportunity_id_hash"], "session:" + _hash("session"))
+            self.assertEqual(window["events_since_previous_compaction"][0]["actor"], "user")
+
+    def test_trajectory_findings_are_event_bound_and_agent_cannot_author_commitment(self):
+        window = {
+            "opportunity_id_hash": "op", "events_since_previous_compaction": [
+                {"evidence_id": "user", "content": "current book only"},
+            ], "compaction_event": {"evidence_id": "compact"},
+            "events_until_next_compaction": [{"evidence_id": "plan", "content": "build index"}],
+        }
+        schema = trajectory_schema(window)
+        variants = schema["properties"]["results"]["items"]["properties"]["findings"]["items"]["anyOf"]
+        self.assertTrue(all(
+            item["properties"]["event_ids"]["items"]["enum"] == ["compact", "plan", "user"]
+            for item in variants
+        ))
+        self.assertNotIn("AGENT", variants[0]["properties"]["authority"]["enum"])
+        valid = {"opportunity_id_hash": "op", "confidence": 0.9, "findings": [{
+            "kind": "CANDIDATE_ACTION", "topic": "search", "statement": "build global index",
+            "authority": "AGENT", "event_ids": ["plan"], "action_specificity": "CONCRETE",
+        }]}
+        validate_trajectory_result(window, valid)
+        invalid = json.loads(json.dumps(valid))
+        invalid["findings"][0].update({"kind": "COMMITMENT", "authority": "AGENT"})
+        with self.assertRaisesRegex(ValueError, "cannot become"):
+            validate_trajectory_result(window, invalid)
+        repeated = json.loads(json.dumps(valid))
+        repeated["findings"][0]["event_ids"] = ["plan", "plan"]
+        normalized = _normalize_trajectory_result(repeated)
+        self.assertEqual(normalized["findings"][0]["event_ids"], ["plan"])
+        self.assertEqual(normalized["duplicate_evidence_ids_removed"], 1)
+
+    def test_transport_shards_preserve_all_content_without_event_caps(self):
+        window = {
+            "opportunity_id_hash": "parent", "compaction_event": {"evidence_id": "compact"},
+            "events_since_previous_compaction": [{"evidence_id": "large", "content": "甲" * 25}],
+            "events_until_next_compaction": [{"evidence_id": "post", "content": "乙" * 15}],
+        }
+        shards = shard_natural_window(window, max_window_chars=20, max_event_chars=10)
+        parts = [
+            event for shard in shards
+            for phase in ("events_since_previous_compaction", "events_until_next_compaction")
+            for event in shard[phase]
+        ]
+        reconstructed = "".join(event["content"].split("\n", 1)[-1] for event in parts)
+        self.assertEqual(reconstructed, ("甲" * 25) + ("乙" * 15))
+        self.assertTrue(all(shard["parent_opportunity_id_hash"] == "parent" for shard in shards))
+
+    def test_trajectory_aggregate_requires_both_bound_directions_and_restores_source_ids(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            windows = [{
+                "opportunity_id_hash": "shard", "parent_opportunity_id_hash": "parent",
+                "goal_thread_id_hash": "goal", "events_since_previous_compaction": [{
+                    "evidence_id": "part", "source_evidence_id": "source", "content": "part",
+                }], "compaction_event": {"evidence_id": "compact"},
+                "events_until_next_compaction": [],
+            }]
+            window_content = "".join(json.dumps(row) + "\n" for row in windows)
+            (output / "trajectory_windows.jsonl").write_text(window_content)
+            manifest = {
+                "trajectory_window_count": 1, "trajectory_discovery_unit_count": 1,
+                "trajectory_windows_sha256": hashlib.sha256(window_content.encode()).hexdigest(),
+            }
+            finding = {
+                "opportunity_id_hash": "shard", "confidence": 1.0, "findings": [{
+                    "kind": "COMMITMENT", "topic": "scope", "statement": "current book",
+                    "authority": "USER", "event_ids": ["part"],
+                    "action_specificity": "NOT_APPLICABLE",
+                }],
+            }
+            for direction in ("forward", "backward"):
+                content = json.dumps(finding) + "\n"
+                (output / f"trajectory_{direction}_results.jsonl").write_text(content)
+                manifest[f"{direction}_discovery"] = {
+                    "status": "COMPLETE", "completed_result_count": 1,
+                    "result_sha256": hashlib.sha256(content.encode()).hexdigest(),
+                }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            result = aggregate_trajectory_discovery(workspace)
+            self.assertEqual(result["union_finding_count"], 2)
+            rows = [
+                json.loads(line)
+                for line in (output / "trajectory_union_findings.jsonl").read_text().splitlines()
+                if line
+            ]
+            self.assertEqual({tuple(row["source_event_ids"]) for row in rows}, {("source",)})
+            self.assertEqual({tuple(row["discovery_directions"]) for row in rows}, {("forward",), ("backward",)})
+
+    def test_trajectory_aggregate_canonicalizes_split_supersession_refs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            windows = [{
+                "opportunity_id_hash": "shard", "parent_opportunity_id_hash": "parent",
+                "goal_thread_id_hash": "goal", "events_since_previous_compaction": [
+                    {"evidence_id": "part-1", "source_evidence_id": "source", "content": "part"},
+                ], "compaction_event": {"evidence_id": "compact"},
+                "events_until_next_compaction": [],
+            }]
+            window_content = json.dumps(windows[0]) + "\n"
+            (output / "trajectory_windows.jsonl").write_text(window_content)
+            manifest = {
+                "trajectory_window_count": 1, "trajectory_discovery_unit_count": 1,
+                "trajectory_windows_sha256": hashlib.sha256(window_content.encode()).hexdigest(),
+            }
+            finding = {
+                "opportunity_id_hash": "shard", "confidence": 1.0, "findings": [{
+                    "kind": "AUTHORIZED_UPDATE", "topic": "scope", "statement": "replace scope",
+                    "authority": "USER", "event_ids": ["part-1"],
+                    "supersedes_event_ids": ["part-1"],
+                    "action_specificity": "NOT_APPLICABLE",
+                }],
+            }
+            for direction in ("forward", "backward"):
+                content = json.dumps(finding) + "\n"
+                (output / f"trajectory_{direction}_results.jsonl").write_text(content)
+                manifest[f"{direction}_discovery"] = {
+                    "status": "COMPLETE", "completed_result_count": 1,
+                    "result_sha256": hashlib.sha256(content.encode()).hexdigest(),
+                }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            aggregate_trajectory_discovery(workspace)
+            rows = [
+                json.loads(line)
+                for line in (output / "trajectory_union_findings.jsonl").read_text().splitlines()
+                if line
+            ]
+            self.assertEqual({tuple(row["supersedes_event_ids"]) for row in rows}, {("source",)})
+
+    def test_incident_fragment_inputs_ignore_synthetic_no_compaction_units(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            windows_content = json.dumps({
+                "opportunity_id_hash": "session:s1",
+                "parent_opportunity_id_hash": "session:s1",
+                "goal_thread_id_hash": "root",
+                "boundary_id_hash": "synthetic-boundary",
+                "scan_run_id": "run",
+                "synthetic_no_compaction": True,
+                "compaction_event": {"timestamp": "2026-01-01T00:00:00Z", "sequence": 0},
+            }) + "\n"
+            findings_content = ""
+            windows_path = output / "trajectory_windows.jsonl"
+            findings_path = output / "trajectory_union_findings.jsonl"
+            windows_path.write_text(windows_content)
+            findings_path.write_text(findings_content)
+            (output / "trajectory_manifest.json").write_text(json.dumps({
+                "scan_run_id": "run", "trajectory_window_count": 0,
+                "trajectory_windows_sha256": _hash(windows_content.encode()),
+                "trajectory_union": {
+                    "status": "COMPLETE",
+                    "union_findings_sha256": _hash(findings_content.encode()),
+                },
+            }))
+            result = prepare_incident_fragment_inputs(workspace)
+            self.assertEqual(result["incident_fragment_input_count"], 0)
+
+    def test_incident_causal_source_index_reassembles_transport_parts(self):
+        source_id = "source-event"
+        base = {
+            "parent_opportunity_id_hash": "parent",
+            "goal_thread_id_hash": "root",
+            "boundary_id_hash": "boundary",
+            "scan_run_id": "run",
+            "compaction_event": {"evidence_id": "compaction", "sequence": 3},
+            "events_until_next_compaction": [],
+        }
+        windows = [
+            {
+                **base,
+                "opportunity_id_hash": "shard-1",
+                "events_since_previous_compaction": [{
+                    "evidence_id": "part-1", "source_evidence_id": source_id,
+                    "sequence": 2, "content": "[source event part 1/2]\nhello ",
+                }],
+            },
+            {
+                **base,
+                "opportunity_id_hash": "shard-2",
+                "events_since_previous_compaction": [{
+                    "evidence_id": "part-2", "source_evidence_id": source_id,
+                    "sequence": 2, "content": "[source event part 2/2]\nworld",
+                }],
+            },
+        ]
+        events, opportunities = _source_events_from_trajectory_windows(windows)
+        self.assertEqual(events["parent"][source_id]["content"], "hello world")
+        self.assertEqual(events["parent"][source_id]["evidence_id"], source_id)
+        self.assertNotIn("source_evidence_id", events["parent"][source_id])
+        self.assertEqual(set(opportunities), {"parent"})
+
+    def test_confirmed_incident_causal_prelabel_requires_complete_bound_t0_t4(self):
+        packet = {
+            "incident_case_id_hash": "case", "allowed_source_event_ids": ["t0", "t2", "t3", "t4"],
+            "allowed_boundary_ids": ["t1"],
+        }
+        phase = lambda evidence_id: {
+            "status": "PRESENT", "summary": "bound", "evidence_ids": [evidence_id],
+        }
+        result = {
+            "incident_case_id_hash": "case", "bundle_assessment": "candidate",
+            "episodes": [{
+                "episode_key": "scope", "classification": "CONFIRMED_COMPACTION_DRIFT",
+                "T0": phase("t0"), "T1": phase("t1"), "T2": phase("t2"),
+                "T3": phase("t3"), "T4": phase("t4"),
+                "T5": {"status": "ABSENT", "summary": "none", "evidence_ids": []},
+                "compaction_caused": "YES", "wrong_action": "YES",
+                "engineering_consequence": "YES",
+                "ordinary_reasoning_better_explanation": "NO",
+                "confidence": 0.9, "rationale": "complete causal chain",
+            }],
+        }
+        validate_incident_causal_prelabel(packet, result)
+        result["episodes"][0]["T4"] = {
+            "status": "ABSENT", "summary": "none", "evidence_ids": [],
+        }
+        with self.assertRaisesRegex(ValueError, "requires present T0 through T4"):
+            validate_incident_causal_prelabel(packet, result)
+        schema = incident_causal_prelabel_schema(packet)
+        self.assertEqual(
+            schema["properties"]["incident_case_id_hash"]["enum"], ["case"],
+        )
+
+    def test_incident_causal_checkpoint_row_is_bound_to_packet_and_dispatch_provenance(self):
+        packet = {
+            "opportunity_id_hash": "case",
+            "incident_case_id_hash": "case",
+            "scan_run_id": "run",
+            "allowed_source_event_ids": [],
+            "allowed_boundary_ids": [],
+        }
+        row = {
+            "incident_case_id_hash": "case",
+            "bundle_assessment": "no distinct episode",
+            "episodes": [],
+            "api_request_id": "request",
+            "api_response_id": "response",
+            "api_status": "completed",
+            "api_usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "total_tokens": 2,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0},
+            },
+            "judge_attempt": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            dispatch = _claim_api_dispatch(
+                directory,
+                judge_id="causal",
+                configuration_sha256="config",
+                packet=packet,
+            )
+            record = json.loads(dispatch.read_text())
+            record.update({
+                "status": "RESPONSE_VALIDATED_PENDING_CHECKPOINT",
+                "api_request_id": "request",
+                "api_response_id": "response",
+                "api_status": "completed",
+                "api_usage": row["api_usage"],
+                "accepted_result": row,
+                "accepted_result_sha256": _hash(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True)
+                ),
+            })
+            _secure_write(dispatch, json.dumps(record))
+
+            incidents_module._validate_incident_causal_checkpoint_row(
+                packet,
+                row,
+                judge_id="causal",
+                configuration_sha256="config",
+                dispatch_log_dir=directory,
+            )
+            missing_metadata = dict(row)
+            for key in ("api_request_id", "api_response_id", "api_status", "api_usage", "judge_attempt"):
+                missing_metadata.pop(key, None)
+            incomplete_record = dict(record)
+            for key in ("api_request_id", "api_response_id", "api_status", "api_usage", "judge_attempt"):
+                incomplete_record.pop(key, None)
+            incomplete_record["accepted_result"] = missing_metadata
+            incomplete_record["accepted_result_sha256"] = _hash(
+                json.dumps(missing_metadata, ensure_ascii=False, sort_keys=True)
+            )
+            _secure_write(dispatch, json.dumps(incomplete_record))
+            with self.assertRaisesRegex(ValueError, "api_request_id"):
+                incidents_module._validate_incident_causal_checkpoint_row(
+                    packet,
+                    missing_metadata,
+                    judge_id="causal",
+                    configuration_sha256="config",
+                    dispatch_log_dir=directory,
+                )
+            tampered = {**row, "api_response_id": "other-response"}
+            with self.assertRaisesRegex(RuntimeError, "dispatch provenance"):
+                incidents_module._validate_incident_causal_checkpoint_row(
+                    packet,
+                    tampered,
+                    judge_id="causal",
+                    configuration_sha256="config",
+                    dispatch_log_dir=directory,
+                )
+
+    def test_incident_causal_validated_result_recovery_is_digest_and_input_bound(self):
+        packet = {
+            "opportunity_id_hash": "case",
+            "incident_case_id_hash": "case",
+            "scan_run_id": "run",
+            "allowed_source_event_ids": [],
+            "allowed_boundary_ids": [],
+        }
+        accepted = {
+            "incident_case_id_hash": "case", "bundle_assessment": "none", "episodes": [],
+            "api_request_id": "request", "api_response_id": "response",
+            "api_status": "completed", "api_usage": {
+                "input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                "cached_input_tokens": 0, "reasoning_output_tokens": 0,
+            }, "judge_attempt": 1,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            dispatch = _claim_api_dispatch(
+                directory,
+                judge_id="causal", configuration_sha256="config", packet=packet,
+            )
+            record = json.loads(dispatch.read_text())
+            record.update({
+                "status": "RESPONSE_VALIDATED_PENDING_CHECKPOINT",
+                "api_request_id": "request", "api_response_id": "response",
+                "api_status": "completed", "api_usage": accepted["api_usage"],
+                "accepted_result": accepted,
+                "accepted_result_sha256": _hash(json.dumps(accepted, ensure_ascii=False, sort_keys=True)),
+                "accepted_input_packet_sha256": _hash(json.dumps(packet, sort_keys=True)),
+                "accepted_judge_id": "causal",
+                "accepted_judge_configuration_sha256": "config",
+            })
+            _secure_write(dispatch, json.dumps(record))
+            recovered = incidents_module._recover_validated_incident_causal_result(
+                packet, dispatch, judge_id="causal", configuration_sha256="config",
+            )
+            self.assertEqual(recovered, accepted)
+            parsed_record = dict(record)
+            parsed_record.pop("accepted_result", None)
+            parsed_record.pop("accepted_result_sha256", None)
+            parsed_record.pop("accepted_input_packet_sha256", None)
+            parsed_record.pop("accepted_judge_id", None)
+            parsed_record.pop("accepted_judge_configuration_sha256", None)
+            parsed_record["parsed_result"] = {
+                key: value for key, value in accepted.items()
+                if key not in {"api_request_id", "api_response_id", "api_status", "api_usage", "judge_attempt"}
+            }
+            parsed_record["parsed_result_sha256"] = _hash(
+                json.dumps(parsed_record["parsed_result"], ensure_ascii=False, sort_keys=True)
+            )
+            _secure_write(dispatch, json.dumps(parsed_record))
+            recovered_from_parsed = incidents_module._recover_validated_incident_causal_result(
+                packet, dispatch, judge_id="causal", configuration_sha256="config",
+            )
+            self.assertEqual(recovered_from_parsed, accepted)
+            tampered_parsed = json.loads(dispatch.read_text())
+            tampered_parsed.pop("accepted_result", None)
+            tampered_parsed.pop("accepted_result_sha256", None)
+            tampered_parsed.pop("accepted_input_packet_sha256", None)
+            tampered_parsed.pop("accepted_judge_id", None)
+            tampered_parsed.pop("accepted_judge_configuration_sha256", None)
+            parsed = dict(tampered_parsed["parsed_result"])
+            parsed["ground_truth"] = True
+            tampered_parsed["parsed_result"] = parsed
+            tampered_parsed["parsed_result_sha256"] = _hash(
+                json.dumps(parsed, ensure_ascii=False, sort_keys=True)
+            )
+            _secure_write(dispatch, json.dumps(tampered_parsed))
+            with self.assertRaisesRegex(ValueError, "unsupported"):
+                incidents_module._recover_validated_incident_causal_result(
+                    packet, dispatch, judge_id="causal", configuration_sha256="config",
+                )
+            record["accepted_result"]["bundle_assessment"] = "tampered"
+            _secure_write(dispatch, json.dumps(record))
+            with self.assertRaisesRegex(RuntimeError, "digest"):
+                incidents_module._recover_validated_incident_causal_result(
+                    packet, dispatch, judge_id="causal", configuration_sha256="config",
+                )
+
+    def test_legacy_causal_checkpoint_is_explicitly_unassessable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            packet = {
+                "protocol_version": "incident-causal-inputs-v1-source-bound",
+                "opportunity_id_hash": "case",
+                "incident_case_id_hash": "case",
+                "goal_thread_id_hash": "root",
+                "scan_run_id": "run",
+                "topic": "search_scope",
+                "allowed_source_event_ids": ["event-1"],
+                "allowed_boundary_ids": ["boundary-1"],
+                "source_events": [],
+                "compaction_opportunities": [],
+            }
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            input_path.write_text(json.dumps(packet) + "\n")
+            phase = lambda status: {
+                "status": status, "summary": status, "evidence_ids": [],
+            }
+            legacy_row = {
+                "incident_case_id_hash": "case",
+                "bundle_assessment": "legacy",
+                "episodes": [{
+                    "episode_key": "legacy",
+                    "classification": "UNRESOLVED",
+                    "T0": phase("UNASSESSABLE"), "T1": phase("UNASSESSABLE"),
+                    "T2": phase("UNASSESSABLE"), "T3": phase("UNASSESSABLE"),
+                    "T4": phase("UNASSESSABLE"), "T5": phase("UNASSESSABLE"),
+                    "compaction_caused": "UNCERTAIN", "wrong_action": "UNCERTAIN",
+                    "engineering_consequence": "UNCERTAIN",
+                    "ordinary_reasoning_better_explanation": "UNCERTAIN",
+                    "confidence": 0.2, "rationale": "legacy",
+                }],
+                "api_request_id": "request", "api_response_id": "response",
+                "api_status": "completed", "api_usage": {
+                    "input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                }, "judge_attempt": 1,
+            }
+            checkpoint = output / "incident_causal_prelabels_v1.jsonl"
+            checkpoint.write_text(json.dumps(legacy_row) + "\n")
+            legacy_checkpoint_content = checkpoint.read_text()
+            dispatch_dir = output / "api_dispatch_incident_causal_v1"
+            dispatch_dir.mkdir()
+            judge_id, config = "causal", "config"
+            dispatch = {
+                "status": "RESPONSE_VALIDATED_PENDING_CHECKPOINT",
+                "scan_run_id": "run", "opportunity_id_hash": "case",
+                "judge_id": judge_id, "judge_configuration_sha256": config,
+                "input_packet_sha256": _hash(json.dumps(packet, sort_keys=True)),
+                "api_request_id": "request", "api_response_id": "response",
+                "api_status": "completed", "api_usage": legacy_row["api_usage"],
+                "judge_attempt": 1,
+            }
+            (dispatch_dir / f"{_hash(f'{judge_id}:{config}:case')}.json").write_text(
+                json.dumps(dispatch)
+            )
+            (output / "trajectory_manifest.json").write_text(json.dumps({
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL", "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": _hash(input_path.read_bytes()),
+                },
+            }))
+
+            class NoCallJudge:
+                judge_id = "causal"
+                configuration_sha256 = "config"
+
+                def __init__(self, dispatch_log_dir):
+                    self.dispatch_log_dir = dispatch_log_dir
+
+                def grade(self, packet):
+                    raise AssertionError("legacy unassessable recovery must not call the API")
+
+            with self.assertRaisesRegex(RuntimeError, "accepted-result provenance"):
+                run_incident_causal_prelabels(workspace, NoCallJudge(dispatch_dir), workers=1)
+            result = run_incident_causal_prelabels(
+                workspace, NoCallJudge(dispatch_dir), workers=1, allow_legacy_unassessable=True,
+            )
+            self.assertEqual(result["classification_counts"], {"UNASSESSABLE": 1})
+            reconciled = json.loads(checkpoint.read_text())
+            self.assertEqual(reconciled["machine_result_status"], "UNASSESSABLE_OUTPUT_FAILURE")
+            self.assertTrue((output / "incident_causal_prelabels_v1.jsonl.legacy").is_file())
+            dispatch_after = json.loads(next(dispatch_dir.glob("*.json")).read_text())
+            self.assertEqual(dispatch_after["status"], "UNASSESSABLE_OUTPUT_FAILURE")
+            self.assertEqual(
+                (output / "incident_causal_prelabels_v1.jsonl.legacy").read_text(),
+                legacy_checkpoint_content,
+            )
+            self.assertEqual(prepare_incident_causal_review(workspace)["review_item_count"], 1)
+
+            # Simulate a crash after dispatch binding but before checkpoint
+            # replacement. The next run must recover the exact bound placeholder
+            # rather than trusting the stale legacy row or resending the request.
+            bound_placeholder = json.loads(checkpoint.read_text())
+            checkpoint.write_text(legacy_checkpoint_content)
+            recovered = run_incident_causal_prelabels(
+                workspace, NoCallJudge(dispatch_dir), workers=1, allow_legacy_unassessable=True,
+            )
+            self.assertEqual(recovered["classification_counts"], {"UNASSESSABLE": 1})
+            self.assertEqual(json.loads(checkpoint.read_text()), bound_placeholder)
+
+            # Also cover the missing-checkpoint window: only the already-bound
+            # dispatch exists, so recovery must reconstruct the checkpoint
+            # without invoking the judge.
+            checkpoint.unlink()
+            recovered_missing = run_incident_causal_prelabels(
+                workspace, NoCallJudge(dispatch_dir), workers=1, allow_legacy_unassessable=True,
+            )
+            self.assertEqual(recovered_missing["classification_counts"], {"UNASSESSABLE": 1})
+            self.assertEqual(json.loads(checkpoint.read_text()), bound_placeholder)
+
+    def test_incident_causal_review_queue_requires_complete_bound_prelabels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            checkpoint_path = output / "incident_causal_prelabels_v1.jsonl"
+            packet = {
+                "protocol_version": "incident-causal-inputs-v1-source-bound",
+                "opportunity_id_hash": "case",
+                "incident_case_id_hash": "case",
+                "goal_thread_id_hash": "root",
+                "scan_run_id": "run",
+                "topic": "search_scope",
+                "source_events": [{"evidence_id": "event-1", "sequence": 1, "content": "state"}],
+                "compaction_opportunities": [{"boundary_id_hash": "boundary-1", "compaction_event": {"sequence": 2}}],
+                "allowed_source_event_ids": ["event-1"],
+                "allowed_boundary_ids": ["boundary-1"],
+            }
+            input_path.write_text(json.dumps(packet) + "\n")
+            phase = lambda status, ids=(): {"status": status, "summary": status, "evidence_ids": list(ids)}
+            row = {
+                "incident_case_id_hash": "case",
+                "bundle_assessment": "one episode",
+                "episodes": [{
+                    "episode_key": "episode",
+                    "classification": "UNRESOLVED",
+                    "T0": phase("UNASSESSABLE"), "T1": phase("UNASSESSABLE"),
+                    "T2": phase("UNASSESSABLE"), "T3": phase("UNASSESSABLE"),
+                    "T4": phase("UNASSESSABLE"), "T5": phase("UNASSESSABLE"),
+                    "compaction_caused": "UNCERTAIN", "wrong_action": "UNCERTAIN",
+                    "engineering_consequence": "UNCERTAIN",
+                    "ordinary_reasoning_better_explanation": "UNCERTAIN",
+                    "confidence": 0.2, "rationale": "uncertain",
+                }],
+                "api_request_id": "request", "api_response_id": "response",
+                "api_status": "completed", "api_usage": {
+                    "input_tokens": 1, "output_tokens": 1, "total_tokens": 2,
+                    "input_tokens_details": {"cached_tokens": 0},
+                    "output_tokens_details": {"reasoning_tokens": 0},
+                }, "judge_attempt": 1,
+            }
+            checkpoint_path.write_text(json.dumps(row) + "\n")
+            config = "config"
+            judge_id = "causal"
+            record_id = _hash(f"{judge_id}:{config}:case")
+            dispatch_dir = output / "api_dispatch_incident_causal_v1"
+            dispatch_dir.mkdir()
+            dispatch = {
+                "status": "RESPONSE_VALIDATED_PENDING_CHECKPOINT",
+                "scan_run_id": "run", "opportunity_id_hash": "case",
+                "judge_id": judge_id, "judge_configuration_sha256": config,
+                "input_packet_sha256": _hash(json.dumps(packet, sort_keys=True)),
+                "api_request_id": "request", "api_response_id": "response",
+                "api_status": "completed", "api_usage": row["api_usage"],
+                "judge_attempt": 1,
+                "accepted_result": row,
+                "accepted_result_sha256": _hash(
+                    json.dumps(row, ensure_ascii=False, sort_keys=True)
+                ),
+            }
+            (dispatch_dir / f"{record_id}.json").write_text(json.dumps(dispatch))
+            manifest = {
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL",
+                    "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": _hash(input_path.read_bytes()),
+                },
+                "incident_causal_prelabels_v1": {
+                    "status": "MACHINE_PRELABEL_COMPLETE_PENDING_FULL_CONTEXT_REVIEW",
+                    "review_bundle_count": 1,
+                    "incident_causal_prelabels_sha256": _hash(checkpoint_path.read_bytes()),
+                    "judge_id": judge_id,
+                    "judge_configuration_sha256": config,
+                    "dispatch_log_dir": str(dispatch_dir),
+                },
+            }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            result = prepare_incident_causal_review(workspace)
+            self.assertEqual(result["status"], "PENDING_HUMAN_REVIEW")
+            self.assertEqual(result["review_item_count"], 1)
+            self.assertFalse(result["ground_truth"])
+            self.assertTrue((output / "incident_causal_review_queue_v1.jsonl").is_file())
+
+    def test_incident_causal_review_adjudication_requires_human_bound_answers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            queue_path = output / "incident_causal_review_queue_v1.jsonl"
+            queue = {
+                "review_item_id": "item", "incident_case_id_hash": "case",
+                "episode_key": "episode", "goal_thread_id_hash": "root",
+                "allowed_source_event_ids": ["event-1"],
+                "allowed_boundary_ids": ["boundary-1"],
+                "machine_classification": "DRIFT_NEAR_MISS",
+                "machine_confidence": 0.8,
+            }
+            input_packet = {
+                "incident_case_id_hash": "case", "allowed_source_event_ids": ["event-1"],
+                "allowed_boundary_ids": ["boundary-1"],
+            }
+            input_content = json.dumps(input_packet, sort_keys=True) + "\n"
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            input_path.write_text(input_content)
+            input_sha = _hash(input_path.read_bytes())
+            queue["context_packet_sha256"] = _hash(
+                json.dumps(input_packet, ensure_ascii=False, sort_keys=True)
+            )
+            queue_path.write_text(json.dumps(queue) + "\n")
+            queue_manifest = {
+                "status": "PENDING_HUMAN_REVIEW", "scan_run_id": "run",
+                "review_queue_sha256": _hash(queue_path.read_bytes()),
+                "review_context_sha256": input_sha,
+                "review_item_count": 1,
+            }
+            (output / "incident_causal_review_manifest_v1.json").write_text(json.dumps(queue_manifest))
+            (output / "trajectory_manifest.json").write_text(json.dumps({
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL", "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": input_sha,
+                },
+            }))
+            phase = lambda status, ids=(): {"status": status, "summary": status, "evidence_ids": list(ids)}
+            answer = {
+                "incident_case_id_hash": "case", "episode_key": "episode",
+                "classification": "DRIFT_NEAR_MISS",
+                "T0": phase("PRESENT", ["event-1"]), "T1": phase("PRESENT", ["boundary-1"]),
+                "T2": phase("PRESENT", ["event-1"]), "T3": phase("ABSENT"),
+                "T4": phase("ABSENT"), "T5": phase("ABSENT"),
+                "compaction_caused": "YES", "wrong_action": "YES",
+                "engineering_consequence": "NO",
+                "ordinary_reasoning_better_explanation": "NO",
+                "confidence": 0.9, "rationale": "corrected before consequence",
+            }
+            answers_path = workspace / "answers.json"
+            answers_path.write_text(json.dumps({
+                "scan_run_id": "run",
+                "review_queue_sha256": _hash(queue_path.read_bytes()),
+                "review_context_sha256": input_sha,
+                "reviewer_type": "HUMAN_CONFIRMED",
+                "answers": [answer],
+            }))
+            result = adjudicate_incident_causal_review(workspace, answers_path)
+            self.assertEqual(result["status"], "HUMAN_ADJUDICATION_COMPLETE")
+            self.assertTrue(result["human_ground_truth"])
+            self.assertEqual(result["classification_counts"]["DRIFT_NEAR_MISS"], 1)
+            answers_path.write_text(json.dumps({
+                "scan_run_id": "run",
+                "review_queue_sha256": _hash(queue_path.read_bytes()),
+                "review_context_sha256": input_sha,
+                "reviewer_type": "HUMAN_CONFIRMED",
+                "answers": [{**answer, "ground_truth": True}],
+            }))
+            with self.assertRaisesRegex(ValueError, "unsupported or missing fields"):
+                adjudicate_incident_causal_review(workspace, answers_path)
+
+            queue_path.write_text(json.dumps(queue) + "\n" + json.dumps(queue) + "\n")
+            (output / "incident_causal_review_manifest_v1.json").write_text(json.dumps({
+                **queue_manifest,
+                "review_queue_sha256": _hash(queue_path.read_bytes()),
+                "review_item_count": 2,
+            }))
+            answers_path.write_text(json.dumps({
+                "scan_run_id": "run",
+                "review_queue_sha256": _hash(queue_path.read_bytes()),
+                "review_context_sha256": input_sha,
+                "reviewer_type": "HUMAN_CONFIRMED",
+                "answers": [answer],
+            }))
+            with self.assertRaisesRegex(RuntimeError, "duplicate episode identities"):
+                adjudicate_incident_causal_review(workspace, answers_path)
+
+            answers_path.write_text(json.dumps({
+                "scan_run_id": "run",
+                "review_queue_sha256": _hash(queue_path.read_bytes()),
+                "review_context_sha256": input_sha,
+                "reviewer_type": "MACHINE_PRELABEL",
+                "answers": [answer],
+            }))
+            with self.assertRaisesRegex(ValueError, "HUMAN_CONFIRMED"):
+                adjudicate_incident_causal_review(workspace, answers_path)
+
+    def test_incident_causal_triaged_adjudication_allows_auxiliary_machine_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            selected = {
+                "review_item_id": "selected-item", "incident_case_id_hash": "selected-case",
+                "episode_key": "selected-episode", "goal_thread_id_hash": "root",
+                "allowed_source_event_ids": ["event-1"], "allowed_boundary_ids": ["boundary-1"],
+                "machine_classification": "DRIFT_NEAR_MISS", "machine_confidence": 0.8,
+            }
+            auxiliary = {
+                "review_item_id": "auxiliary-item", "incident_case_id_hash": "auxiliary-case",
+                "episode_key": "auxiliary-episode", "goal_thread_id_hash": "root",
+                "allowed_source_event_ids": ["event-2"], "allowed_boundary_ids": ["boundary-2"],
+                "machine_classification": "VALID_PLAN_UPDATE", "machine_confidence": 0.9,
+            }
+            input_packets = [
+                {"incident_case_id_hash": "selected-case", "allowed_source_event_ids": ["event-1"],
+                 "allowed_boundary_ids": ["boundary-1"]},
+                {"incident_case_id_hash": "auxiliary-case", "allowed_source_event_ids": ["event-2"],
+                 "allowed_boundary_ids": ["boundary-2"]},
+            ]
+            input_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in input_packets)
+            input_path = output / "incident_causal_inputs_v1.jsonl"
+            input_path.write_text(input_content)
+            input_sha = _hash(input_path.read_bytes())
+            selected["context_packet_sha256"] = _hash(
+                json.dumps(input_packets[0], ensure_ascii=False, sort_keys=True)
+            )
+            auxiliary["context_packet_sha256"] = _hash(
+                json.dumps(input_packets[1], ensure_ascii=False, sort_keys=True)
+            )
+            full_queue_path = output / "incident_causal_review_queue_v1.jsonl"
+            full_queue_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in (selected, auxiliary))
+            full_queue_path.write_text(full_queue_content)
+            full_queue_sha = _hash(full_queue_path.read_bytes())
+            (output / "incident_causal_review_manifest_v1.json").write_text(json.dumps({
+                "status": "PENDING_HUMAN_REVIEW", "scan_run_id": "run",
+                "review_queue_sha256": full_queue_sha, "review_context_sha256": input_sha,
+                "source_prelabels_sha256": "prelabels",
+                "review_item_count": 2,
+            }))
+            (output / "trajectory_manifest.json").write_text(json.dumps({
+                "scan_run_id": "run",
+                "incident_causal_inputs_v1": {
+                    "status": "READY_FOR_MACHINE_PRELABEL", "scan_run_id": "run",
+                    "incident_causal_inputs_sha256": input_sha,
+                },
+            }))
+            triage = {**selected, "human_review_required": True, "triage_bucket": "DRIFT_NEAR_MISS"}
+            triage_path = output / "incident_causal_human_triage_queue_v1.jsonl"
+            triage_path.write_text(json.dumps(triage, sort_keys=True) + "\n")
+            triage_sha = _hash(triage_path.read_bytes())
+            (output / "incident_causal_human_triage_manifest_v1.json").write_text(json.dumps({
+                "status": "PENDING_HUMAN_REVIEW_TRIAGED", "scan_run_id": "run",
+                "source_full_review_queue_sha256": full_queue_sha,
+                "source_prelabels_sha256": "prelabels",
+                "human_review_item_count": 1,
+                "triage_queue_sha256": triage_sha,
+            }))
+            phase = lambda status, ids=(): {"status": status, "summary": status, "evidence_ids": list(ids)}
+            answer = {
+                "incident_case_id_hash": "selected-case", "episode_key": "selected-episode",
+                "classification": "DRIFT_NEAR_MISS",
+                "T0": phase("PRESENT", ["event-1"]), "T1": phase("PRESENT", ["boundary-1"]),
+                "T2": phase("PRESENT", ["event-1"]), "T3": phase("ABSENT"),
+                "T4": phase("ABSENT"), "T5": phase("ABSENT"),
+                "compaction_caused": "YES", "wrong_action": "YES",
+                "engineering_consequence": "NO", "ordinary_reasoning_better_explanation": "NO",
+                "confidence": 0.9, "rationale": "corrected before consequence",
+            }
+            answers_path = workspace / "triaged-answers.json"
+            answers_path.write_text(json.dumps({
+                "scan_run_id": "run", "review_queue_kind": "TRIAGED",
+                "review_queue_sha256": triage_sha, "review_context_sha256": input_sha,
+                "reviewer_type": "HUMAN_CONFIRMED", "answers": [answer],
+            }))
+            result = adjudicate_incident_causal_review(workspace, answers_path)
+            self.assertEqual(result["status"], "HUMAN_ADJUDICATION_TRIAGE_COMPLETE")
+            self.assertEqual(result["review_scope"], "TRIAGED")
+            self.assertEqual(result["review_item_count"], 1)
+            self.assertEqual(result["classification_counts"], {"DRIFT_NEAR_MISS": 1})
+            ground_truth = [json.loads(line) for line in (output / "incident_causal_ground_truth_v1.jsonl").read_text().splitlines()]
+            self.assertEqual(len(ground_truth), 1)
+            self.assertEqual(ground_truth[0]["review_queue_kind"], "TRIAGED")
+            review_manifest_path = output / "incident_causal_review_manifest_v1.json"
+            review_manifest = json.loads(review_manifest_path.read_text())
+            review_manifest["review_context_sha256"] = "stale-context"
+            review_manifest_path.write_text(json.dumps(review_manifest))
+            with self.assertRaisesRegex(RuntimeError, "review context"):
+                adjudicate_incident_causal_review(workspace, answers_path)
+
+    def test_incident_fragment_inputs_cover_real_compactions_not_transport_shards(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            output = workspace / "data/screening"
+            output.mkdir(parents=True)
+            windows = [
+                {
+                    "opportunity_id_hash": "shard-1", "parent_opportunity_id_hash": "parent-a",
+                    "goal_thread_id_hash": "goal", "boundary_id_hash": "boundary-a",
+                    "scan_run_id": "run", "compaction_event": {"timestamp": "2026-01-01T00:00:00Z", "sequence": 10},
+                },
+                {
+                    "opportunity_id_hash": "shard-2", "parent_opportunity_id_hash": "parent-a",
+                    "goal_thread_id_hash": "goal", "boundary_id_hash": "boundary-a",
+                    "scan_run_id": "run", "compaction_event": {"timestamp": "2026-01-01T00:00:00Z", "sequence": 10},
+                },
+                {
+                    "opportunity_id_hash": "parent-b", "parent_opportunity_id_hash": "parent-b",
+                    "goal_thread_id_hash": "goal", "boundary_id_hash": "boundary-b",
+                    "scan_run_id": "run", "compaction_event": {"timestamp": "2026-01-01T00:01:00Z", "sequence": 20},
+                },
+            ]
+            window_content = "".join(json.dumps(row) + "\n" for row in windows)
+            (output / "trajectory_windows.jsonl").write_text(window_content)
+            findings = [
+                {
+                    "parent_opportunity_id_hash": "parent-a", "goal_thread_id_hash": "goal",
+                    "kind": "COMMITMENT", "source_event_ids": ["t0"], "topic": "scope",
+                    "statement": "keep scope", "authority": "USER",
+                    "action_specificity": "NOT_APPLICABLE", "discovery_directions": ["forward"],
+                },
+                {
+                    "parent_opportunity_id_hash": "parent-a", "goal_thread_id_hash": "goal",
+                    "kind": "CORRECTION_ANCHOR", "source_event_ids": ["t4"], "topic": "scope",
+                    "statement": "that was wrong", "authority": "USER",
+                    "action_specificity": "NOT_APPLICABLE", "discovery_directions": ["backward"],
+                },
+            ]
+            finding_content = "".join(json.dumps(row) + "\n" for row in findings)
+            (output / "trajectory_union_findings.jsonl").write_text(finding_content)
+            manifest = {
+                "scan_run_id": "run", "trajectory_window_count": 2,
+                "trajectory_windows_sha256": hashlib.sha256(window_content.encode()).hexdigest(),
+                "trajectory_union": {
+                    "status": "COMPLETE",
+                    "union_findings_sha256": hashlib.sha256(finding_content.encode()).hexdigest(),
+                },
+            }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            result = prepare_incident_fragment_inputs(workspace)
+            self.assertEqual(result["incident_fragment_input_count"], 2)
+            packets = [json.loads(line) for line in (output / "incident_fragment_inputs.jsonl").read_text().splitlines()]
+            first = next(row for row in packets if row["parent_opportunity_id_hash"] == "parent-a")
+            self.assertEqual(first["opportunity_id_hash"], "parent-a")
+            self.assertEqual(first["allowed_source_event_ids"], ["t0", "t4"])
+            self.assertEqual(first["allowed_anchor_event_ids"], ["t4"])
+
+    def test_incident_fragment_schema_and_validator_bind_source_and_anchor_evidence(self):
+        packet = {
+            "parent_opportunity_id_hash": "parent", "allowed_source_event_ids": ["t0", "t3", "t4"],
+            "allowed_anchor_event_ids": ["t4"],
+        }
+        schema = incident_fragment_schema(packet)
+        self.assertNotIn("uniqueItems", json.dumps(schema, sort_keys=True))
+        fragment_schema = schema["properties"]["fragments"]["items"]
+        self.assertEqual(fragment_schema["properties"]["source_event_ids"]["items"]["enum"], ["t0", "t3", "t4"])
+        self.assertEqual(fragment_schema["properties"]["anchor_event_ids"]["items"]["enum"], ["t4"])
+        valid = {
+            "parent_opportunity_id_hash": "parent", "confidence": 0.8,
+            "fragments": [{
+                "topic": "scope", "summary": "possible mismatch", "source_event_ids": ["t0", "t3", "t4"],
+                "anchor_event_ids": ["t4"], "signal_kinds": ["COMMITMENT", "CANDIDATE_ACTION", "CORRECTION_ANCHOR"],
+                "needs_earlier_link": True, "needs_later_link": False,
+            }],
+        }
+        validate_incident_fragment_result(packet, valid)
+        invalid = json.loads(json.dumps(valid))
+        invalid["fragments"][0]["anchor_event_ids"] = ["t3"]
+        with self.assertRaisesRegex(ValueError, "non-anchor"):
+            validate_incident_fragment_result(packet, invalid)
+        repeated_kind = json.loads(json.dumps(valid))
+        repeated_kind["fragments"][0]["signal_kinds"] = ["COMMITMENT", "COMMITMENT"]
+        with self.assertRaisesRegex(ValueError, "signal kinds"):
+            validate_incident_fragment_result(packet, repeated_kind)
+        normalized = _deduplicate_incident_fragment_ids(repeated_kind)
+        validate_incident_fragment_result(packet, normalized)
+        self.assertEqual(normalized["fragments"][0]["signal_kinds"], ["COMMITMENT"])
+
+    def test_incident_link_inputs_merge_shared_evidence_and_preserve_complete_partition(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "data/screening"
+            output.mkdir(parents=True)
+            inputs = [
+                {"parent_opportunity_id_hash": "p1", "goal_thread_id_hash": "root",
+                 "boundary_sequence": 10, "boundary_timestamp": "2026-08-18T00:00:00Z"},
+                {"parent_opportunity_id_hash": "p2", "goal_thread_id_hash": "root",
+                 "boundary_sequence": 20, "boundary_timestamp": "2026-08-18T00:01:00Z"},
+            ]
+            results = [
+                {"parent_opportunity_id_hash": "p1", "fragments": [
+                    {"topic": "scope", "summary": "original constraint", "source_event_ids": ["e1"],
+                     "anchor_event_ids": [], "signal_kinds": ["COMMITMENT"],
+                     "needs_earlier_link": False, "needs_later_link": True},
+                ]},
+                {"parent_opportunity_id_hash": "p2", "fragments": [
+                    {"topic": "scope", "summary": "later action", "source_event_ids": ["e1", "e2"],
+                     "anchor_event_ids": ["e2"], "signal_kinds": ["CANDIDATE_ACTION", "CORRECTION_ANCHOR"],
+                     "needs_earlier_link": True, "needs_later_link": False},
+                    {"topic": "other", "summary": "unrelated", "source_event_ids": ["e3"],
+                     "anchor_event_ids": [], "signal_kinds": ["TOPIC_ACTIVATION"],
+                     "needs_earlier_link": False, "needs_later_link": False},
+                ]},
+            ]
+            input_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in inputs)
+            result_content = "".join(json.dumps(row, sort_keys=True) + "\n" for row in results)
+            (output / "incident_fragment_inputs.jsonl").write_text(input_content)
+            (output / "incident_fragment_results.jsonl").write_text(result_content)
+            (output / "trajectory_manifest.json").write_text(json.dumps({
+                "scan_run_id": "scan",
+                "incident_fragment_inputs": {
+                    "incident_fragment_inputs_sha256": hashlib.sha256(input_content.encode()).hexdigest(),
+                },
+                "incident_fragment_grading": {
+                    "status": "COMPLETE",
+                    "incident_fragment_results_sha256": hashlib.sha256(result_content.encode()).hexdigest(),
+                },
+            }))
+            prepared = prepare_incident_link_inputs(Path(tmp))
+            self.assertEqual(prepared["incident_component_count"], 2)
+            packets = [json.loads(line) for line in (output / "incident_link_inputs_v3.jsonl").read_text().splitlines()]
+            self.assertEqual(len(packets), 1)
+            self.assertEqual(sum(len(row["components"]) for row in packets), 2)
+            merged = next(row for row in packets[0]["components"] if row["fragment_count"] == 2)
+            self.assertEqual(merged["first_boundary_sequence"], 10)
+            self.assertEqual(merged["last_boundary_sequence"], 20)
+            self.assertEqual(set(merged["signal_kinds"]), {"COMMITMENT", "CANDIDATE_ACTION", "CORRECTION_ANCHOR"})
+
+    def test_incident_link_result_must_partition_every_component_once(self):
+        packet = {
+            "link_packet_id_hash": "packet", "allowed_component_ids": ["a", "b", "c"],
+        }
+        schema = incident_link_schema(packet)
+        self.assertNotIn("uniqueItems", json.dumps(schema, sort_keys=True))
+        self.assertEqual(
+            schema["properties"]["assignments"]["required"],
+            ["a", "b", "c"],
+        )
+        self.assertEqual(
+            set(schema["properties"]["assignments"]["properties"]), {"a", "b", "c"},
+        )
+        valid = {
+            "link_packet_id_hash": "packet",
+            "clusters": [
+                {"topic": "one", "summary": "same episode", "component_ids": ["a", "b"],
+                 "needs_cross_shard_link": False, "confidence": 0.9},
+                {"topic": "two", "summary": "separate episode", "component_ids": ["c"],
+                 "needs_cross_shard_link": True, "confidence": 0.7},
+            ],
+        }
+        validate_incident_link_result(packet, valid)
+        duplicate = json.loads(json.dumps(valid))
+        duplicate["clusters"][1]["component_ids"] = ["b", "c"]
+        with self.assertRaisesRegex(ValueError, "partition"):
+            validate_incident_link_result(packet, duplicate)
+        missing = json.loads(json.dumps(valid))
+        missing["clusters"] = missing["clusters"][:1]
+        with self.assertRaisesRegex(ValueError, "partition"):
+            validate_incident_link_result(packet, missing)
+        converted = _assignments_to_incident_link_result(packet, {
+            "link_packet_id_hash": "packet",
+            "assignments": {
+                "a": {"event_key": "scope-change", "topic": "scope", "summary": "same event",
+                      "needs_cross_shard_link": False, "confidence": 0.9},
+                "b": {"event_key": "scope-change", "topic": "scope", "summary": "same event later",
+                      "needs_cross_shard_link": True, "confidence": 0.8},
+                "c": {"event_key": "test-failure", "topic": "tests", "summary": "different event",
+                      "needs_cross_shard_link": False, "confidence": 0.95},
+            },
+        }, {})
+        validate_incident_link_result(packet, converted)
+        self.assertEqual(sorted(len(row["component_ids"]) for row in converted["clusters"]), [1, 2])
+
+    def test_cross_and_goal_global_link_inputs_preserve_every_cluster_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "data/screening"
+            output.mkdir(parents=True)
+            first_inputs = [{
+                "link_packet_id_hash": "p1", "goal_thread_id_hash": "root",
+                "allowed_component_ids": ["a", "b"],
+            }]
+            first_results = [{
+                "link_packet_id_hash": "p1", "clusters": [
+                    {"event_key": "one", "topic": "scope", "summary": "first",
+                     "component_ids": ["a"], "needs_cross_shard_link": True, "confidence": 0.9},
+                    {"event_key": "two", "topic": "scope", "summary": "second",
+                     "component_ids": ["b"], "needs_cross_shard_link": True, "confidence": 0.8},
+                ],
+            }]
+            first_input_content = "".join(json.dumps(row) + "\n" for row in first_inputs)
+            first_result_content = "".join(json.dumps(row) + "\n" for row in first_results)
+            (output / "incident_link_inputs_v3.jsonl").write_text(first_input_content)
+            (output / "incident_link_results_v3.jsonl").write_text(first_result_content)
+            manifest = {
+                "scan_run_id": "scan",
+                "incident_link_inputs_v3": {"status": "READY", "incident_link_inputs_sha256": hashlib.sha256(first_input_content.encode()).hexdigest()},
+                "incident_link_grading_v3": {"status": "COMPLETE", "incident_link_results_sha256": hashlib.sha256(first_result_content.encode()).hexdigest()},
+            }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            cross = prepare_cross_shard_incident_link_inputs(Path(tmp))
+            self.assertEqual(cross["incident_component_count"], 2)
+            cross_packets = [json.loads(line) for line in (output / "incident_cross_shard_inputs_v1.jsonl").read_text().splitlines()]
+            self.assertEqual(sum(len(row["allowed_component_ids"]) for row in cross_packets), 2)
+
+            cross_result = [{
+                "link_packet_id_hash": cross_packets[0]["link_packet_id_hash"],
+                "clusters": [
+                    {"event_key": "same", "topic": "scope", "summary": "combined",
+                     "component_ids": cross_packets[0]["allowed_component_ids"],
+                     "needs_cross_shard_link": False, "confidence": 0.9},
+                ],
+            }]
+            cross_result_content = "".join(json.dumps(row) + "\n" for row in cross_result)
+            (output / "incident_cross_shard_results_v1.jsonl").write_text(cross_result_content)
+            manifest = json.loads((output / "trajectory_manifest.json").read_text())
+            manifest["incident_cross_shard_grading_v1"] = {
+                "status": "COMPLETE",
+                "incident_link_results_sha256": hashlib.sha256(cross_result_content.encode()).hexdigest(),
+            }
+            (output / "trajectory_manifest.json").write_text(json.dumps(manifest))
+            global_ready = prepare_goal_global_incident_link_inputs(Path(tmp))
+            self.assertEqual(global_ready["incident_component_count"], 1)
+            self.assertEqual(global_ready["incident_link_input_count"], 1)
+    def test_replay_reads_real_replacement_history_without_image_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "compacted", "payload": {
+                    "message": "",
+                    "replacement_history": [{
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Keep the approved plan. <image>{\"image_url\":\"data:image/png;base64,AAAA\"}</image>"}],
+                    }],
+                }},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "continue"}},
+            ]
+            content = "".join(json.dumps(row) + "\n" for row in rows).encode()
+            path.write_bytes(content)
+            boundary = _hash(_event_basis(rows[1], 2))
+            history = _replacement_history({
+                "source_path": str(path),
+                "scanned_bytes": len(content),
+                "scanned_prefix_sha256": hashlib.sha256(content).hexdigest(),
+            }, boundary)
+            self.assertEqual(len(history), 1)
+            self.assertIn("Keep the approved plan", history[0]["content"])
+            self.assertNotIn("data:image", history[0]["content"])
+            self.assertIn("visual content unassessed", history[0]["content"])
+
+    def test_causal_reconstruction_keeps_adjacent_target_compactions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1"}},
+                {"timestamp": "2026-08-16T00:01:00Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": "Keep constraint A."}},
+                {"timestamp": "2026-08-16T00:01:30Z", "type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "call_id": "before", "arguments": {"cmd": "python -m unittest"}}},
+                {"timestamp": "2026-08-16T00:02:00Z", "type": "compacted", "payload": {"content": "First summary."}},
+                {"timestamp": "2026-08-16T00:02:10Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "before", "output": {"exit_code": 1, "output": "pre-boundary call completed late"}}},
+                {"timestamp": "2026-08-16T00:02:20Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": "First plan."}},
+                {"timestamp": "2026-08-16T00:02:30Z", "type": "compacted", "payload": {"content": "Second summary."}},
+                {"timestamp": "2026-08-16T00:02:40Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": "Second plan."}},
+            ]
+            content = "".join(json.dumps(row) + "\n" for row in rows).encode()
+            path.write_bytes(content)
+            state_packets = {}
+            for line_number in (4, 7):
+                row = rows[line_number - 1]
+                boundary = _hash(_event_basis(row, line_number))
+                opportunity = f"opportunity-{line_number}"
+                state_packets[opportunity] = {
+                    "scan_run_id": "scan",
+                    "opportunity_id_hash": opportunity,
+                    "session_id_hash": _hash("s1"),
+                    "source_prefix_sha256": hashlib.sha256(content).hexdigest(),
+                    "cutoff": {"boundary_id_hash": boundary},
+                    "pre_compaction_events": [],
+                    "compaction_summary_events": [],
+                    "post_compaction_plan_events": [],
+                }
+            packets = _causal_packets_for_session({
+                "source_path": str(path),
+                "scanned_bytes": len(content),
+                "scanned_prefix_sha256": hashlib.sha256(content).hexdigest(),
+            }, state_packets)
+            self.assertEqual(
+                [row["opportunity_id_hash"] for row in packets],
+                ["opportunity-4", "opportunity-7"],
+            )
+            self.assertEqual(packets[0]["verified_engineering_outcomes"], [])
+
+    def test_causal_reconstruction_does_not_cap_late_actions_outcomes_or_followups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "rollout.jsonl"
+            rows = [
+                {"timestamp": "2026-08-16T00:00:00Z", "type": "session_meta", "payload": {"id": "s1"}},
+                {"timestamp": "2026-08-16T00:00:01Z", "type": "compacted", "payload": {"content": "summary"}},
+            ]
+            for index in range(25):
+                rows.extend([
+                    {"timestamp": f"2026-08-16T00:01:{index:02d}Z", "type": "response_item", "payload": {
+                        "type": "function_call", "name": "exec_command", "call_id": f"call-{index}",
+                        "arguments": {"cmd": "python -m unittest"},
+                    }},
+                    {"timestamp": f"2026-08-16T00:02:{index:02d}Z", "type": "response_item", "payload": {
+                        "type": "function_call_output", "call_id": f"call-{index}",
+                        "output": {"exit_code": 0, "output": f"result {index}"},
+                    }},
+                ])
+            for index in range(8):
+                rows.append({
+                    "timestamp": f"2026-08-16T00:03:{index:02d}Z", "type": "response_item",
+                    "payload": {"type": "message", "role": "user", "content": f"followup {index}"},
+                })
+            content = "".join(json.dumps(row) + "\n" for row in rows).encode()
+            path.write_bytes(content)
+            boundary = _hash(_event_basis(rows[1], 2))
+            packets = _causal_packets_for_session({
+                "source_path": str(path),
+                "scanned_bytes": len(content),
+                "scanned_prefix_sha256": hashlib.sha256(content).hexdigest(),
+            }, {"opportunity": {
+                "scan_run_id": "scan", "opportunity_id_hash": "opportunity",
+                "session_id_hash": _hash("s1"),
+                "source_prefix_sha256": hashlib.sha256(content).hexdigest(),
+                "cutoff": {"boundary_id_hash": boundary},
+                "pre_compaction_events": [], "compaction_summary_events": [],
+                "post_compaction_plan_events": [],
+            }})
+            self.assertEqual(len(packets[0]["action_events"]), 25)
+            self.assertEqual(len(packets[0]["verified_engineering_outcomes"]), 25)
+            self.assertEqual(len(packets[0]["user_followup_events"]), 8)
+
     def test_semantic_event_preserves_annotation_and_complete_user_request(self):
         text = """
         # Response annotations:
@@ -233,6 +2381,36 @@ class CoordyTests(unittest.TestCase):
                     allow_http_504_retry=True,
                 )
 
+    def test_explicit_http_502_retry_is_once_and_audited(self):
+        packet = {"opportunity_id_hash": "op-502", "scan_run_id": "run-1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = _claim_api_dispatch(
+                directory, judge_id="judge", configuration_sha256="config", packet=packet,
+            )
+            failed = json.loads(path.read_text())
+            failed.update({
+                "status": "HTTP_ERROR_NO_RETRY", "http_status": 502,
+                "api_request_id": "request-reached-proxy",
+            })
+            _secure_write(path, json.dumps(failed))
+            retried = _claim_api_dispatch(
+                directory, judge_id="judge", configuration_sha256="config", packet=packet,
+                allow_http_502_retry=True,
+            )
+            record = json.loads(retried.read_text())
+            self.assertEqual(record["judge_attempt"], 2)
+            self.assertEqual(record["prior_attempts"], [{
+                "status": "HTTP_ERROR_NO_RETRY", "judge_attempt": 1, "http_status": 502,
+            }])
+            record.update({"status": "HTTP_ERROR_NO_RETRY", "http_status": 502})
+            _secure_write(path, json.dumps(record))
+            with self.assertRaisesRegex(NonRetryableJudgeError, "automatic resend is forbidden"):
+                _claim_api_dispatch(
+                    directory, judge_id="judge", configuration_sha256="config", packet=packet,
+                    allow_http_502_retry=True,
+                )
+
     def test_preconnection_dns_failure_can_resume_without_claiming_dispatch(self):
         packet = {"opportunity_id_hash": "op-dns", "scan_run_id": "run-1"}
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +2440,60 @@ class CoordyTests(unittest.TestCase):
             self.assertEqual(record["judge_attempt"], 2)
             self.assertEqual(record["prior_attempts"][0]["status"], "NOT_DISPATCHED_DNS_FAILURE")
             self.assertEqual(record["prior_attempts"][0]["transport_error_type"], "gaierror")
+
+    def test_preconnection_dns_failure_does_not_consume_http_504_retry_budget(self):
+        packet = {"opportunity_id_hash": "op-mixed", "scan_run_id": "run-1"}
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            path = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+            )
+            first = json.loads(path.read_text())
+            first.update({"status": "HTTP_ERROR_NO_RETRY", "http_status": 504})
+            _secure_write(path, json.dumps(first))
+
+            _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+                allow_http_504_retry=True,
+            )
+            second = json.loads(path.read_text())
+            second.update({
+                "status": "NOT_DISPATCHED_DNS_FAILURE",
+                "transport_error_type": "gaierror",
+            })
+            _secure_write(path, json.dumps(second))
+
+            third = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+                allow_http_504_retry=True,
+            )
+            third_record = json.loads(third.read_text())
+            self.assertEqual(third_record["judge_attempt"], 3)
+            third_record.update({"status": "HTTP_ERROR_NO_RETRY", "http_status": 504})
+            _secure_write(path, json.dumps(third_record))
+
+            fourth = _claim_api_dispatch(
+                directory,
+                judge_id="judge",
+                configuration_sha256="config",
+                packet=packet,
+                allow_http_504_retry=True,
+            )
+            fourth_record = json.loads(fourth.read_text())
+            self.assertEqual(fourth_record["judge_attempt"], 4)
+            self.assertEqual(
+                [attempt.get("http_status") for attempt in fourth_record["prior_attempts"]].count(504),
+                2,
+            )
 
     def test_secondary_state_judge_uses_targeted_root_balanced_review(self):
         packets = [
@@ -1693,7 +3925,7 @@ class CoordyTests(unittest.TestCase):
                 {"timestamp": "2026-08-16T00:05:00Z", "type": "response_item", "payload": {"id": "call", "call_id": "c1", "type": "function_call", "name": "exec_command", "arguments": json.dumps({"cmd": "python -m unittest test_preserves_constraint"})}},
                 {"timestamp": "2026-08-16T00:06:00Z", "type": "response_item", "payload": {"id": "result", "call_id": "c1", "type": "function_call_output", "output": structured_result}},
                 {"timestamp": "2026-08-16T00:07:00Z", "type": "event_msg", "payload": {"id": "patch", "type": "patch_apply_end", "success": True, "changes": [{"path": "/repo/private.py"}]}},
-                {"timestamp": "2026-08-16T00:08:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "Restore the compatibility constraint."}},
+                {"timestamp": "2026-08-16T00:08:00Z", "type": "response_item", "payload": {"id": "correction", "type": "message", "role": "user", "content": "Restore the compatibility constraint. <image>{\"image_url\":\"data:image/png;base64,AAAA\"}</image>"}},
             ]
             (sessions / "rollout.jsonl").write_text(
                 "".join(json.dumps(row) + "\n" for row in rows)
@@ -1704,10 +3936,11 @@ class CoordyTests(unittest.TestCase):
             prepare_s0b_state_inputs(workspace)
 
             class SuspectJudge:
-                def __init__(self, judge_id: str):
+                def __init__(self, judge_id: str, *, suspect: bool = True):
                     self.judge_id = judge_id
                     self.model = f"fake-{judge_id}"
                     self.configuration_sha256 = f"config-{judge_id}"
+                    self.suspect = suspect
 
                 def grade(self, packets: list[dict]) -> list[dict]:
                     results = []
@@ -1725,28 +3958,48 @@ class CoordyTests(unittest.TestCase):
                             "state_type": "constraint",
                             "pre_state_statement": "The constraint remains active.",
                             "pre_evidence_ids": [earlier],
-                            "status": "missing",
-                            "downstream_relevance": "DIRECT",
+                            "status": "missing" if self.suspect else "preserved",
+                            "downstream_relevance": "DIRECT" if self.suspect else "NONE",
                             "post_evidence_ids": [post],
-                            "rationale": "The constraint is absent after compaction.",
+                            "rationale": (
+                                "The constraint is absent after compaction."
+                                if self.suspect else
+                                "The constraint is preserved after compaction."
+                            ),
                         }],
-                        "assessment_status": "SUSPECT",
-                        "suspected_state_change": True,
+                        "assessment_status": "SUSPECT" if self.suspect else "NO_MATERIAL_CHANGE",
+                        "suspected_state_change": self.suspect,
                         "confidence": 0.95,
                         })
                     return results
 
             run_s0b_state_diff(
-                workspace, SuspectJudge("primary"), SuspectJudge("secondary"), batch_size=1
+                workspace,
+                SuspectJudge("primary"),
+                SuspectJudge("secondary", suspect=False),
+                batch_size=1,
             )
+            primary_state = json.loads(
+                (workspace / "data/screening/s0b_primary_state_diffs.jsonl")
+                .read_text()
+                .strip()
+            )
+            self.assertEqual(primary_state["assessment_status"], "SUSPECT")
             eligible_path = workspace / "data/screening/eligible_sessions.jsonl"
             eligible_content = eligible_path.read_text()
             eligible_path.write_text(eligible_content + "{}\n")
             with self.assertRaisesRegex(RuntimeError, "eligible sessions"):
                 prepare_s0b_causal_inputs(workspace)
             eligible_path.write_text(eligible_content)
+            semantic_manifest_path = workspace / "data/screening/s0b_semantic_manifest.json"
+            stale_manifest = json.loads(semantic_manifest_path.read_text())
+            stale_manifest["primary_causal_sha256"] = "stale"
+            stale_manifest["machine_confirmed_causal_failure_count"] = 99
+            semantic_manifest_path.write_text(json.dumps(stale_manifest))
             manifest = prepare_s0b_causal_inputs(workspace)
             self.assertEqual(manifest["causal_input_count"], 1)
+            self.assertNotIn("primary_causal_sha256", manifest)
+            self.assertNotIn("machine_confirmed_causal_failure_count", manifest)
             causal_path = workspace / "data/screening/s0b_causal_inputs.jsonl"
             packet = json.loads(causal_path.read_text().strip())
             self.assertTrue(packet["pre_compaction_events"])
@@ -1756,6 +4009,13 @@ class CoordyTests(unittest.TestCase):
                 {(row["verification_source"], row["operation_kind"]) for row in outcomes},
                 {("structured_tool_result", "test"), ("patch_apply_end", "patch")},
             )
+            patch_outcome = next(
+                row for row in outcomes if row["verification_source"] == "patch_apply_end"
+            )
+            self.assertIn(
+                patch_outcome["evidence_id"],
+                {row["evidence_id"] for row in packet["action_events"]},
+            )
             self.assertEqual(outcomes[0]["exit_code"], 1)
             self.assertIn("test_preserves_constraint failed", outcomes[0]["result_excerpt"])
             serialized = causal_path.read_text()
@@ -1763,6 +4023,7 @@ class CoordyTests(unittest.TestCase):
                 "tests failed and I rolled back", json.dumps(outcomes, sort_keys=True)
             )
             self.assertNotIn("/repo/private.py", serialized)
+            self.assertNotIn("data:image/png;base64", serialized)
             self.assertEqual(causal_path.stat().st_mode & 0o777, 0o600)
 
             class CausalJudge:
@@ -1780,7 +4041,10 @@ class CoordyTests(unittest.TestCase):
                         "ordinary_reasoning_alternative": "The implementation may independently be wrong.",
                         "failure_type": "A",
                         "counterfactual": "Replay with the missing constraint restored.",
-                        "evidence_ids": [item["verified_engineering_outcomes"][0]["evidence_id"]],
+                        "evidence_ids": [
+                            item["action_events"][0]["evidence_id"],
+                            item["verified_engineering_outcomes"][0]["evidence_id"],
+                        ],
                         "confidence": 0.9,
                     } for item in packets]
 
@@ -1824,6 +4088,15 @@ class CoordyTests(unittest.TestCase):
             invalid["evidence_ids"] = [packet["action_events"][0]["evidence_id"]]
             with self.assertRaisesRegex(ValueError, "program-verified outcome"):
                 validate_causal_result(packet, invalid)
+
+            missing_action = CausalJudge("missing-action").grade([packet])[0]
+            missing_action["evidence_ids"] = [
+                packet["verified_engineering_outcomes"][0]["evidence_id"]
+            ]
+            with self.assertRaisesRegex(ValueError, "actual post-compaction action"):
+                validate_causal_result(
+                    {**packet, "action_events": []}, missing_action
+                )
 
     def test_secure_write_preserves_previous_checkpoint_if_replace_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
