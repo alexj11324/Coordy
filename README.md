@@ -35,6 +35,24 @@ evidence-linked T0–T5 timelines, deterministic Git/test/tool outcomes, and hum
 calibration. The detector is evaluated without access to later failures,
 rework, or user corrections.
 
+### Historical reconstruction versus future runtime
+
+The current experiment reconstructs old Codex histories because Coordy was not
+running when those conversations originally happened. It therefore reads the
+complete frozen history, uses lossless transport shards when an old Goal is too
+large for one request, links repeated clues into events, and then rebuilds the
+T0–T5 causal timeline. Those shards are an offline evaluation detail, not the
+intended product architecture.
+
+A future runtime should maintain structured state incrementally as the
+conversation progresses. New goals, constraints, decisions, rejected options,
+plans, dependencies, and acceptance criteria update the existing state; they do
+not trigger a full-history rebuild. After compaction has changed the visible
+context, Coordy compares the still-active pre-compaction state with the current
+plan and raises a warning before the first inconsistent action. Occasional
+checkpoints may be stored for audit and recovery, but normal operation does not
+repeatedly split and reread the entire transcript.
+
 ## Current status
 
 - Deterministic evidence collection and full compaction-opportunity enumeration
