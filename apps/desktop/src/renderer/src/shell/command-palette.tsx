@@ -1,5 +1,5 @@
 import { Input } from "@coordy/ui";
-import { Bot, LayoutDashboard, PanelLeft, Search } from "lucide-react";
+import { Bot, FolderKanban, LayoutDashboard, MessageSquare, PanelLeft, Plus, Puzzle, Search, UsersRound, Workflow } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { modifierSymbol } from "../lib/coordy/shortcuts";
@@ -45,6 +45,51 @@ export function CommandPalette({ os }: { os?: string }) {
         label: "新建智能体",
         keywords: ["new", "agent", "智能体", "创建"],
         run: () => go("/agents/new"),
+      },
+      {
+        id: "cmd:new-squad",
+        label: "新建小队",
+        keywords: ["new", "squad", "小队", "创建"],
+        run: () => {
+          useLayoutStore.getState().requestFocus("new-squad");
+          go("/squads");
+        },
+      },
+      {
+        id: "cmd:new-project",
+        label: "新建项目",
+        keywords: ["new", "project", "项目", "创建"],
+        run: () => {
+          useLayoutStore.getState().requestFocus("new-project");
+          go("/projects");
+        },
+      },
+      {
+        id: "cmd:new-automation",
+        label: "新建自动化",
+        keywords: ["new", "automation", "自动化", "runbook", "创建"],
+        run: () => {
+          useLayoutStore.getState().requestFocus("new-automation");
+          go("/automations");
+        },
+      },
+      {
+        id: "cmd:new-skill",
+        label: "新建 Skill",
+        keywords: ["new", "skill", "技能", "创建"],
+        run: () => {
+          useLayoutStore.getState().requestFocus("new-skill");
+          go("/skills");
+        },
+      },
+      {
+        id: "cmd:new-chat",
+        label: "新建聊天",
+        keywords: ["new", "chat", "聊天", "对话", "创建"],
+        run: () => {
+          useLayoutStore.getState().requestFocus("new-chat");
+          go("/chat");
+        },
       },
       {
         id: "cmd:toggle-sidebar",
@@ -145,6 +190,18 @@ export function CommandPalette({ os }: { os?: string }) {
                       <LayoutDashboard className="size-4 shrink-0 text-muted-foreground" />
                     ) : item.id.startsWith("cmd:new-agent") ? (
                       <Bot className="size-4 shrink-0 text-muted-foreground" />
+                    ) : item.id.startsWith("cmd:new-squad") ? (
+                      <UsersRound className="size-4 shrink-0 text-muted-foreground" />
+                    ) : item.id.startsWith("cmd:new-project") ? (
+                      <FolderKanban className="size-4 shrink-0 text-muted-foreground" />
+                    ) : item.id.startsWith("cmd:new-automation") ? (
+                      <Workflow className="size-4 shrink-0 text-muted-foreground" />
+                    ) : item.id.startsWith("cmd:new-skill") ? (
+                      <Puzzle className="size-4 shrink-0 text-muted-foreground" />
+                    ) : item.id.startsWith("cmd:new-chat") ? (
+                      <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                    ) : item.id.startsWith("cmd:new-") ? (
+                      <Plus className="size-4 shrink-0 text-muted-foreground" />
                     ) : item.id.startsWith("cmd:toggle") ? (
                       <PanelLeft className="size-4 shrink-0 text-muted-foreground" />
                     ) : (

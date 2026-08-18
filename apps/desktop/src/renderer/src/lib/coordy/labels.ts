@@ -12,6 +12,18 @@ export const TASK_STATUS_ITEMS: Record<string, string> = {
   cancelled: "不做了",
 };
 
+function latinNounGap(noun: string): string {
+  return /^[A-Za-z]/.test(noun) ? " " : "";
+}
+
+export function emptyCreateHint(noun: string): string {
+  return `还没有${latinNounGap(noun)}${noun}，创建一个开始吧。`;
+}
+
+export function createActionLabel(noun: string): string {
+  return `新建${latinNounGap(noun)}${noun}`;
+}
+
 /** Map Coordy harness / ACP ids onto Multica-style provider keys. */
 export function providerKey(harness: string): string {
   switch (harness) {

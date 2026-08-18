@@ -43,15 +43,19 @@ import {
   UsersRound,
   Workflow,
 } from "lucide-react";
-import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
-import { listableAgents } from "../lib/coordy/labels";
+import { tasksAssignedToMe, taskIdentifier } from "../lib/coordy/issues";
+import { agentDisplayName, createActionLabel, emptyCreateHint, listableAgents, taskStatusLabel } from "../lib/coordy/labels";
 import { startAcpOnTask } from "../lib/coordy/start-task";
+import { useLayoutStore, type PendingFocus } from "../state/layout-store";
 import { useSession } from "../state/session-store";
-import type { Command, Query } from "@coordy/protocol";
+import type { Command, Query, View } from "@coordy/protocol";
 import {
   asAgents,
+  asAutomations,
+  asChats,
   asConflicts,
   asContracts,
   asDependencies,
@@ -59,8 +63,11 @@ import {
   asInbox,
   asMemory,
   asPrincipals,
+  asProjects,
   asRunDetail,
   asRuns,
+  asSkills,
+  asSquads,
   asTasks,
 } from "../lib/coordy/views";
 
@@ -106,6 +113,217 @@ function EmptyList({
 function useForm(initial: string) {
   const [value, set] = useState(initial);
   return { value, set };
+}
+
+function useCatalogComposer(kind: PendingFocus) {
+  const pendingFocus = useLayoutStore((s) => s.pendingFocus);
+  const [creating, setCreating] = useState(false);
+  useEffect(() => {
+    if (pendingFocus !== kind) return;
+    useLayoutStore.getState().consumePendingFocus();
+    setCreating(true);
+  }, [kind, pendingFocus]);
+  return { creating, setCreating };
+}
+
+function CreateEmpty({
+  icon: Icon,
+  title,
+  actionLabel,
+  onCreate,
+}: {
+  icon: LucideIcon;
+  title: string;
+  actionLabel?: string;
+  onCreate?: () => void;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 pb-16 text-center">
+      <div className="flex size-16 items-center justify-center rounded-full bg-muted text-muted-foreground">
+        <Icon className="size-7" />
+      </div>
+      <p className="text-sm text-muted-foreground">{title}</p>
+      {actionLabel && onCreate ? (
+        <Button type="button" onClick={onCreate}>
+          <Plus data-icon="inline-start" />
+          {actionLabel}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function CatalogShell({
+  title,
+  description,
+  createLabel,
+  onCreate,
+  creating,
+  composer,
+  empty,
+  hasItems,
+  children,
+}: {
+  title: string;
+  description: string;
+  createLabel: string;
+  onCreate: () => void;
+  creating: boolean;
+  composer: ReactNode;
+  empty: ReactNode;
+  hasItems: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 px-4 pt-4 md:px-6 md:pt-6">
+        <PageHeader title={title} description={description}>
+          <Button type="button" variant="outline" onClick={onCreate}>
+            <Plus data-icon="inline-start" />
+            {createLabel}
+          </Button>
+        </PageHeader>
+        {creating ? composer : null}
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-4 pb-4 md:px-6">
+        {hasItems ? children : creating ? null : empty}
+      </div>
+    </section>
+  );
+}
+
+function NamedCreateForm({
+  placeholder,
+  value,
+  onChange,
+  onSubmit,
+  onCancel,
+  extra,
+  disabled,
+}: {
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  extra?: ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <form
+      className="mb-4 flex flex-wrap items-center gap-2"
+      onSubmit={(event: FormEvent) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <Input
+        autoFocus
+        className="max-w-xs"
+        placeholder={placeholder}
+        value={value}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.value)}
+      />
+      {extra}
+      <Button type="submit" disabled={disabled || !value.trim()}>
+        创建
+      </Button>
+      <Button type="button" variant="ghost" onClick={onCancel}>
+        取消
+      </Button>
+    </form>
+  );
+}
+
+function NamedCatalogPage<T extends { id: string; name: string }>({
+  title,
+  description,
+  noun,
+  icon,
+  makeQuery,
+  asItems,
+  makeCommand,
+  placeholder,
+  pendingKind,
+  descriptionOf,
+}: {
+  title: string;
+  description: string;
+  noun: string;
+  icon: LucideIcon;
+  makeQuery: (workspace_id: string) => Query;
+  asItems: (view: View | undefined) => T[];
+  makeCommand: (workspaceId: string, name: string) => Command;
+  placeholder: string;
+  pendingKind: PendingFocus;
+  descriptionOf?: (item: T) => string | undefined;
+}) {
+  const q = useWorkspaceQuery(makeQuery);
+  const items = asItems(q.data);
+  const name = useForm("");
+  const command = useCommand();
+  const workspaceId = useSession((s) => s.workspaceId);
+  const { creating, setCreating } = useCatalogComposer(pendingKind);
+  const createLabel = createActionLabel(noun);
+  return (
+    <CatalogShell
+      title={title}
+      description={description}
+      createLabel={createLabel}
+      onCreate={() => setCreating(true)}
+      creating={creating}
+      composer={
+        <NamedCreateForm
+          placeholder={placeholder}
+          value={name.value}
+          onChange={name.set}
+          onSubmit={() => {
+            if (!workspaceId || !name.value.trim()) return;
+            command.mutate(makeCommand(workspaceId, name.value.trim()), {
+              onSuccess: () => {
+                name.set("");
+                setCreating(false);
+              },
+            });
+          }}
+          onCancel={() => setCreating(false)}
+        />
+      }
+      empty={
+        <CreateEmpty
+          icon={icon}
+          title={emptyCreateHint(noun)}
+          actionLabel={createLabel}
+          onCreate={() => setCreating(true)}
+        />
+      }
+      hasItems={items.length > 0}
+    >
+      {items.map((item) => (
+        <Card key={item.id} size="sm" className="mb-2">
+          <CardHeader>
+            <CardTitle>{item.name}</CardTitle>
+            {descriptionOf?.(item) ? <CardDescription>{descriptionOf(item)}</CardDescription> : null}
+          </CardHeader>
+        </Card>
+      ))}
+    </CatalogShell>
+  );
+}
+
+function NeedAgentHint({ onCancel }: { onCancel: () => void }) {
+  const navigate = useNavigate();
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <p className="text-sm text-muted-foreground">先新建一个智能体，才能继续。</p>
+      <Button type="button" variant="outline" onClick={() => navigate("/agents/new")}>
+        新建智能体
+      </Button>
+      <Button type="button" variant="ghost" onClick={onCancel}>
+        取消
+      </Button>
+    </div>
+  );
 }
 
 export function PrincipalsPage() {
@@ -768,85 +986,339 @@ export function Page({ title, children }: { title: string; children: ReactNode }
   );
 }
 
-function ProductPlaceholder({
-  icon: Icon,
-  title,
-  description,
-}: {
-  icon: LucideIcon;
-  title: string;
-  description: string;
-}) {
-  return (
-    <section>
-      <PageHeader title={title} description={description} />
-      <EmptyList icon={Icon} title={`还没有${title}`} description={description} />
-    </section>
-  );
-}
-
 export function ChatPage() {
+  const chats = useWorkspaceQuery((workspace_id) => ({ type: "Chats", workspace_id }));
+  const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
+  const items = asChats(chats.data);
+  const agentList = listableAgents(asAgents(agents.data));
+  const command = useCommand();
+  const workspaceId = useSession((s) => s.workspaceId);
+  const { creating, setCreating } = useCatalogComposer("new-chat");
+  const createLabel = createActionLabel("聊天");
+  const defaultAgentId = agentList[0]?.id ?? "";
+  const [agentId, setAgentId] = useState("");
+  const selectedAgentId = agentId || defaultAgentId;
+  const agentItems = useMemo(
+    () => Object.fromEntries(agentList.map((agent) => [agent.id, agentDisplayName(agent)])),
+    [agentList],
+  );
   return (
-    <ProductPlaceholder
-      icon={MessageSquare}
+    <CatalogShell
       title="聊天"
-      description="和智能体一对一对话，不依附某一条事项。这一页会按对照清单补上。"
-    />
+      description="和智能体一对一对话，不依附某一条事项。"
+      createLabel={createLabel}
+      onCreate={() => setCreating(true)}
+      creating={creating}
+      composer={
+        agentList.length === 0 ? (
+          <NeedAgentHint onCancel={() => setCreating(false)} />
+        ) : (
+          <form
+            className="mb-4 flex flex-wrap items-center gap-2"
+            onSubmit={(event: FormEvent) => {
+              event.preventDefault();
+              if (!workspaceId || !selectedAgentId) return;
+              command.mutate(
+                { type: "CreateChat", workspace_id: workspaceId, agent_id: selectedAgentId },
+                {
+                  onSuccess: () => {
+                    setCreating(false);
+                  },
+                },
+              );
+            }}
+          >
+            <Select
+              value={selectedAgentId}
+              items={agentItems}
+              onValueChange={(value) => value && setAgentId(value)}
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {agentList.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>
+                    {agentDisplayName(agent)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button type="submit" disabled={!selectedAgentId}>
+              创建
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => setCreating(false)}>
+              取消
+            </Button>
+          </form>
+        )
+      }
+      empty={
+        <CreateEmpty
+          icon={MessageSquare}
+          title={emptyCreateHint("聊天")}
+          actionLabel={createLabel}
+          onCreate={() => setCreating(true)}
+        />
+      }
+      hasItems={items.length > 0}
+    >
+      {items.map((chat) => {
+        const agent = agentList.find((item) => item.id === chat.agent_id);
+        return (
+          <Card key={chat.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle>{chat.title?.trim() || "对话"}</CardTitle>
+              <CardDescription>{agent ? agentDisplayName(agent) : chat.agent_id}</CardDescription>
+            </CardHeader>
+          </Card>
+        );
+      })}
+    </CatalogShell>
   );
 }
 
 export function MyIssuesPage() {
+  const board = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
+  const principalId = useSession((s) => s.principalId);
+  const agentId = useSession((s) => s.agentId);
+  const navigate = useNavigate();
+  const items = tasksAssignedToMe(asTasks(board.data), { principalId, agentId });
+  const createLabel = createActionLabel("任务");
+  const openNewTask = () => {
+    useLayoutStore.getState().requestNewTaskFocus();
+    navigate("/board");
+  };
   return (
-    <ProductPlaceholder
-      icon={User}
+    <CatalogShell
       title="我的任务"
-      description="只看指派给你或你正在跟的事项。现在先从侧栏「任务」进入看板。"
-    />
+      description="只看指派给你或你正在跟的事项。"
+      createLabel={createLabel}
+      onCreate={openNewTask}
+      creating={false}
+      composer={null}
+      empty={
+        <CreateEmpty
+          icon={User}
+          title={emptyCreateHint("任务")}
+          actionLabel={createLabel}
+          onCreate={openNewTask}
+        />
+      }
+      hasItems={items.length > 0}
+    >
+      {items.map((task) => (
+        <Card key={task.id} size="sm" className="mb-2">
+          <CardHeader>
+            <button type="button" className="text-left" onClick={() => navigate(`/board/${task.id}`)}>
+              <CardTitle>{task.title}</CardTitle>
+              <CardDescription>
+                {taskIdentifier(task)} · {taskStatusLabel(task.status)}
+              </CardDescription>
+            </button>
+          </CardHeader>
+        </Card>
+      ))}
+    </CatalogShell>
   );
 }
 
 export function ProjectsPage() {
   return (
-    <ProductPlaceholder
-      icon={FolderKanban}
+    <NamedCatalogPage
       title="项目"
       description="用项目把事项、仓库和进度收在一起。"
+      noun="项目"
+      icon={FolderKanban}
+      makeQuery={(workspace_id) => ({ type: "Projects", workspace_id })}
+      asItems={asProjects}
+      makeCommand={(workspace_id, name) => ({ type: "CreateProject", workspace_id, name })}
+      placeholder="项目名称"
+      pendingKind="new-project"
+      descriptionOf={(item) => item.description}
     />
   );
 }
 
 export function AutomationsPage() {
   return (
-    <ProductPlaceholder
-      icon={Workflow}
+    <NamedCatalogPage
       title="自动化"
       description="Runbook、时间表和 Webhook 会从这里跑。"
+      noun="自动化"
+      icon={Workflow}
+      makeQuery={(workspace_id) => ({ type: "Automations", workspace_id })}
+      asItems={asAutomations}
+      makeCommand={(workspace_id, name) => ({ type: "CreateAutomation", workspace_id, name, runbook: "" })}
+      placeholder="自动化名称"
+      pendingKind="new-automation"
+      descriptionOf={(item) => item.runbook || item.schedule}
     />
   );
 }
 
 export function SquadsPage() {
+  const squads = useWorkspaceQuery((workspace_id) => ({ type: "Squads", workspace_id }));
+  const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
+  const items = asSquads(squads.data);
+  const agentList = listableAgents(asAgents(agents.data));
+  const name = useForm("");
+  const command = useCommand();
+  const workspaceId = useSession((s) => s.workspaceId);
+  const { creating, setCreating } = useCatalogComposer("new-squad");
+  const createLabel = createActionLabel("小队");
+  const defaultLeader = agentList[0]?.id ?? "";
+  const [leaderId, setLeaderId] = useState("");
+  const selectedLeader = leaderId || defaultLeader;
+  const agentItems = useMemo(
+    () => Object.fromEntries(agentList.map((agent) => [agent.id, agentDisplayName(agent)])),
+    [agentList],
+  );
   return (
-    <ProductPlaceholder
-      icon={UsersRound}
+    <CatalogShell
       title="小队"
       description="小队有一个领队智能体，领队负责把活派给成员。"
-    />
+      createLabel={createLabel}
+      onCreate={() => setCreating(true)}
+      creating={creating}
+      composer={
+        agentList.length === 0 ? (
+          <NeedAgentHint onCancel={() => setCreating(false)} />
+        ) : (
+          <NamedCreateForm
+            placeholder="小队名称"
+            value={name.value}
+            onChange={name.set}
+            extra={
+              <Select
+                value={selectedLeader}
+                items={agentItems}
+                onValueChange={(value) => value && setLeaderId(value)}
+              >
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {agentList.map((agent) => (
+                    <SelectItem key={agent.id} value={agent.id}>
+                      {agentDisplayName(agent)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            }
+            onSubmit={() => {
+              if (!workspaceId || !name.value.trim() || !selectedLeader) return;
+              command.mutate(
+                {
+                  type: "CreateSquad",
+                  workspace_id: workspaceId,
+                  name: name.value.trim(),
+                  leader_agent_id: selectedLeader,
+                },
+                {
+                  onSuccess: () => {
+                    name.set("");
+                    setCreating(false);
+                  },
+                },
+              );
+            }}
+            onCancel={() => setCreating(false)}
+            disabled={!selectedLeader}
+          />
+        )
+      }
+      empty={
+        <CreateEmpty
+          icon={UsersRound}
+          title={emptyCreateHint("小队")}
+          actionLabel={createLabel}
+          onCreate={() => setCreating(true)}
+        />
+      }
+      hasItems={items.length > 0}
+    >
+      {items.map((squad) => {
+        const leader = agentList.find((agent) => agent.id === squad.leader_agent_id);
+        const members = squad.member_agent_ids?.length ?? 0;
+        return (
+          <Card key={squad.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle>{squad.name}</CardTitle>
+              <CardDescription>
+                领队 {leader ? agentDisplayName(leader) : squad.leader_agent_id}
+                {members > 0 ? ` · ${members} 名成员` : ""}
+              </CardDescription>
+            </CardHeader>
+          </Card>
+        );
+      })}
+    </CatalogShell>
   );
 }
 
 export function StatsPage() {
+  const board = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
+  const runs = useWorkspaceQuery((workspace_id) => ({ type: "Runs", workspace_id }));
+  const tasks = asTasks(board.data);
+  const runList = asRuns(runs.data);
+  const running = tasks.filter((task) => task.status === "running").length;
+  const done = tasks.filter((task) => task.status === "done").length;
+  const empty = tasks.length === 0 && runList.length === 0;
   return (
-    <ProductPlaceholder icon={BarChart3} title="统计" description="工作区事项和执行的汇总会显示在这里。" />
+    <section className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 px-4 pt-4 md:px-6 md:pt-6">
+        <PageHeader title="统计" description="工作区事项和执行的汇总。" />
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-4 pb-4 md:px-6">
+        {empty ? (
+          <CreateEmpty icon={BarChart3} title="还没有可汇总的事项。" />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>事项</CardDescription>
+                <CardTitle className="text-2xl tabular-nums">{tasks.length}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>进行中</CardDescription>
+                <CardTitle className="text-2xl tabular-nums">{running}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>已完成</CardDescription>
+                <CardTitle className="text-2xl tabular-nums">{done}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>运行</CardDescription>
+                <CardTitle className="text-2xl tabular-nums">{runList.length}</CardTitle>
+              </CardHeader>
+            </Card>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
 export function SkillsPage() {
   return (
-    <ProductPlaceholder
-      icon={Puzzle}
+    <NamedCatalogPage
       title="Skills"
       description="工作区 Skills 库，可以挂到智能体上启用或停用。"
+      noun="Skill"
+      icon={Puzzle}
+      makeQuery={(workspace_id) => ({ type: "Skills", workspace_id })}
+      asItems={asSkills}
+      makeCommand={(workspace_id, name) => ({ type: "CreateSkill", workspace_id, name, body: "" })}
+      placeholder="Skill 名称"
+      pendingKind="new-skill"
     />
   );
 }

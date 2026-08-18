@@ -28,7 +28,7 @@ import {
 
 function FlushCanvas() {
   return (
-    <div className="h-full min-h-0">
+    <div className="h-full min-h-0 overflow-hidden">
       <Outlet />
     </div>
   );
@@ -49,6 +49,13 @@ export function AppRouter() {
         <Route element={<FlushCanvas />}>
           <Route path="/board" element={<BoardPage />} />
           <Route path="/board/:taskId" element={<TaskDetailPage />} />
+          <Route path="/chat" element={<ChatPage />} />
+          <Route path="/mine" element={<MyIssuesPage />} />
+          <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/automations" element={<AutomationsPage />} />
+          <Route path="/squads" element={<SquadsPage />} />
+          <Route path="/stats" element={<StatsPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
         </Route>
         <Route element={<PaddedCanvas />}>
           <Route path="/" element={<HomePage />} />
@@ -65,13 +72,6 @@ export function AppRouter() {
           <Route path="/conflicts" element={<ConflictsPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/inbox" element={<InboxPage />} />
-          <Route path="/chat" element={<ChatPage />} />
-          <Route path="/mine" element={<MyIssuesPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
-          <Route path="/automations" element={<AutomationsPage />} />
-          <Route path="/squads" element={<SquadsPage />} />
-          <Route path="/stats" element={<StatsPage />} />
-          <Route path="/skills" element={<SkillsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>

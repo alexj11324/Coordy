@@ -106,6 +106,20 @@ export function filterIssues(tasks: TaskView[], filters: IssueFilters | string, 
   });
 }
 
+export function tasksAssignedToMe(
+  tasks: TaskView[],
+  ids: { principalId?: string | null; agentId?: string | null },
+): TaskView[] {
+  const principalId = ids.principalId ?? null;
+  const agentId = ids.agentId ?? null;
+  if (!principalId && !agentId) return [];
+  return tasks.filter((task) => {
+    if (agentId && task.assignee_agent_id === agentId) return true;
+    if (principalId && task.assignee_principal_id === principalId) return true;
+    return false;
+  });
+}
+
 export function issuesInColumn(tasks: TaskView[], columnId: string): TaskView[] {
   if (columnId === "cancelled") return tasks.filter((task) => task.status === "cancelled");
   if (columnId === "backlog") return tasks.filter((task) => task.status === "backlog");

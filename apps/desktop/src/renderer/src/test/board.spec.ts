@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { acpRunSource } from "../lib/coordy/start-task";
 import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
-import { agentDisplayName, listableAgents, providerKey, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
+import { agentDisplayName, createActionLabel, emptyCreateHint, listableAgents, providerKey, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
+import { tasksAssignedToMe } from "../lib/coordy/issues";
 import { asTasks, boardColumn, isPlaceholderHarness, latestRunForTask, outcomeId } from "../lib/coordy/views";
-import type { AgentView, RunView, View } from "@coordy/protocol";
+import type { AgentView, RunView, TaskView, View } from "@coordy/protocol";
 
 describe("board view helpers", () => {
   it("reads tasks from a Board view", () => {
@@ -93,5 +94,26 @@ describe("board view helpers", () => {
     expect(providerKey("claude-acp")).toBe("claude");
     expect(providerKey("codex-acp")).toBe("codex");
     expect(providerKey("github-copilot-cli")).toBe("copilot");
+  });
+
+  it("writes empty-state copy for catalog create actions", () => {
+    expect(emptyCreateHint("小队")).toBe("还没有小队，创建一个开始吧。");
+    expect(emptyCreateHint("Skill")).toBe("还没有 Skill，创建一个开始吧。");
+    expect(createActionLabel("小队")).toBe("新建小队");
+    expect(createActionLabel("Skill")).toBe("新建 Skill");
+  });
+
+  it("keeps my-task lists to the current principal or agent", () => {
+    const tasks: TaskView[] = [
+      { id: "task_1", workspace_id: "ws", title: "我的", status: "open", assignee_principal_id: "p1" },
+      { id: "task_2", workspace_id: "ws", title: "智能体的", status: "open", assignee_agent_id: "a1" },
+      { id: "task_3", workspace_id: "ws", title: "别人的", status: "open", assignee_principal_id: "p2" },
+    ];
+    expect(tasksAssignedToMe(tasks, { principalId: "p1", agentId: null }).map((task) => task.id)).toEqual(["task_1"]);
+    expect(tasksAssignedToMe(tasks, { principalId: "p1", agentId: "a1" }).map((task) => task.id)).toEqual([
+      "task_1",
+      "task_2",
+    ]);
+    expect(tasksAssignedToMe(tasks, { principalId: null, agentId: null })).toEqual([]);
   });
 });

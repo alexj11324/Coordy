@@ -7,15 +7,24 @@ function readCollapsed(): boolean {
   return window.localStorage.getItem(STORAGE_KEY) === "1";
 }
 
+export type PendingFocus =
+  | "new-task"
+  | "new-squad"
+  | "new-project"
+  | "new-automation"
+  | "new-skill"
+  | "new-chat";
+
 type LayoutState = {
   sidebarCollapsed: boolean;
   paletteOpen: boolean;
-  pendingFocus: "new-task" | null;
+  pendingFocus: PendingFocus | null;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
   setPaletteOpen: (open: boolean) => void;
   requestNewTaskFocus: () => void;
-  consumePendingFocus: () => "new-task" | null;
+  requestFocus: (focus: PendingFocus) => void;
+  consumePendingFocus: () => PendingFocus | null;
 };
 
 export const useLayoutStore = create<LayoutState>((set, get) => ({
@@ -31,6 +40,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   toggleSidebar: () => get().setSidebarCollapsed(!get().sidebarCollapsed),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   requestNewTaskFocus: () => set({ pendingFocus: "new-task" }),
+  requestFocus: (focus) => set({ pendingFocus: focus }),
   consumePendingFocus: () => {
     const next = get().pendingFocus;
     if (next) set({ pendingFocus: null });
