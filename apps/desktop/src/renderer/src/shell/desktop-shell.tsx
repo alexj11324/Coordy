@@ -73,6 +73,10 @@ export function DesktopShell() {
       : actor.type === "principal"
         ? `principal:${actor.id}`
         : "daemon";
+  const actorItems = [
+    ...people.map((person) => ({ value: `principal:${person.id}`, label: person.name })),
+    ...agentList.map((agent) => ({ value: `agent:${agent.id}`, label: agent.name })),
+  ];
   return (
     <div className="flex h-screen bg-background text-foreground">
       <aside className="flex w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -97,6 +101,7 @@ export function DesktopShell() {
           <Label className="mb-1.5 px-1 text-xs font-normal text-muted-foreground">Acting as</Label>
           <Select
             value={actorValue}
+            items={actorItems}
             onValueChange={(value) => {
               if (!value) return;
               if (value.startsWith("principal:")) {
@@ -109,7 +114,12 @@ export function DesktopShell() {
             }}
           >
             <SelectTrigger>
-              <SelectValue />
+              <SelectValue>
+                {(value: string | null) => {
+                  const match = actorItems.find((item) => item.value === value);
+                  return match?.label ?? value ?? "Choose actor";
+                }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>

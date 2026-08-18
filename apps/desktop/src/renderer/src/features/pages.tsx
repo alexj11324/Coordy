@@ -215,11 +215,16 @@ export function BoardPage() {
         </div>
       )}
       <h2 className="mb-2 mt-8 text-lg font-medium">Commitments</h2>
-      <Input
-        className="mb-3"
-        value={claim.value}
-        onChange={(event: ChangeEvent<HTMLInputElement>) => claim.set(event.target.value)}
-      />
+      <div className="mb-3 flex items-center gap-2">
+        <Label htmlFor="commitment-claim" className="shrink-0 text-muted-foreground">
+          Claim
+        </Label>
+        <Input
+          id="commitment-claim"
+          value={claim.value}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => claim.set(event.target.value)}
+        />
+      </div>
       {asCommitments(commitments.data).length === 0 ? (
         <p className="text-sm text-muted-foreground">No commitments yet. They appear after you write one on a task.</p>
       ) : (
@@ -471,7 +476,11 @@ export function MemoryPage() {
           value={body.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => body.set(event.target.value)}
         />
-        <Select value={visibility.value} onValueChange={(value) => value && visibility.set(value)}>
+        <Select
+          value={visibility.value}
+          items={{ principal: "principal", agent_private: "agent_private" }}
+          onValueChange={(value) => value && visibility.set(value)}
+        >
           <SelectTrigger className="w-44">
             <SelectValue />
           </SelectTrigger>
