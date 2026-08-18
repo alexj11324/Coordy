@@ -695,7 +695,7 @@ impl Kernel {
                         &mut world,
                         &workspace_id,
                         "priority",
-                        "优先级变了",
+                        "优先级已变更",
                         &previous.title,
                         Some(task_id.clone()),
                     );
@@ -706,7 +706,7 @@ impl Kernel {
                         &mut world,
                         &workspace_id,
                         "date",
-                        "日期变了",
+                        "日期已变更",
                         &previous.title,
                         Some(task_id.clone()),
                     );
@@ -747,7 +747,7 @@ impl Kernel {
                         &mut world,
                         &workspace_id,
                         "status",
-                        "状态变了",
+                        "状态已变更",
                         &title,
                         Some(task_id.clone()),
                     );
@@ -1217,7 +1217,7 @@ impl Kernel {
                     &run_id,
                     HarnessEvent::Message {
                         role: "system".into(),
-                        content: "这一轮已停下".into(),
+                        content: "运行已停止".into(),
                     },
                 )?;
                 drop(world);
@@ -1975,7 +1975,7 @@ fn ingest_event(
                         world,
                         &run.workspace_id,
                         "agent_failed",
-                        "智能体这一轮失败了",
+                        "智能体运行失败",
                         &output,
                         Some(run.task_id.clone()),
                     );

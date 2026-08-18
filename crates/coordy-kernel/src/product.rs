@@ -924,7 +924,7 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                         world,
                         &task.workspace_id,
                         "mention",
-                        "有人提到了你",
+                        "你被提及",
                         &body,
                         Some(task_id.clone()),
                     );

@@ -1445,7 +1445,7 @@ fn cancel_run_stops_active_round_and_ignores_later_session_tool() {
     assert_eq!(run.status, "cancelled");
     assert!(events
         .iter()
-        .any(|event| event.payload.contains("这一轮已停下")));
+        .any(|event| event.payload.contains("运行已停止")));
     let View::Board { tasks } = kernel
         .view_sync(q(Actor::Daemon, Query::Board { workspace_id }))
         .unwrap()

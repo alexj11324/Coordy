@@ -108,7 +108,7 @@ const NOTICE_KINDS = [
 const THEMES: { id: ThemePreference; label: string; hint: string }[] = [
   { id: "light", label: "浅色", hint: "浅色界面" },
   { id: "dark", label: "深色", hint: "深色界面" },
-  { id: "system", label: "跟随系统", hint: "跟操作系统一致" },
+  { id: "system", label: "跟随系统", hint: "与操作系统外观一致" },
 ];
 
 function isSettingsTab(value: string | null): value is SettingsTab {
@@ -269,7 +269,7 @@ function SettingsPane({
       return <ShortcutsPane os={info?.os} />;
     case "issue":
       return (
-        <Pane title="任务" description="看板列和优先级是 Coordy 内置的，不能像云产品那样自定义工作流引擎。">
+        <Pane title="任务" description="看板列与优先级由 Coordy 内置，不支持自定义工作流引擎。">
           <ul className="grid gap-2 sm:grid-cols-2">
             {ISSUE_BOARD_COLUMNS.map((column) => (
               <li key={column.id} className="rounded-lg border border-border px-3 py-2 text-sm">
@@ -285,12 +285,12 @@ function SettingsPane({
       );
     case "chat":
       return (
-        <Pane title="聊天" description="右下角悬浮窗走 Coordy 的 CreateChat / SendChatMessage，不会打开浏览器页。">
+        <Pane title="聊天" description="右下角悬浮窗调用 CreateChat / SendChatMessage，不打开浏览器页面。">
           <p className="text-sm text-muted-foreground">
-            {mod}+J 开关悬浮聊天。聊天对应的 task 带 chat 标签，不会进看板。
+            {mod}+J 显示或隐藏悬浮聊天。带 chat 标签的任务不进入看板。
           </p>
           {listableAgents(asAgents(agents.data)).length === 0 ? (
-            <p className="text-sm text-muted-foreground">还没有智能体，聊天窗里会提示先新建一个。</p>
+            <p className="text-sm text-muted-foreground">暂无智能体。悬浮聊天会提示先创建智能体。</p>
           ) : (
             <p className="text-sm">可聊对象：{listableAgents(asAgents(agents.data)).map((agent) => agentDisplayName(agent)).join("、")}</p>
           )}
@@ -319,7 +319,7 @@ function SettingsPane({
       );
     case "updates":
       return (
-        <Pane title="更新" description="这是本机构建，没有应用商店更新通道。">
+        <Pane title="更新" description="当前为本机构建，没有应用商店更新通道。">
           <p className="text-sm">Coordy {info?.version ?? "…"}</p>
           <p className="text-sm text-muted-foreground">
             {info ? `${info.os}${info.cliPath ? ` · ${info.cliPath}` : ""}` : "读取应用信息…"}
@@ -331,8 +331,8 @@ function SettingsPane({
       return <GeneralPane workspaceId={workspaceId} workspace={ws} onSaved={invalidate} />;
     case "repositories":
       return (
-        <Pane title="代码仓库" description="绑定本机目录。智能体在这个目录里干活，路径不会上传。">
-          <p className="text-sm">{repoPath ?? "还没绑定"}</p>
+        <Pane title="代码仓库" description="绑定本机目录。智能体在该目录中执行，路径不会上传。">
+          <p className="text-sm">{repoPath ?? "未绑定"}</p>
           <Button
             variant="secondary"
             onClick={async () => {
@@ -351,20 +351,20 @@ function SettingsPane({
       return (
         <Pane title="GitHub" description="Coordy 不登录 GitHub 账号，也没有 OAuth。">
           <p className="text-sm text-muted-foreground">
-            仓库用左边「代码仓库」选本机文件夹。事项上目前不能挂 PR。
+            仓库绑定入口位于「代码仓库」。事项当前不支持关联 Pull Request。
           </p>
         </Pane>
       );
     case "integrations":
       return (
-        <Pane title="集成" description="没有 Slack / 飞书 / 企微云通道。">
-          <p className="text-sm text-muted-foreground">本机模型密钥在「模型密钥」。可选 LLM 顾问在「实验室」。</p>
+        <Pane title="集成" description="不提供 Slack / 飞书 / 企业微信云通道。">
+          <p className="text-sm text-muted-foreground">本机模型密钥位于「模型密钥」。可选 LLM 顾问位于「实验室」。</p>
         </Pane>
       );
     case "labs":
       return (
-        <Pane title="实验室" description="顾问不能提交状态；确定性门禁始终开着。">
-          <Row label="可选 LLM 顾问" hint="只做建议，不能 commit。">
+        <Pane title="实验室" description="顾问不得提交状态变更；确定性门禁始终启用。">
+          <Row label="可选 LLM 顾问" hint="仅提供建议，不可提交 commit。">
             <Switch
               checked={enabled}
               onCheckedChange={(next) => {
@@ -385,23 +385,25 @@ function SettingsPane({
       return <LabelsPane workspaceId={workspaceId} items={asLabels(labels.data)} onSaved={invalidate} />;
     case "properties":
       return (
-        <Pane title="属性" description="内核可以存自定义字段定义，但事项创建和详情都还没接上，所以这里不能假装去定义。">
-          <p className="text-sm text-muted-foreground">等事项页能读写自定义字段后，再在这里管理字段定义。</p>
+        <Pane title="属性" description="内核可保存自定义字段定义，但事项创建与详情尚未读写该字段，因此本页不提供编辑入口。">
+          <p className="text-sm text-muted-foreground">事项页接入自定义字段后，再在此管理字段定义。</p>
         </Pane>
       );
     case "quick_actions":
       return (
-        <Pane title="快捷操作" description="Coordy 用命令面板，没有云端工作流按钮。">
+        <Pane title="快捷操作" description="Coordy 使用命令面板，不提供云端工作流按钮。">
           <ShortcutRow keys={`${mod}K`} action="搜索 / 命令面板" />
           <ShortcutRow keys="C" action="新建任务" />
-          <ShortcutRow keys={`${mod}J`} action="开关悬浮聊天" />
-          <p className="pt-2 text-sm text-muted-foreground">在面板里也可以新建智能体、小队、项目、自动化和 Skill。</p>
+          <ShortcutRow keys={`${mod}J`} action="显示或隐藏悬浮聊天" />
+          <p className="pt-2 text-sm text-muted-foreground">也可通过命令面板新建智能体、小队、项目、自动化和 Skill。</p>
         </Pane>
       );
     case "mcp":
       return (
-        <Pane title="MCP" description="智能体记录里可以存 MCP 服务器名，但开工时 spawn 不会带上它们。">
-          <p className="text-sm text-muted-foreground">当前版本没有可保存的 MCP 配置，避免写进去却不生效。</p>
+        <Pane title="MCP" description="协议字段 agent.mcp_servers 可保存服务器名；当前 ACP session/new 的 mcpServers 固定为空数组，spawn 不会注入该字段。">
+          <p className="text-sm text-muted-foreground">
+            因此本页不提供可保存的 MCP 配置。Claude Code、Codex 等 harness 仍按其原生配置加载 MCP。
+          </p>
         </Pane>
       );
     default:
@@ -423,14 +425,14 @@ function DaemonPane({
   return (
     <Pane
       title="Daemon"
-      description="绿灯表示桌面此刻能通过 Unix socket 问到本机 coordyd。不是点「登记」写进电脑清单的旗标。"
+      description="绿灯表示桌面当前可通过 Unix socket 完成对 coordyd 的 Health 查询，不是本机设备清单中的登记状态。"
     >
       <Row
         label="本机"
         hint={
           conn.tone === "red"
-            ? "Health 查询失败，coordyd 没应答。"
-            : "当前这台电脑上的 coordyd 进程"
+            ? "Health 查询失败，coordyd 未响应。"
+            : "本机 coordyd 进程"
         }
       >
         <span className="inline-flex items-center justify-end gap-2 text-sm">
@@ -494,8 +496,8 @@ function ProfilePane({
   }, [name]);
   const dirty = draft.trim() !== name && draft.trim().length > 0;
   return (
-    <Pane title="个人资料" description="名字存在本机工作区成员表里，不是云账号。">
-      <Row label="头像" hint="用姓名首字母生成，不能上传照片。">
+    <Pane title="个人资料" description="名称保存在本机工作区成员表中，不是云账号。">
+      <Row label="头像" hint="使用姓名首字母生成，不支持上传照片。">
         <span className="inline-flex size-12 items-center justify-center rounded-full bg-emerald-600 text-sm font-medium text-white">
           {initials(draft.trim() || name)}
         </span>
@@ -565,7 +567,7 @@ function PreferencesPane() {
           ))}
         </div>
       </div>
-      <Row label="语言" hint="当前版本只提供简体中文。">
+      <Row label="语言" hint="当前版本仅提供简体中文。">
         <span className="text-sm">简体中文</span>
       </Row>
     </Pane>
@@ -574,7 +576,7 @@ function PreferencesPane() {
 
 function ShortcutsPane({ os }: { os?: string }) {
   return (
-    <Pane title="快捷键" description="在输入框中输入时，仅允许在编辑区触发的快捷键会生效。">
+    <Pane title="快捷键" description="在输入框内键入时，仅允许在编辑区触发的快捷键会生效。">
       {SHORTCUT_CATEGORIES.map((category) => (
         <div key={category.id} className="space-y-2">
           <h3 className="text-sm font-medium">{category.label}</h3>
@@ -605,7 +607,7 @@ function NotificationsPane({
     onSave(allOn ? [] : NOTICE_KINDS.filter((item) => next.has(item)));
   };
   return (
-    <Pane title="通知" description="这些开关只影响收件箱写入，不会向操作系统发推送。">
+    <Pane title="通知" description="这些开关仅影响收件箱写入，不会向操作系统发送推送。">
       {NOTICE_KINDS.map((kind) => (
         <Row key={kind} label={inboxKindLabel(kind)} hint={kind}>
           <Switch checked={selected.has(kind)} disabled={disabled} onCheckedChange={(on) => toggle(kind, Boolean(on))} />
@@ -630,7 +632,7 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
       }),
     onSuccess: async () => {
       setApiKey("");
-      setNotice("密钥已保存在这台电脑，不会上传。");
+      setNotice("密钥已保存在本机，不会上传。");
       await qc.invalidateQueries({ queryKey: ["secrets"] });
     },
     onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
@@ -638,14 +640,14 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
   return (
     <Pane
       title="模型密钥"
-      description="给本机 harness 用的 BYOK。不是 Multica 设置里那个登录账号的 API Token。"
+      description="本机 harness 使用的模型密钥。不是云账号登录用的 API Token。"
     >
       <p className="text-sm text-muted-foreground">
         Multica 的 API Token 是 <code className="font-mono text-xs">mul_</code>{" "}
-        个人访问令牌，给 CLI / 外部集成登录用。Coordy 没有云账号，不会签发那种 token，CLI 走本机 Unix socket。这里保存的密钥写进本机 0600 文件，开工时注入环境变量，不进 SQLite。
+        个人访问令牌，用于 CLI 与外部集成登录。Coordy 没有云账号，不会签发此类 token；CLI 通过本机 Unix socket 通信。此处密钥写入本机 0600 文件，启动运行时注入环境变量，不写入 SQLite。
       </p>
       <div className="flex items-center gap-2 text-sm">
-        {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
+        {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">未配置密钥</Badge>}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         <div className="space-y-1.5">
@@ -671,7 +673,7 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
             id="settings-key"
             type="password"
             autoComplete="off"
-            placeholder={status?.key_configured ? "已保存，留空则保持" : "sk-…"}
+            placeholder={status?.key_configured ? "已保存，留空则保持原值" : "sk-…"}
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
           />
@@ -731,7 +733,7 @@ function GeneralPane({
     context !== (workspace?.context ?? "") ||
     prefix !== (workspace?.issue_prefix ?? "COOR");
   return (
-    <Pane title="常规" description="工作区名字、给智能体的背景和事项前缀存在本机内核里。">
+    <Pane title="常规" description="工作区名称、智能体背景上下文与事项前缀保存在本机内核。">
       <div className="space-y-1.5">
         <Label htmlFor="ws-name">名称</Label>
         <Input id="ws-name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -741,13 +743,13 @@ function GeneralPane({
         <Textarea id="ws-desc" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="ws-context">给智能体的背景</Label>
+        <Label htmlFor="ws-context">智能体背景上下文</Label>
         <Textarea
           id="ws-context"
           rows={5}
           value={context}
           onChange={(event) => setContext(event.target.value)}
-          placeholder="开工时会写进指令前面。空着就不会加。"
+          placeholder="启动运行时前置到指令。留空则不附加。"
         />
       </div>
       <div className="space-y-1.5">
@@ -801,7 +803,7 @@ function MembersPane({
         <Button type="submit">添加</Button>
       </form>
       {people.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有成员。</p>
+        <p className="text-sm text-muted-foreground">暂无成员。</p>
       ) : (
         people.map((person) => (
           <p key={person.id} className="border-b border-border py-2 text-sm">
@@ -825,7 +827,7 @@ function LabelsPane({
 }) {
   const [name, setName] = useState("");
   return (
-    <Pane title="标签" description="工作区标签可以打在事项上。">
+    <Pane title="标签" description="工作区标签可附加到事项。">
       <form
         className="flex gap-2"
         onSubmit={(event) => {
@@ -841,7 +843,7 @@ function LabelsPane({
         <Button type="submit">添加</Button>
       </form>
       {items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有标签。</p>
+        <p className="text-sm text-muted-foreground">暂无标签。</p>
       ) : (
         items.map((item) => (
           <div key={item.name} className="flex items-center justify-between border-b border-border py-2">

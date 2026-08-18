@@ -129,7 +129,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
     mutationFn: async () => {
       if (!workspaceId) throw new Error("工作区尚未就绪。");
       const trimmed = title.trim();
-      if (!trimmed) throw new Error("先写任务标题");
+      if (!trimmed) throw new Error("请填写任务标题");
       const created = await submit({
         type: "CreateTask",
         workspace_id: workspaceId,
@@ -137,7 +137,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
         description: description.trim() || undefined,
       });
       const taskId = outcomeId(created.ids, "task_id");
-      if (!taskId) throw new Error("没有拿到事项编号");
+      if (!taskId) throw new Error("未能取得事项编号");
       if (status && status !== "open") {
         await submit({ type: "SetTaskStatus", task_id: taskId, status });
       }
@@ -165,7 +165,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
         await submit({ type: "AddAttachment", task_id: taskId, name: file.name, path: file.path });
       }
       if (startAgent) {
-        if (!assignedAgent) throw new Error("先选一个智能体，再切换到智能体创建");
+        if (!assignedAgent) throw new Error("请先选择智能体，再启用创建后启动");
         await startAcpOnTask(taskId, description.trim() || trimmed, assignedAgent);
       }
       return taskId;
@@ -247,7 +247,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
           />
           {startAgent && selectedAgent ? (
             <p className="text-xs text-muted-foreground">
-              创建后 {agentDisplayName(selectedAgent, catalog.data)} 会立即开始工作。
+              创建后将立即启动 {agentDisplayName(selectedAgent, catalog.data)}。
             </p>
           ) : null}
           <div className="flex flex-wrap items-center gap-1.5">

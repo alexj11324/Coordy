@@ -105,7 +105,7 @@ export function applyBuilderTurn(
 ): { draft: AgentDraft; reply: string } {
   const text = userText.trim();
   if (!text) {
-    return { draft, reply: "先用一两句话描述这个智能体要负责什么。" };
+    return { draft, reply: "请用一两句话说明该智能体的职责。" };
   }
   if (previousUserCount === 0) {
     const seeded = draftAgentFromGoal(text);
@@ -116,7 +116,7 @@ export function applyBuilderTurn(
         description: draft.description.trim() || seeded.description,
         instructions: seeded.instructions,
       },
-      reply: "先记下职责。还需要明确：它不该做什么，以及什么时候必须找你确认？",
+      reply: "职责已写入草稿。请补充禁止事项，以及必须向你确认的情形。",
     };
   }
   if (previousUserCount === 1) {
@@ -125,7 +125,7 @@ export function applyBuilderTurn(
         ...draft,
         instructions: appendInstruction(draft.instructions, text),
       },
-      reply: "边界已经写进指令。输出应该怎么交付？评论、Pull Request，还是可以直接改代码？",
+      reply: "约束已写入指令。交付方式应为何种：评论、Pull Request，还是允许直接修改代码？",
     };
   }
   return {
@@ -133,7 +133,7 @@ export function applyBuilderTurn(
       ...draft,
       instructions: appendInstruction(draft.instructions, text),
     },
-    reply: "已经更新右侧草稿。可以直接改字段，或继续补充工作方式和交付要求。",
+    reply: "已更新右侧草稿。可直接编辑字段，或继续补充工作方式与交付要求。",
   };
 }
 

@@ -60,7 +60,7 @@ export function AgentDetailPage() {
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!agent) throw new Error("找不到这个智能体");
+      if (!agent) throw new Error("未找到该智能体");
       await submit({
         type: "UpdateAgent",
         agent_id: agent.id,
@@ -73,7 +73,7 @@ export function AgentDetailPage() {
       });
     },
     onSuccess: async () => {
-      setNotice("已保存。之后领取的任务会使用新配置，正在跑的这一轮不会改。");
+      setNotice("已保存。后续派发将使用新配置；当前运行不受影响。");
       await qc.invalidateQueries();
     },
     onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
@@ -87,7 +87,7 @@ export function AgentDetailPage() {
           <ArrowLeft className="size-3.5" />
           智能体
         </Link>
-        <PageHeader title="找不到这个智能体" description="它可能已经归档，或还没有创建。" />
+        <PageHeader title="未找到该智能体" description="该智能体可能已归档，或尚未创建。" />
       </section>
     );
   }
@@ -104,7 +104,7 @@ export function AgentDetailPage() {
           <AgentAvatar agent={{ ...agent, avatar }} className="mt-1 size-10" />
           <PageHeader
             title={displayName ?? agentDisplayName(agent, catalog.data)}
-            description="名称、描述和 harness 决定它是谁、在哪执行。指令每次开工都会带上。"
+            description="名称、描述与 harness 构成身份与执行环境。指令在每次启动运行时注入。"
           />
         </div>
       </div>
@@ -130,7 +130,7 @@ export function AgentDetailPage() {
             id="edit-agent-description"
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="只显示在列表里，不会进入执行提示"
+            placeholder="仅显示在列表中，不进入执行提示"
           />
         </div>
         <div className="space-y-1.5">

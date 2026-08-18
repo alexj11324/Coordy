@@ -50,7 +50,7 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   { id: "search", category: "general", label: "打开搜索", chord: primary("k"), allowInEditable: true },
   { id: "new-task", category: "general", label: "新建任务", chord: { key: "c" }, allowInEditable: false },
   { id: "toggle-sidebar", category: "general", label: "折叠或展开侧栏", chord: primary("b"), allowInEditable: false },
-  { id: "toggle-chat", category: "general", label: "开关悬浮聊天", chord: primary("j"), allowInEditable: true },
+  { id: "toggle-chat", category: "general", label: "显示或隐藏悬浮聊天", chord: primary("j"), allowInEditable: true },
   { id: "go-back", category: "navigation", label: "后退", chord: primary("["), allowInEditable: false },
   { id: "go-forward", category: "navigation", label: "前进", chord: primary("]"), allowInEditable: false },
   { id: "go-inbox", category: "navigation", label: "前往收件箱", chord: primary("1", { shift: true }), allowInEditable: false },

@@ -48,7 +48,7 @@ export function RuntimesPage() {
     <section className="space-y-4">
       <PageHeader
         title="Harness"
-        description="Harness 是这台电脑上的一款 AI 编程工具。智能体用它执行；离线只是现在跑不了，并不是被删了。"
+        description="Harness 是本机上的一款 AI 编程工具，由智能体调用。离线表示当前无法启动，并不表示记录已被删除。"
       >
         <Button
           variant="secondary"
@@ -62,8 +62,8 @@ export function RuntimesPage() {
         </Button>
       </PageHeader>
       <p className="text-sm text-muted-foreground">
-        {info.data ? `这台电脑 · ${info.data.os}` : "正在读取这台电脑…"}
-        。新建智能体时再选要用哪一个，这里不会自动变成智能体。
+        {info.data ? `本机 · ${info.data.os}` : "正在读取本机信息…"}
+        。创建智能体时再选择要使用的 harness；本页不会自动生成智能体。
       </p>
       {installed.length === 0 ? (
         <Empty className="bg-muted/30">
@@ -71,9 +71,9 @@ export function RuntimesPage() {
             <EmptyMedia variant="icon">
               <Monitor />
             </EmptyMedia>
-            <EmptyTitle>还没有检测到 harness</EmptyTitle>
+            <EmptyTitle>未检测到 harness</EmptyTitle>
             <EmptyDescription>
-              先安装 Claude Code、Codex 或 Gemini CLI，并确认能在终端里运行，再点刷新。
+              请安装 Claude Code、Codex 或 Gemini CLI，确认可在终端中运行后刷新检测。
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -90,12 +90,12 @@ export function RuntimesPage() {
                 </Badge>
               </CardTitle>
               <CardDescription>
-                这台电脑
+                本机
                 {item.version ? ` · ${item.version}` : ""}
               </CardDescription>
               <CardAction>
                 <Button size="sm" variant="secondary" onClick={() => navigate("/agents/new")}>
-                  用它新建智能体
+                  用此 harness 创建智能体
                 </Button>
               </CardAction>
             </CardHeader>
@@ -105,7 +105,7 @@ export function RuntimesPage() {
       {missing.length > 0 ? (
         <div className="space-y-2">
           <h2 className="text-sm font-medium">本机尚未安装</h2>
-          <p className="text-sm text-muted-foreground">装好后点刷新就会出现在上面。不会把它们先做成智能体。</p>
+          <p className="text-sm text-muted-foreground">安装完成后刷新检测即可出现在上方。不会自动创建为智能体。</p>
           {missing.map((item) => (
             <Card key={item.id} size="sm" className="mb-2">
               <CardHeader>
@@ -117,7 +117,7 @@ export function RuntimesPage() {
                     {presenceLabel("offline")}
                   </Badge>
                 </CardTitle>
-                <CardDescription>这台电脑</CardDescription>
+                <CardDescription>本机</CardDescription>
               </CardHeader>
             </Card>
           ))}

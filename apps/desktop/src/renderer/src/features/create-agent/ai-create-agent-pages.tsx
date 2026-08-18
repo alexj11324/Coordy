@@ -100,9 +100,9 @@ export function AiCreateAgentPage() {
             <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <MessageSquare className="size-5" />
             </span>
-            <h2 className="mt-5 text-xl font-semibold">选好新智能体的 harness 和模型</h2>
+            <h2 className="mt-5 text-xl font-semibold">选择新智能体的 harness 和模型</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              这场对话在本机进行，不会调用 harness。Harness 和模型只在你点创建、之后开工时使用。
+              此对话在本机进行，不会调用 harness。Harness 与模型仅在创建完成后、启动运行时使用。
             </p>
             <div className="mt-6 space-y-4">
               <HarnessDropdown
@@ -267,7 +267,7 @@ export function AiBuilderSessionPage() {
             <div className="mx-auto max-w-2xl px-5 py-6">
               <div className="mb-6">
                 <h2 className="text-sm font-semibold tracking-tight">智能体配置</h2>
-                <p className="mt-1 text-xs text-muted-foreground">提问会填到这里。这是本地草稿，不是模型回复。</p>
+                <p className="mt-1 text-xs text-muted-foreground">提问内容会写入此处。此为本地草稿，并非模型回复。</p>
               </div>
               <AgentConfigurationPanel
                 compact
@@ -285,8 +285,8 @@ export function AiBuilderSessionPage() {
           </div>
           {confirmDiscard ? (
             <div className="border-t px-5 py-3 text-sm">
-              <p className="font-medium">放弃这次创建？</p>
-              <p className="mt-1 text-muted-foreground">对话和右侧配置都会被永久删除。</p>
+              <p className="font-medium">放弃本次创建？</p>
+              <p className="mt-1 text-muted-foreground">对话与右侧配置将被永久删除。</p>
               <div className="mt-3 flex justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={() => setConfirmDiscard(false)} disabled={discarding}>
                   继续编辑
@@ -334,11 +334,11 @@ function BuilderConversation({
       <header className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-b px-5 py-2.5">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold">起草对话</h2>
-          <p className="truncate text-xs text-muted-foreground">本地提问，把答案写进右侧指令。</p>
+          <p className="truncate text-xs text-muted-foreground">本机提问，将答复写入右侧指令。</p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className={cn("size-2 rounded-full", runtimeOnline ? "bg-emerald-500" : "bg-muted-foreground/40")} />
-          {runtimeOnline ? "开工 harness 在线" : "还没选在线 harness"}
+          {runtimeOnline ? "运行 harness 在线" : "未选择在线 harness"}
         </div>
       </header>
       {messages.length > 0 ? (
@@ -360,9 +360,9 @@ function BuilderConversation({
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-5 py-8">
           <div className="w-full max-w-xl text-center">
-            <h3 className="text-lg font-semibold text-balance">这个智能体需要做什么？</h3>
+            <h3 className="text-lg font-semibold text-balance">该智能体的职责是什么？</h3>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-pretty text-muted-foreground">
-              描述它的角色、工作流程、输出或约束，右侧会生成第一版草稿。
+              说明角色、工作流程、输出或约束，右侧将生成第一版草稿。
             </p>
             <div className="mt-5 flex flex-wrap justify-center gap-2">
               {BUILDER_STARTER_PROMPTS.map((prompt) => (
@@ -392,7 +392,7 @@ function BuilderConversation({
                 onSend(composer);
               }
             }}
-            placeholder="描述你需要的智能体…"
+            placeholder="描述所需智能体…"
             className="min-h-16 flex-1 resize-none rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           />
           <Button type="submit" disabled={!composer.trim()}>
@@ -435,13 +435,13 @@ export function UnfinishedDraftsBanner({
         <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground">
           <MessageSquare className="size-4" />
         </span>
-        <span className="min-w-0 flex-1 text-sm">您有 {sessions.length} 条未完成的创建</span>
+        <span className="min-w-0 flex-1 text-sm">有 {sessions.length} 条未完成的创建草稿</span>
         <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
       </button>
       {picking ? (
         <div className="mb-5 space-y-2 rounded-xl border bg-card p-4">
           <p className="text-sm font-medium">创建草稿</p>
-          <p className="text-xs text-muted-foreground">选一条继续。</p>
+          <p className="text-xs text-muted-foreground">选择一条草稿继续。</p>
           {sessions.map((session) => (
             <button
               key={session.id}

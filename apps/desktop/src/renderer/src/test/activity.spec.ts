@@ -57,11 +57,11 @@ describe("describeActivity", () => {
     ).toMatchObject({
       tone: "marker",
       icon: "check",
-      title: "这一轮结束了",
+      title: "运行已结束",
       pending: false,
     });
     expect(formatActivity({ kind: "tool", payload: `${HARNESS_SESSION_TOOL} in=x out=y exit=Some(0)` })).toEqual({
-      label: "这一轮结束了",
+      label: "运行已结束",
       body: "",
     });
   });

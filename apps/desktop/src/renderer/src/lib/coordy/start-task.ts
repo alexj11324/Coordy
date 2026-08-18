@@ -51,7 +51,7 @@ export async function pickAgentId(workspaceId: string, preferredId?: string | nu
     agents.find((agent) => !isPlaceholderHarness(agent.harness)) ??
     agents[0];
   if (live) return live.id;
-  throw new Error("工作区中还没有智能体。请先在「智能体」页创建。");
+  throw new Error("工作区中暂无智能体。请先在「智能体」页创建。");
 }
 
 export async function startAcpRun(input: {

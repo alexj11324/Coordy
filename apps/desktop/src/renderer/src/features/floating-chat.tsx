@@ -24,9 +24,9 @@ import { ActivityLine } from "./activity-marker";
 import { AgentAvatar } from "./agent-avatar";
 
 const SUGGESTIONS = [
-  "按优先级列出我未完成的任务",
-  "总结一下我今天做了什么",
-  "规划接下来该做什么",
+  "按优先级列出未完成任务",
+  "汇总今日已完成事项",
+  "规划后续工作",
 ];
 
 export function FloatingChat() {
@@ -93,7 +93,7 @@ export function FloatingChat() {
     const id = outcomeId(created.ids, "chat_id");
     await qc.invalidateQueries();
     const next = asChats(await view({ type: "Chats", workspace_id: workspaceId })).find((item) => item.id === id);
-    if (!next) throw new Error("对话没有建起来");
+    if (!next) throw new Error("未能创建对话");
     useLayoutStore.getState().setActiveChatId(next.id);
     return next;
   };
@@ -219,7 +219,7 @@ export function FloatingChat() {
         <div className="space-y-3 p-4">
           {!agent ? (
             <div className="space-y-2 text-sm">
-              <p>工作区中还没有智能体，无法开始聊天。</p>
+              <p>工作区中暂无智能体，无法开始聊天。</p>
               <Button size="sm" onClick={() => navigate("/agents/new")}>
                 新建智能体
               </Button>
@@ -227,8 +227,8 @@ export function FloatingChat() {
           ) : timeline.length === 0 ? (
             <div className="space-y-3">
               <div>
-                <p className="text-sm font-medium">你好，我是 {agentName}</p>
-                <p className="text-sm text-muted-foreground">试试问</p>
+                <p className="text-sm font-medium">当前对话对象：{agentName}</p>
+                <p className="text-sm text-muted-foreground">可发送如下指令</p>
               </div>
               <div className="flex flex-col items-start gap-2">
                 {SUGGESTIONS.map((item) => (

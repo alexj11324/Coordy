@@ -175,9 +175,9 @@ export function BoardPage() {
               <EmptyMedia variant="icon">
                 <LayoutDashboard />
               </EmptyMedia>
-              <EmptyTitle>{tasks.length === 0 ? "还没有事项" : "没有匹配的事项"}</EmptyTitle>
+              <EmptyTitle>{tasks.length === 0 ? "暂无事项" : "没有匹配的事项"}</EmptyTitle>
               <EmptyDescription>
-                {tasks.length === 0 ? "按 C 或点新建，先写个标题。" : "换个筛选条件，或清空搜索。"}
+                {tasks.length === 0 ? "按 C 或使用「新建」填写标题。" : "更换筛选条件，或清空搜索。"}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

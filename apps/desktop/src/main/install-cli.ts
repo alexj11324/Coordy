@@ -12,7 +12,7 @@ export function installCliBinaries(): { ok: boolean; message: string } {
     [daemonBinaryPath(), "coordyd"],
   ] as const) {
     if (!existsSync(src)) {
-      return { ok: false, message: `找不到 ${name}：${src}` };
+      return { ok: false, message: `未找到 ${name}：${src}` };
     }
     const dest = join(destDir, name);
     copyFileSync(src, dest);
@@ -25,6 +25,6 @@ export function installCliBinaries(): { ok: boolean; message: string } {
   }
   return {
     ok: true,
-    message: `已经装好，新开一个终端就可以用。如果还是找不到命令，把 ${destDir} 加到终端的搜索路径里。`,
+    message: `已安装到 ${destDir}。请新开终端后使用。若仍无法找到命令，请将该目录加入 PATH。`,
   };
 }

@@ -216,7 +216,7 @@ export function runStatusLabel(status: string): string {
     case "queued":
       return "排队中";
     case "dispatched":
-      return "已派出";
+      return "已派发";
     case "waiting_local_directory":
       return "等待本机目录";
     case "deferred":

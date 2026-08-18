@@ -62,8 +62,8 @@ export function HomePage() {
   const agentList = listableAgents(asAgents(agents.data));
   const defaultAgent = agentList[0];
   const [agentId, setAgentId] = useState<string>("");
-  const [title, setTitle] = useState("帮我看看这个仓库");
-  const [prompt, setPrompt] = useState("用中文说明你能做什么，然后等我下一条指令。");
+  const [title, setTitle] = useState("审查当前仓库");
+  const [prompt, setPrompt] = useState("用中文说明你的能力，然后等待下一条指令。");
   const [runId, setRunId] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const selectedAgentId = agentId || defaultAgent?.id || "";
@@ -95,7 +95,7 @@ export function HomePage() {
     },
     onSuccess: async (result) => {
       setRunId(result.runId);
-      setNotice("已经交给智能体，它会自己动手。回话会出现在下面。");
+      setNotice("已派发给智能体。回复将显示在下方。");
       await qc.invalidateQueries();
     },
     onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
@@ -103,7 +103,7 @@ export function HomePage() {
 
   return (
     <section className="space-y-4">
-      <PageHeader title="开始" description="选一个已经建好的智能体，说你想做什么，它就会在这台电脑上动手。" />
+      <PageHeader title="开始" description="选择已创建的智能体，输入指令后由本机 harness 执行。" />
       {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
 
       {agentList.length === 0 ? (
@@ -112,9 +112,9 @@ export function HomePage() {
             <EmptyMedia variant="icon">
               <Bot />
             </EmptyMedia>
-            <EmptyTitle>还没有智能体</EmptyTitle>
+            <EmptyTitle>暂无智能体</EmptyTitle>
             <EmptyDescription>
-              不会把本机检测到的工具直接摆进来。先新建智能体，再在创建流程里选 harness。
+              本机检测到的工具不会自动成为智能体。请先创建智能体，并在创建流程中选择 harness。
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
@@ -128,7 +128,7 @@ export function HomePage() {
               <Play className="size-4" />
               指派智能体
             </CardTitle>
-            <CardDescription>像派工一样：选一个智能体，说一句话就开始。长期要求写进事项说明或智能体指令里。</CardDescription>
+            <CardDescription>选择智能体并发送指令以启动运行。长期要求应写入事项说明或智能体指令。</CardDescription>
           </CardHeader>
           <CardContent>
             <form
@@ -158,7 +158,7 @@ export function HomePage() {
                 <Input id="task-title" value={title} onChange={(event) => setTitle(event.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="task-prompt">对智能体说</Label>
+                <Label htmlFor="task-prompt">指令</Label>
                 <Textarea id="task-prompt" rows={4} value={prompt} onChange={(event) => setPrompt(event.target.value)} />
               </div>
               <Button type="submit" disabled={start.isPending || !selectedAgentId}>
@@ -176,14 +176,14 @@ export function HomePage() {
             <FolderGit2 className="size-4" />
             工作目录
           </CardTitle>
-          <CardDescription>选一个仓库后，智能体在这个目录干活。</CardDescription>
+          <CardDescription>绑定仓库后，智能体在该目录中执行。</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">{repoPath ?? "还没绑定仓库"}</p>
+          <p className="text-sm text-muted-foreground">{repoPath ?? "未绑定仓库"}</p>
         </CardContent>
         <CardFooter className="flex-wrap gap-2">
           <Button variant="secondary" onClick={() => navigate("/settings")}>
-            去设置里绑定
+            在设置中绑定
           </Button>
         </CardFooter>
       </Card>
@@ -193,13 +193,13 @@ export function HomePage() {
           <CardTitle>进度</CardTitle>
           <CardDescription>
             {activeRunId
-              ? `${runStatusLabel(asRunDetail(detail.data)?.run.status ?? latestRun?.status ?? "running")}。也可以打开对应事项继续说。`
-              : "开始之后，智能体的回复会出现在这里。"}
+              ? `${runStatusLabel(asRunDetail(detail.data)?.run.status ?? latestRun?.status ?? "running")}。也可打开对应事项继续发送指令。`
+              : "启动后，智能体回复将显示在此处。"}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {events.length === 0 ? (
-            <p className="text-sm text-muted-foreground">还没有记录。</p>
+            <p className="text-sm text-muted-foreground">暂无记录。</p>
           ) : (
             events.map((event) => <ActivityLine key={event.seq} event={event} />)
           )}

@@ -318,7 +318,7 @@ function NeedAgentHint({ onCancel }: { onCancel: () => void }) {
   const navigate = useNavigate();
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
-      <p className="text-sm text-muted-foreground">先新建一个智能体，才能继续。</p>
+      <p className="text-sm text-muted-foreground">须先创建智能体后才能继续。</p>
       <Button type="button" variant="outline" onClick={() => navigate("/agents/new")}>
         新建智能体
       </Button>
@@ -359,7 +359,7 @@ export function PrincipalsPage() {
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={Users} title="还没有成员" description="先添加要参与协作的人。" />
+        <EmptyList icon={Users} title="暂无成员" description="添加将参与协作的成员。" />
       ) : (
         items.map((person) => (
           <Card key={person.id} size="sm" className="mb-2">
@@ -394,7 +394,7 @@ export function AuthorityPage() {
   const agentItems = Object.fromEntries(agentList.map((agent) => [agent.id, agent.name]));
   return (
     <section>
-      <PageHeader title="权限" description="把命令权授给某个智能体。委托不能升级。" />
+      <PageHeader title="权限" description="将命令权授予指定智能体。委托不得提升权限。" />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
@@ -486,7 +486,7 @@ export function AuthorityPage() {
         </Button>
       </div>
       {grants.length === 0 ? (
-        <EmptyList icon={Shield} title="还没有授权" description="选一个智能体授予动作，或把权限委托给另一个智能体。" />
+        <EmptyList icon={Shield} title="暂无授权" description="选择一个智能体授予动作，或将权限委托给另一个智能体。" />
       ) : (
         grants.map((grant) => (
           <Card key={grant.id} size="sm" className="mb-2">
@@ -528,7 +528,7 @@ export function MemoryPage() {
   const otherPeople = (ownerId: string) => people.filter((person) => person.id !== ownerId);
   return (
     <section>
-      <PageHeader title="记忆" description="私人笔记留在这台电脑。同步永远不会带上它们。" />
+      <PageHeader title="记忆" description="私有笔记仅保存在本机，不会随同步上传。" />
       <form
         className="mb-4 flex flex-wrap gap-2"
         onSubmit={(event: FormEvent) => {
@@ -563,10 +563,10 @@ export function MemoryPage() {
             <SelectItem value="agent_private">智能体私有</SelectItem>
           </SelectContent>
         </Select>
-        <Button type="submit">记下</Button>
+        <Button type="submit">添加</Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={StickyNote} title="还没有记忆" description="记下一条成员或智能体私有笔记。私有记忆不会上传。" />
+        <EmptyList icon={StickyNote} title="暂无记忆" description="添加一条成员或智能体私有笔记。私有记忆不会上传。" />
       ) : (
         items.map((memory) => {
           const recipients = otherPeople(memory.owner_actor_id);
@@ -650,7 +650,7 @@ export function ContractsPage() {
   const peopleItems = Object.fromEntries(people.map((person) => [person.id, person.name]));
   return (
     <section>
-      <PageHeader title="契约" description="选两位成员作为参与方，双方批准后契约才生效。" />
+      <PageHeader title="契约" description="选择两位成员作为参与方，双方批准后契约才生效。" />
       <form
         className="mb-4 grid gap-2"
         onSubmit={(event: FormEvent) => {
@@ -709,7 +709,7 @@ export function ContractsPage() {
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={FileText} title="还没有契约" description="再添加一位成员，然后选两个人提议契约。" />
+        <EmptyList icon={FileText} title="暂无契约" description="至少再添加一位成员，然后选择两方提议契约。" />
       ) : (
         items.map((contract) => (
           <Card key={contract.id} className="mb-2">
@@ -755,7 +755,7 @@ export function DependenciesPage() {
   const selectedTo = toId.value || nodes[1]?.id || nodes[0]?.id || "";
   return (
     <section>
-      <PageHeader title="依赖" description="声明内核可以校验的边，例如任务锁住仓库。" />
+      <PageHeader title="依赖" description="声明内核可校验的边，例如任务锁定仓库。" />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
@@ -801,7 +801,7 @@ export function DependenciesPage() {
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={GitBranch} title="还没有依赖" description="先有任务或智能体，再声明一条从 A 到 B 的边。" />
+        <EmptyList icon={GitBranch} title="暂无依赖" description="在已有任务或智能体后，声明一条从 A 到 B 的边。" />
       ) : (
         items.map((dep) => (
           <Card key={dep.id} size="sm" className="mb-2">
@@ -827,13 +827,13 @@ export function ConflictsPage() {
   const navigate = useNavigate();
   return (
     <section>
-      <PageHeader title="冲突" description="工作计划与约定冲突时会出现在这里，可以到收件箱处理。">
+      <PageHeader title="冲突" description="工作计划与约定冲突时会出现在此处，可到收件箱处理。">
         <Button variant="secondary" onClick={() => navigate("/inbox")}>
           打开收件箱
         </Button>
       </PageHeader>
       {items.length === 0 ? (
-        <EmptyList icon={AlertTriangle} title="没有冲突" description="智能体在压缩后改计划并撞上承诺时，会记一条冲突并投递到收件箱。" />
+        <EmptyList icon={AlertTriangle} title="暂无冲突" description="智能体在压缩后修改计划并与既有承诺冲突时，会记录冲突并投递到收件箱。" />
       ) : (
         items.map((conflict) => (
           <Card key={conflict.id} size="sm" className="mb-2">
@@ -864,7 +864,7 @@ export function RunsPage() {
   const agentList = listableAgents(asAgents(agents.data));
   const [runId, setRunId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState("");
-  const prompt = useForm("继续做这件事，用中文汇报进度。");
+  const prompt = useForm("继续执行该事项，并用中文汇报进度。");
   const detail = useQuery({
     queryKey: ["run", runId],
     enabled: Boolean(runId),
@@ -877,7 +877,7 @@ export function RunsPage() {
   const taskItems = Object.fromEntries(tasks.map((task) => [task.id, task.title]));
   return (
     <section>
-      <PageHeader title="运行" description="ACP 会话事件会进这里。选一个任务继续说，智能体会接着干。" />
+      <PageHeader title="运行" description="ACP 会话事件在此列出。选择任务后可向智能体发送后续指令。" />
       <div className="mb-4 flex flex-wrap gap-2">
         <Select value={selectedTask} items={taskItems} onValueChange={(value) => value && setTaskId(value)}>
           <SelectTrigger className="w-56">
@@ -912,7 +912,7 @@ export function RunsPage() {
         </Button>
       </div>
       {items.length === 0 ? (
-        <EmptyList icon={Play} title="还没有运行" description="在「开始」或「任务」里指派智能体后，记录会出现在这里。" />
+        <EmptyList icon={Play} title="暂无运行" description="在「开始」或「任务」中指派智能体后，记录会出现在此处。" />
       ) : (
         items.map((run) => (
           <Card key={run.id} size="sm" className="mb-2">
@@ -952,9 +952,9 @@ export function InboxPage() {
   const command = useCommand();
   return (
     <section>
-      <PageHeader title="收件箱" description="暂停、重规划、被挡住的应用，内核不会自动处理。" />
+      <PageHeader title="收件箱" description="暂停、重规划与被拦截的申请由收件箱承接，内核不会自动处理。" />
       {items.length === 0 ? (
-        <EmptyList icon={Inbox} title="收件箱是空的" description="漂移、被挡住的补丁和分享提议会出现在这里。" />
+        <EmptyList icon={Inbox} title="收件箱为空" description="漂移、被拦截的补丁与分享提议会出现在此处。" />
       ) : (
         items.map((item) => (
           <Card key={item.id} className="mb-2">
@@ -1005,7 +1005,7 @@ export function ChatPage() {
   return (
     <CatalogShell
       title="聊天"
-      description="和智能体一对一对话，不依附某一条事项。"
+      description="与智能体进行一对一对话，不依附于某一事项。"
       createLabel={createLabel}
       onCreate={() => setCreating(true)}
       creating={creating}
@@ -1102,7 +1102,7 @@ export function MyIssuesPage() {
   return (
     <CatalogShell
       title="我的任务"
-      description="只看指派给你或你正在跟的事项。"
+      description="仅显示指派给你或你正在跟进的事项。"
       createLabel={createLabel}
       onCreate={openNewTask}
       creating={false}
@@ -1137,7 +1137,7 @@ export function ProjectsPage() {
   return (
     <NamedCatalogPage
       title="项目"
-      description="用项目把事项收在一起。新建任务时可以选项目。"
+      description="用项目归集事项。新建任务时可选择所属项目。"
       noun="项目"
       icon={FolderKanban}
       makeQuery={(workspace_id) => ({ type: "Projects", workspace_id })}
@@ -1154,7 +1154,7 @@ export function AutomationsPage() {
   return (
     <NamedCatalogPage
       title="自动化"
-      description="记下名字。当前没有定时器，也不会按 Webhook 自己跑。"
+      description="保存名称。当前不提供定时器，也不会按 Webhook 自动执行。"
       noun="自动化"
       icon={Workflow}
       makeQuery={(workspace_id) => ({ type: "Automations", workspace_id })}
@@ -1187,7 +1187,7 @@ export function SquadsPage() {
   return (
     <CatalogShell
       title="小队"
-      description="小队有一个领队智能体，领队负责把活派给成员。"
+      description="小队有一名领队智能体，由领队向成员派发工作。"
       createLabel={createLabel}
       onCreate={() => setCreating(true)}
       creating={creating}
@@ -1286,7 +1286,7 @@ export function StatsPage() {
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-auto px-4 pb-4 md:px-6">
         {empty ? (
-          <CreateEmpty icon={BarChart3} title="还没有可汇总的事项。" />
+          <CreateEmpty icon={BarChart3} title="暂无可汇总的事项。" />
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card size="sm">
@@ -1324,7 +1324,7 @@ export function SkillsPage() {
   return (
     <NamedCatalogPage
       title="Skills"
-      description="记下 Skill 名称和正文。挂到智能体上还没有界面。"
+      description="保存 Skill 名称与正文。当前没有将 Skill 挂接到智能体的界面。"
       noun="Skill"
       icon={Puzzle}
       makeQuery={(workspace_id) => ({ type: "Skills", workspace_id })}

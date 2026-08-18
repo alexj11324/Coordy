@@ -27,8 +27,8 @@ import { AgentAvatarField } from "../agent-avatar";
 import { ProviderLogo } from "../provider-logo";
 
 const ACCESS_OPTIONS: { id: AgentAccess; title: string; description: string }[] = [
-  { id: "owner", title: "仅自己", description: "只有你可以运行此智能体。" },
-  { id: "workspace", title: "整个工作区", description: "工作区中的所有成员都可以运行。" },
+  { id: "owner", title: "仅自己", description: "仅创建者可运行此智能体。" },
+  { id: "workspace", title: "整个工作区", description: "工作区全体成员均可运行。" },
 ];
 
 export function AgentConfigurationPanel({
@@ -78,20 +78,20 @@ export function AgentConfigurationPanel({
             rows={compact ? 3 : 4}
             value={draft.description}
             onChange={(event) => set("description", event.target.value)}
-            placeholder="这个智能体做什么？"
+            placeholder="该智能体的用途"
             className="resize-y"
           />
         </FieldRow>
       </SettingsBlock>
 
-      <SettingsBlock title="行为与能力" description="定义它的工作方式。只属于这名智能体的长期要求写在指令中。">
+      <SettingsBlock title="行为与能力" description="定义工作方式。仅属于该智能体的长期要求写入指令。">
         <FieldRow label="指令" htmlFor="agent-create-instructions" compact={compact} align="start">
           <Textarea
             id="agent-create-instructions"
             rows={compact ? 9 : 12}
             value={draft.instructions}
             onChange={(event) => set("instructions", event.target.value)}
-            placeholder="写下这个智能体该做什么、关注什么、要避开什么…"
+            placeholder="说明该智能体应执行的工作、关注范围与禁止事项…"
             className="min-h-44 resize-y font-mono text-sm leading-6"
           />
         </FieldRow>
@@ -99,7 +99,7 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择开工时用的 harness 和模型。模型会写进智能体，开工时通过 ACP session/set_model 交给它。"
+        description="选择启动运行时使用的 harness 和模型。模型写入智能体记录，启动时通过 ACP session/set_model 下发。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
           <HarnessDropdown
@@ -118,7 +118,7 @@ export function AgentConfigurationPanel({
         </div>
       </SettingsBlock>
 
-      <SettingsBlock title="访问权限" description="开工时按这个权限检查。详情页目前不能改。">
+      <SettingsBlock title="访问权限" description="启动运行时按此权限校验。详情页当前不可修改。">
         <div className="space-y-1 p-2" role="radiogroup" aria-label="访问权限">
           {ACCESS_OPTIONS.map((option) => {
             const selected = draft.access === option.id;
@@ -177,7 +177,7 @@ export function HarnessDropdown({
       <Label>Harness</Label>
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {loading ? "正在读取 harness…" : "暂无可用 harness。到「Harness」页点刷新，或先安装 Claude Code、Codex 或 Gemini CLI。"}
+          {loading ? "正在读取 harness…" : "暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。"}
         </p>
       ) : (
         <Select value={value || undefined} items={itemMap} onValueChange={(next) => next && onChange(next)} disabled={disabled}>

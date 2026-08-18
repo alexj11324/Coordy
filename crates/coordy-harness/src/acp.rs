@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::SecretEnv;
 
-pub const ACP_STUB_REPLY: &str = "内置演示智能体已接通。这不是云端模型：在「新建智能体」里选一个本机 harness，并填入你自己的 API 密钥即可用真智能体。";
+pub const ACP_STUB_REPLY: &str = "内置演示智能体已就绪。这不是云端模型：在「新建智能体」中选择本机 harness，并配置模型密钥后即可使用真实智能体。";
 
 pub fn resolve_acp_command(configured: Option<&str>) -> Result<(String, Vec<String>), CoordyError> {
     crate::discovery::resolve_launch("acp", configured, None)

@@ -49,7 +49,7 @@ const TOOL_COPY: Record<ToolClass, { icon: ActivityIconName; title: string }> = 
   shell: { icon: "terminal", title: "执行了命令" },
   web: { icon: "globe", title: "访问了网页" },
   list: { icon: "folder", title: "查看了目录" },
-  session: { icon: "check", title: "这一轮结束了" },
+  session: { icon: "check", title: "运行已结束" },
   other: { icon: "wrench", title: "调用了工具" },
 };
 

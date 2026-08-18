@@ -50,7 +50,7 @@ export function AgentsPage() {
     <section className="space-y-4">
       <PageHeader
         title="智能体"
-        description="智能体是工作区里反复使用的身份。它决定谁来做、按什么方式做；harness 决定在这台电脑上用哪款工具执行。"
+        description="智能体是工作区中可复用的执行身份，决定由谁、以何种方式执行；harness 决定本机使用哪款工具。"
       >
         <Button onClick={() => navigate("/agents/new")}>
           <Plus data-icon="inline-start" />
@@ -63,8 +63,8 @@ export function AgentsPage() {
             <EmptyMedia variant="icon">
               <Bot />
             </EmptyMedia>
-            <EmptyTitle>还没有智能体</EmptyTitle>
-            <EmptyDescription>先新建一个，再选这台电脑上的 harness。未安装的工具不会出现在这里。</EmptyDescription>
+            <EmptyTitle>暂无智能体</EmptyTitle>
+            <EmptyDescription>请先创建智能体，并选择本机已安装的 harness。未安装的工具不会出现在此列表。</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
             <Button onClick={() => navigate("/agents/new")}>新建智能体</Button>

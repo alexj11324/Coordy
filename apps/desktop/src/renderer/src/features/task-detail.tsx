@@ -92,7 +92,7 @@ export function TaskDetailPage() {
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!task) throw new Error("找不到这件事");
+      if (!task) throw new Error("未找到该事项");
       const nextTitle = title.trim() || task.title;
       await submit({
         type: "UpdateTask",
@@ -111,8 +111,8 @@ export function TaskDetailPage() {
   if (board.isFetched && !task) {
     return (
       <section className="flex h-full flex-col items-start gap-3 p-6">
-        <h1 className="text-lg font-semibold">找不到这件事</h1>
-        <p className="text-sm text-muted-foreground">它可能已经被移走了。</p>
+        <h1 className="text-lg font-semibold">未找到该事项</h1>
+        <p className="text-sm text-muted-foreground">该事项可能已被删除或移出当前工作区。</p>
         <Button variant="secondary" onClick={() => navigate("/board")}>
           回到任务
         </Button>
@@ -158,7 +158,7 @@ export function TaskDetailPage() {
         <div className="min-h-0 flex-1 space-y-3 overflow-auto px-6 py-4">
           <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">活动</h2>
           {activity.length === 0 ? (
-            <p className="text-sm text-muted-foreground">还没有记录。指派智能体或写一条评论就会出现。</p>
+            <p className="text-sm text-muted-foreground">暂无记录。指派智能体或添加评论后将显示在此处。</p>
           ) : (
             activity.map((event) => (
               <div key={`${event.runId}-${event.seq}`} className="border-b border-border/70 pb-3 last:border-0">
@@ -175,14 +175,14 @@ export function TaskDetailPage() {
             if (!text) return;
             void startAcpOnTask(task.id, text, assignee || undefined).then(async () => {
               setComment("");
-              setNotice("评论已交给智能体。");
+              setNotice("评论已发送给智能体。");
               await qc.invalidateQueries();
             });
           }}
         >
           <Textarea
             rows={3}
-            placeholder="留言，或让智能体接着做"
+            placeholder="添加评论，或向智能体发送后续指令"
             value={comment}
             onChange={(event) => setComment(event.target.value)}
           />
@@ -262,7 +262,7 @@ export function TaskDetailPage() {
             <div className="space-y-1.5">
               <Label>运行</Label>
               <p className="text-sm text-muted-foreground">
-                {latest ? runStatusLabel(latest.status) : "还没开始"}
+                {latest ? runStatusLabel(latest.status) : "尚未启动"}
               </p>
             </div>
           </div>
@@ -274,7 +274,7 @@ export function TaskDetailPage() {
               if (!assignee) return;
               void startAcpOnTask(task.id, comment.trim() || description.trim() || task.title, assignee).then(
                 async () => {
-                  setNotice("已经交给智能体，进度会写回这件事。");
+                  setNotice("已派发给智能体，进度将写回该事项。");
                   setComment("");
                   await qc.invalidateQueries();
                 },
@@ -289,7 +289,7 @@ export function TaskDetailPage() {
               variant="destructive"
               onClick={() => {
                 void submit({ type: "CancelRun", run_id: latest.id }).then(async () => {
-                  setNotice("这一轮已停止。改指派或改状态不会自动停跑，要停就点这里。");
+                  setNotice("本次运行已停止。更改指派或状态不会自动停止运行；停止须使用此按钮。");
                   await qc.invalidateQueries();
                 });
               }}

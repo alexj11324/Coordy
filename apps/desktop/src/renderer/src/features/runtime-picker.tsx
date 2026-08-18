@@ -16,7 +16,7 @@ export function RuntimePicker({
   if (items.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        这台电脑上还没有可用 harness。到「Harness」页点刷新，或先安装 Claude Code、Codex 或 Gemini CLI。
+        本机暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。
       </p>
     );
   }
@@ -40,7 +40,7 @@ export function RuntimePicker({
                 <ProviderLogo provider={item.id} className="size-4" />
                 {item.name}
               </p>
-              <p className="truncate text-xs text-muted-foreground">这台电脑</p>
+              <p className="truncate text-xs text-muted-foreground">本机</p>
             </div>
             <Badge variant={item.installed ? "outline" : "secondary"}>
               <StatusLamp tone={presenceLampTone(presence)} />

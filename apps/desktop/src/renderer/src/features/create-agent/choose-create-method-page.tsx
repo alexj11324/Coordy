@@ -13,13 +13,13 @@ const MODES: {
   {
     icon: FileText,
     title: "从空白开始",
-    description: "自己配置每个字段。适合已经明确知道智能体应该如何工作的用户。",
+    description: "自行填写各字段。适用于职责已明确的情形。",
     href: "/agents/new/blank",
   },
   {
     icon: MessageSquare,
     title: "通过对话起草",
-    description: "本地引导提问，把你的描述填进名称和指令。不会调用所选 harness。",
+    description: "通过本机引导提问，将描述写入名称与指令。不会调用所选 harness。",
     href: "/agents/new/ai",
     recommended: true,
   },
@@ -41,9 +41,9 @@ export function CreateMethodChooser() {
     <div className="m-auto w-full max-w-5xl">
       <div className="mx-auto max-w-2xl text-center">
         <div className="text-xs font-medium tracking-wider text-muted-foreground uppercase">创建智能体</div>
-        <h2 className="mt-2 text-3xl font-semibold tracking-tight text-balance sm:text-4xl">你想从哪里开始？</h2>
+        <h2 className="mt-2 text-3xl font-semibold tracking-tight text-balance sm:text-4xl">选择创建方式</h2>
         <p className="mt-3 text-sm text-pretty text-muted-foreground">
-          从空白配置开始，或者用几轮本地提问起草指令。真正开工才用 harness。
+          可从空白配置开始，或通过本机问答起草指令。Harness 仅在启动运行时调用。
         </p>
       </div>
       <div className="mx-auto mt-9 grid max-w-3xl gap-4 md:grid-cols-2">
