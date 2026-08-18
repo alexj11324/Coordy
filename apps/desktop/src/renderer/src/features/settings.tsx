@@ -64,7 +64,7 @@ const ACCOUNT_TABS = [
   { id: "issue", label: "任务", icon: ListTodo },
   { id: "chat", label: "聊天", icon: MessageCircle },
   { id: "notifications", label: "通知", icon: Bell },
-  { id: "tokens", label: "API Token", icon: KeyRound },
+  { id: "tokens", label: "模型密钥", icon: KeyRound },
   { id: "daemon", label: "Daemon", icon: Server },
   { id: "updates", label: "更新", icon: RefreshCw },
 ] as const;
@@ -353,7 +353,7 @@ function SettingsPane({
     case "integrations":
       return (
         <Pane title="集成" description="没有 Slack / 飞书 / 企微云通道。">
-          <p className="text-sm text-muted-foreground">密钥在「API Token」。可选 LLM 顾问在「实验室」。</p>
+          <p className="text-sm text-muted-foreground">本机模型密钥在「模型密钥」。可选 LLM 顾问在「实验室」。</p>
         </Pane>
       );
     case "labs":
@@ -607,7 +607,14 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
     onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
   });
   return (
-    <Pane title="API Token" description="写进本机 0600 文件。启动子进程时注入环境变量，不会进 SQLite。">
+    <Pane
+      title="模型密钥"
+      description="给本机运行时用的 BYOK。不是 Multica 设置里那个登录账号的 API Token。"
+    >
+      <p className="text-sm text-muted-foreground">
+        Multica 的 API Token 是 <code className="font-mono text-xs">mul_</code>{" "}
+        个人访问令牌，给 CLI / 外部集成登录用。Coordy 没有云账号，不会签发那种 token，CLI 走本机 Unix socket。这里保存的密钥写进本机 0600 文件，开工时注入环境变量，不进 SQLite。
+      </p>
       <div className="flex items-center gap-2 text-sm">
         {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
       </div>
