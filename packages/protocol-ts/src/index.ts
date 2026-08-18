@@ -26,6 +26,7 @@ export type Command =
   | { type: "DeleteWorkspace"; workspace_id: string }
   | { type: "LeaveWorkspace"; workspace_id: string }
   | { type: "CreatePrincipal"; workspace_id: string; name: string }
+  | { type: "UpdatePrincipal"; principal_id: string; name: string }
   | { type: "InvitePrincipal"; workspace_id: string; name: string; role?: string }
   | { type: "SetPrincipalRole"; principal_id: string; role: string }
   | { type: "CreateAgent"; workspace_id: string; principal_id: string; name: string; harness: string }

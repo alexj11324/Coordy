@@ -186,6 +186,38 @@ impl Kernel {
                     json!({ "principal_id": id }),
                 ))
             }
+            Command::UpdatePrincipal { principal_id, name } => {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return Err(CoordyError::invalid("name is required"));
+                }
+                let principal = world
+                    .principal(&principal_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("principal"))?;
+                let allowed = match &actor {
+                    Actor::Daemon => true,
+                    Actor::Principal { id } => *id == principal_id,
+                    Actor::Agent { .. } => false,
+                };
+                if !allowed {
+                    return Err(CoordyError::denied("only you can change this name"));
+                }
+                if let Some(row) = world.principals.iter_mut().find(|p| p.id == principal_id) {
+                    row.name = name;
+                }
+                Self::audit(&mut world, &actor, "update_principal", &principal_id);
+                Self::emit(
+                    &mut world,
+                    Effect::StateChanged {
+                        workspace_id: principal.workspace_id,
+                    },
+                );
+                Ok(Outcome::ok(
+                    "principal updated",
+                    json!({ "principal_id": principal_id }),
+                ))
+            }
             Command::CreateAgent {
                 workspace_id,
                 principal_id,

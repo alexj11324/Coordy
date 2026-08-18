@@ -15,7 +15,7 @@ import {
   useSidebar,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Bot, CircleHelp, User } from "lucide-react";
+import { Bot, User } from "lucide-react";
 import { NamedWithLogo } from "../features/provider-logo";
 import { viewAsDaemon } from "../lib/coordy/client";
 import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
@@ -79,9 +79,9 @@ export function SidebarHelp() {
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
-          <DropdownMenuTrigger render={<SidebarMenuButton tooltip="帮助" className="size-8 p-2" />}>
-            <CircleHelp />
-            <span className="sr-only">帮助</span>
+          <DropdownMenuTrigger render={<SidebarMenuButton tooltip="身份" className="size-8 p-2" />}>
+            <User />
+            <span className="sr-only">身份</span>
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-56"

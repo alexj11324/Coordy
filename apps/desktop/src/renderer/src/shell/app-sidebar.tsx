@@ -13,7 +13,7 @@ import {
   SidebarRail,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { MessageCircle, Plus, Search } from "lucide-react";
+import { Plus, Search } from "lucide-react";
 import { modifierSymbol } from "../lib/coordy/shortcuts";
 import { useLayoutStore } from "../state/layout-store";
 import { SidebarHelp } from "./nav-user";
@@ -100,22 +100,7 @@ export function AppSidebar({ os }: { os?: string }) {
         <NavSection label="配置" items={configNav} />
       </SidebarContent>
       <SidebarFooter>
-        <div className="flex items-center gap-1">
-          <SidebarMenu className="min-w-0 flex-1">
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                tooltip="加入 Discord"
-                render={
-                  <a href="https://discord.com/" target="_blank" rel="noreferrer" />
-                }
-              >
-                <MessageCircle />
-                <span>加入 Discord</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-          <SidebarHelp />
-        </div>
+        <SidebarHelp />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

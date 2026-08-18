@@ -24,7 +24,7 @@ import {
 import { pickerRuntimes, runtimeChipLabel, selectableRuntimes } from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
-import { AgentConfigurationPanel, CreateAgentFooter, ModelDropdown, RuntimeDropdown } from "./agent-create-form";
+import { AgentConfigurationPanel, CreateAgentFooter, RuntimeDropdown } from "./agent-create-form";
 import { AgentCreateChip, AgentCreateShell } from "./create-shell";
 
 export function AiCreateAgentPage() {
@@ -63,15 +63,11 @@ export function AiCreateAgentPage() {
       setError("还没准备好，请稍等一下");
       return;
     }
-    if (!selected?.installed) {
-      setError("请选择一个在线运行时。");
-      return;
-    }
     setStarting(true);
     const session: BuilderSession = {
       id: newBuilderSessionId(),
       workspaceId,
-      draft: { ...draft, harness: selected.id },
+      draft: { ...draft, harness: selected?.id ?? draft.harness },
       messages: [],
       updatedAt: new Date().toISOString(),
     };
@@ -83,11 +79,11 @@ export function AiCreateAgentPage() {
   return (
     <AgentCreateShell
       title="创建智能体"
-      step="通过对话创建"
+      step="通过对话起草"
       onBack={() => navigate("/agents/new")}
       chips={
         <>
-          <AgentCreateChip>通过 AI 创建</AgentCreateChip>
+          <AgentCreateChip>通过对话起草</AgentCreateChip>
           {selected ? <AgentCreateChip>{runtimeChipLabel(selected, os)}</AgentCreateChip> : null}
         </>
       }
@@ -102,9 +98,9 @@ export function AiCreateAgentPage() {
             <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <MessageSquare className="size-5" />
             </span>
-            <h2 className="mt-5 text-xl font-semibold">为 Agent Builder 选择运行时</h2>
+            <h2 className="mt-5 text-xl font-semibold">选好新智能体的运行时</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              所选的在线运行时将用于创建对话，并默认成为新智能体的运行时。
+              这场对话在本机进行，不会调用运行时。运行时只在你点创建、之后开工时使用。
             </p>
             <div className="mt-6 space-y-4">
               <RuntimeDropdown
@@ -114,11 +110,6 @@ export function AiCreateAgentPage() {
                 os={os}
                 onChange={(harness) => setDraft((current) => ({ ...current, harness, model: "" }))}
               />
-              <ModelDropdown
-                value={draft.model}
-                disabled={!selected}
-                onChange={(model) => setDraft((current) => ({ ...current, model: model === "__default__" ? "" : model }))}
-              />
             </div>
             {error ? (
               <p role="alert" className="mt-4 text-sm text-destructive">
@@ -126,16 +117,10 @@ export function AiCreateAgentPage() {
               </p>
             ) : null}
             <div className="mt-6 flex justify-end">
-              {catalog.isLoading || online.length > 0 ? (
-                <Button onClick={startConversation} disabled={starting || catalog.isLoading || !selected?.installed}>
-                  {starting ? <Loader2 className="size-4 animate-spin" /> : null}
-                  开始对话
-                </Button>
-              ) : (
-                <Button type="button" onClick={() => navigate("/runtimes")}>
-                  连接运行时
-                </Button>
-              )}
+              <Button onClick={startConversation} disabled={starting}>
+                {starting ? <Loader2 className="size-4 animate-spin" /> : null}
+                开始对话
+              </Button>
             </div>
           </div>
         </div>
@@ -251,11 +236,11 @@ export function AiBuilderSessionPage() {
   return (
     <AgentCreateShell
       title="创建智能体"
-      step="通过对话创建"
+      step="通过对话起草"
       onBack={() => navigate("/agents/new")}
       chips={
         <>
-          <AgentCreateChip>通过 AI 创建</AgentCreateChip>
+          <AgentCreateChip>通过对话起草</AgentCreateChip>
           {selected ? <AgentCreateChip>{runtimeChipLabel(selected, os)}</AgentCreateChip> : null}
         </>
       }
@@ -273,7 +258,7 @@ export function AiBuilderSessionPage() {
             <div className="mx-auto max-w-2xl px-5 py-6">
               <div className="mb-6">
                 <h2 className="text-sm font-semibold tracking-tight">智能体配置</h2>
-                <p className="mt-1 text-xs text-muted-foreground">对话生成的建议会更新到这里，你也可以随时直接调整。</p>
+                <p className="mt-1 text-xs text-muted-foreground">提问会填到这里。这是本地草稿，不是模型回复。</p>
               </div>
               <AgentConfigurationPanel
                 compact
@@ -339,12 +324,12 @@ function BuilderConversation({
     <section className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-b px-5 py-2.5">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold">Agent Builder</h2>
-          <p className="truncate text-xs text-muted-foreground">通过对话梳理需求，并持续完善右侧配置。</p>
+          <h2 className="truncate text-sm font-semibold">起草对话</h2>
+          <p className="truncate text-xs text-muted-foreground">本地提问，把答案写进右侧指令。</p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className={cn("size-2 rounded-full", runtimeOnline ? "bg-emerald-500" : "bg-muted-foreground/40")} />
-          {runtimeOnline ? "运行时在线" : "运行时离线"}
+          {runtimeOnline ? "开工运行时在线" : "还没选在线运行时"}
         </div>
       </header>
       {messages.length > 0 ? (
@@ -391,7 +376,6 @@ function BuilderConversation({
           <textarea
             rows={2}
             value={composer}
-            disabled={!runtimeOnline}
             onChange={(event) => onComposerChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -402,7 +386,7 @@ function BuilderConversation({
             placeholder="描述你需要的智能体…"
             className="min-h-16 flex-1 resize-none rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           />
-          <Button type="submit" disabled={!runtimeOnline || !composer.trim()}>
+          <Button type="submit" disabled={!composer.trim()}>
             发送
           </Button>
         </div>

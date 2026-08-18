@@ -81,6 +81,10 @@ pub enum Command {
         workspace_id: String,
         name: String,
     },
+    UpdatePrincipal {
+        principal_id: String,
+        name: String,
+    },
     InvitePrincipal {
         workspace_id: String,
         name: String,

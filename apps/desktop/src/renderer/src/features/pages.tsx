@@ -1133,7 +1133,7 @@ export function ProjectsPage() {
   return (
     <NamedCatalogPage
       title="项目"
-      description="用项目把事项、仓库和进度收在一起。"
+      description="用项目把事项收在一起。新建任务时可以选项目。"
       noun="项目"
       icon={FolderKanban}
       makeQuery={(workspace_id) => ({ type: "Projects", workspace_id })}
@@ -1150,7 +1150,7 @@ export function AutomationsPage() {
   return (
     <NamedCatalogPage
       title="自动化"
-      description="Runbook、时间表和 Webhook 会从这里跑。"
+      description="记下名字。当前没有定时器，也不会按 Webhook 自己跑。"
       noun="自动化"
       icon={Workflow}
       makeQuery={(workspace_id) => ({ type: "Automations", workspace_id })}
@@ -1317,7 +1317,7 @@ export function SkillsPage() {
   return (
     <NamedCatalogPage
       title="Skills"
-      description="工作区 Skills 库，可以挂到智能体上启用或停用。"
+      description="记下 Skill 名称和正文。挂到智能体上还没有界面。"
       noun="Skill"
       icon={Puzzle}
       makeQuery={(workspace_id) => ({ type: "Skills", workspace_id })}

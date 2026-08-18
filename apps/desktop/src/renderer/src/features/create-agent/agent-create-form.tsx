@@ -14,8 +14,6 @@ import type { DiscoveredAgentView } from "@coordy/protocol";
 import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
-  DEFAULT_MODEL_VALUE,
-  applyDraftModelChange,
   applyDraftRuntimeChange,
   type AgentAccess,
   type AgentDraft,
@@ -93,7 +91,7 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择智能体使用的运行时，也可以覆盖运行时的默认模型。"
+        description="选择开工时用的运行时。模型由该运行时自己决定，这里不能另选。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
           <RuntimeDropdown
@@ -103,15 +101,11 @@ export function AgentConfigurationPanel({
             os={os}
             onChange={(harness) => onChange(applyDraftRuntimeChange(draft, harness))}
           />
-          <ModelDropdown
-            value={draft.model}
-            disabled={!draft.harness}
-            onChange={(model) => onChange(applyDraftModelChange(draft, model))}
-          />
+          <p className="text-sm text-muted-foreground sm:self-end sm:pb-2">模型：运行时默认</p>
         </div>
       </SettingsBlock>
 
-      <SettingsBlock title="访问权限" description="控制谁可以运行此智能体，创建后仍可修改。">
+      <SettingsBlock title="访问权限" description="开工时按这个权限检查。详情页目前不能改。">
         <div className="space-y-1 p-2" role="radiogroup" aria-label="访问权限">
           {ACCESS_OPTIONS.map((option) => {
             const selected = draft.access === option.id;
@@ -202,36 +196,6 @@ export function RuntimeDropdown({
           </SelectContent>
         </Select>
       )}
-    </div>
-  );
-}
-
-export function ModelDropdown({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: string;
-  onChange: (model: string) => void;
-  disabled?: boolean;
-}) {
-  const items = { [DEFAULT_MODEL_VALUE]: "默认（提供方）" };
-  return (
-    <div className="min-w-0 space-y-1.5">
-      <Label>模型</Label>
-      <Select
-        value={value.trim() ? value : DEFAULT_MODEL_VALUE}
-        items={items}
-        onValueChange={(next) => next && onChange(next)}
-        disabled={disabled}
-      >
-        <SelectTrigger>
-          <SelectValue placeholder={disabled ? "请先选择运行时" : "默认（提供方）"} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={DEFAULT_MODEL_VALUE}>默认（提供方）</SelectItem>
-        </SelectContent>
-      </Select>
     </div>
   );
 }

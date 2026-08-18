@@ -52,7 +52,7 @@ describe("agent creation studio helpers", () => {
     expect(modelSelectValue("gpt-5")).toBe("gpt-5");
   });
 
-  it("fills the live draft over three builder turns", () => {
+  it("fills the live draft locally without calling a runtime", () => {
     const first = applyBuilderTurn(EMPTY_AGENT_DRAFT, 0, "审查前端 Pull Request");
     expect(first.draft.name).toBe("审查前端 Pull Request");
     expect(first.reply).toContain("不该做什么");

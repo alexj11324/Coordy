@@ -940,6 +940,46 @@ fn register_computer_upserts_same_workspace_name() {
 }
 
 #[test]
+fn update_principal_renames_self_only() {
+    let h = setup();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::UpdatePrincipal {
+                principal_id: h.alice.clone(),
+                name: "艾丽丝".into(),
+            },
+        ))
+        .unwrap();
+    let view = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Account,
+        ))
+        .unwrap();
+    match view {
+        View::Account { account } => assert_eq!(account.name, "艾丽丝"),
+        _ => panic!("account"),
+    }
+    assert!(
+        h.kernel
+            .submit_sync(cmd(
+                Actor::Principal { id: h.bob.clone() },
+                Command::UpdatePrincipal {
+                    principal_id: h.alice.clone(),
+                    name: "黑客".into(),
+                },
+            ))
+            .is_err()
+    );
+}
+
+#[test]
 fn start_run_acp_spawns_against_bound_repo() {
     let ports = std::sync::Arc::new(RecordingPorts::default());
     let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));

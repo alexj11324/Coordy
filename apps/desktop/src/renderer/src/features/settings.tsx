@@ -53,11 +53,8 @@ import {
   asWorkspace,
   asWorkspaces,
 } from "../lib/coordy/views";
-import { StatusLamp } from "./status-lamp";
 import { useSession } from "../state/session-store";
 import { applyTheme, useThemeStore, type ThemePreference } from "../state/theme-store";
-
-const ABOUT_KEY = "coordy.profile.about";
 
 const ACCOUNT_TABS = [
   { id: "profile", label: "个人资料", icon: User },
@@ -110,11 +107,6 @@ const THEMES: { id: ThemePreference; label: string; hint: string }[] = [
 
 function isSettingsTab(value: string | null): value is SettingsTab {
   return ALL_TABS.some((item) => item.id === value);
-}
-
-function readAbout(): string {
-  if (typeof window === "undefined") return "";
-  return window.localStorage.getItem(ABOUT_KEY) ?? "";
 }
 
 function initials(name: string): string {
@@ -238,7 +230,7 @@ function SettingsPane({
   });
   const agents = useQuery({
     queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
-    enabled: Boolean(workspaceId) && (tab === "mcp" || tab === "chat"),
+    enabled: Boolean(workspaceId) && tab === "chat",
     queryFn: () => view({ type: "Agents", workspace_id: workspaceId! }),
   });
   const secrets = useQuery({
@@ -264,7 +256,7 @@ function SettingsPane({
 
   switch (tab) {
     case "profile":
-      return <ProfilePane name={name} />;
+      return <ProfilePane name={name} principalId={principalId} onSaved={invalidate} />;
     case "preferences":
       return <PreferencesPane />;
     case "shortcuts":
@@ -353,16 +345,14 @@ function SettingsPane({
       return (
         <Pane title="GitHub" description="Coordy 不登录 GitHub 账号，也没有 OAuth。">
           <p className="text-sm text-muted-foreground">
-            事项上可以挂 PR 编号和链接（LinkPullRequest）。仓库本身用左边「代码仓库」选本机文件夹。
+            仓库用左边「代码仓库」选本机文件夹。事项上目前不能挂 PR。
           </p>
         </Pane>
       );
     case "integrations":
       return (
         <Pane title="集成" description="没有 Slack / 飞书 / 企微云通道。">
-          <p className="text-sm text-muted-foreground">
-            侧栏底部可以打开 Discord。密钥在「API Token」。可选 LLM 顾问在「实验室」。
-          </p>
+          <p className="text-sm text-muted-foreground">密钥在「API Token」。可选 LLM 顾问在「实验室」。</p>
         </Pane>
       );
     case "labs":
@@ -388,7 +378,11 @@ function SettingsPane({
     case "labels":
       return <LabelsPane workspaceId={workspaceId} items={asLabels(labels.data)} onSaved={invalidate} />;
     case "properties":
-      return <PropertiesPane workspaceId={workspaceId} onSaved={invalidate} />;
+      return (
+        <Pane title="属性" description="内核可以存自定义字段定义，但事项创建和详情都还没接上，所以这里不能假装去定义。">
+          <p className="text-sm text-muted-foreground">等事项页能读写自定义字段后，再在这里管理字段定义。</p>
+        </Pane>
+      );
     case "quick_actions":
       return (
         <Pane title="快捷操作" description="Coordy 用命令面板，没有云端工作流按钮。">
@@ -399,7 +393,11 @@ function SettingsPane({
         </Pane>
       );
     case "mcp":
-      return <McpPane workspaceId={workspaceId} agents={listableAgents(asAgents(agents.data))} onSaved={invalidate} />;
+      return (
+        <Pane title="MCP" description="智能体记录里可以存 MCP 服务器名，但开工时 spawn 不会带上它们。">
+          <p className="text-sm text-muted-foreground">当前版本没有可保存的 MCP 配置，避免写进去却不生效。</p>
+        </Pane>
+      );
     default:
       return null;
   }
@@ -475,31 +473,39 @@ function Row({ label, hint, children }: { label: string; hint?: ReactNode; child
   );
 }
 
-function ProfilePane({ name }: { name: string }) {
-  const [about, setAbout] = useState(readAbout);
+function ProfilePane({
+  name,
+  principalId,
+  onSaved,
+}: {
+  name: string;
+  principalId: string | null;
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  useEffect(() => {
+    setDraft(name);
+  }, [name]);
+  const dirty = draft.trim() !== name && draft.trim().length > 0;
   return (
-    <Pane title="个人资料" description="名字来自当前工作区成员。Coordy 没有单独的云账号资料表。">
-      <Row label="头像">
+    <Pane title="个人资料" description="名字存在本机工作区成员表里，不是云账号。">
+      <Row label="头像" hint="用姓名首字母生成，不能上传照片。">
         <span className="inline-flex size-12 items-center justify-center rounded-full bg-emerald-600 text-sm font-medium text-white">
-          {initials(name)}
+          {initials(draft.trim() || name)}
         </span>
       </Row>
-      <Row label="姓名" hint="改名需要内核提供 UpdatePrincipal，当前版本只能显示。">
-        <Input value={name} readOnly />
+      <Row label="姓名">
+        <Input value={draft} onChange={(event) => setDraft(event.target.value)} />
       </Row>
-      <div className="space-y-1.5">
-        <Label htmlFor="about-you">关于你</Label>
-        <Textarea
-          id="about-you"
-          rows={4}
-          value={about}
-          placeholder="写一点你希望智能体知道的背景。现在只存在这台电脑，还不会自动塞进提示词。"
-          onChange={(event) => {
-            setAbout(event.target.value);
-            window.localStorage.setItem(ABOUT_KEY, event.target.value);
-          }}
-        />
-      </div>
+      <Button
+        disabled={!principalId || !dirty}
+        onClick={() => {
+          if (!principalId) return;
+          void submit({ type: "UpdatePrincipal", principal_id: principalId, name: draft.trim() }).then(onSaved);
+        }}
+      >
+        保存姓名
+      </Button>
     </Pane>
   );
 }
@@ -674,15 +680,21 @@ function GeneralPane({
 }) {
   const [name, setName] = useState(workspace?.name ?? "");
   const [description, setDescription] = useState(workspace?.description ?? "");
+  const [context, setContext] = useState(workspace?.context ?? "");
   const [prefix, setPrefix] = useState(workspace?.issue_prefix ?? "COOR");
   useEffect(() => {
     setName(workspace?.name ?? "");
     setDescription(workspace?.description ?? "");
+    setContext(workspace?.context ?? "");
     setPrefix(workspace?.issue_prefix ?? "COOR");
-  }, [workspace?.id, workspace?.name, workspace?.description, workspace?.issue_prefix]);
-  const dirty = name !== (workspace?.name ?? "") || description !== (workspace?.description ?? "") || prefix !== (workspace?.issue_prefix ?? "COOR");
+  }, [workspace?.id, workspace?.name, workspace?.description, workspace?.context, workspace?.issue_prefix]);
+  const dirty =
+    name !== (workspace?.name ?? "") ||
+    description !== (workspace?.description ?? "") ||
+    context !== (workspace?.context ?? "") ||
+    prefix !== (workspace?.issue_prefix ?? "COOR");
   return (
-    <Pane title="常规" description="工作区名字和事项前缀存在本机内核里。">
+    <Pane title="常规" description="工作区名字、给智能体的背景和事项前缀存在本机内核里。">
       <div className="space-y-1.5">
         <Label htmlFor="ws-name">名称</Label>
         <Input id="ws-name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -690,6 +702,16 @@ function GeneralPane({
       <div className="space-y-1.5">
         <Label htmlFor="ws-desc">说明</Label>
         <Textarea id="ws-desc" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="ws-context">给智能体的背景</Label>
+        <Textarea
+          id="ws-context"
+          rows={5}
+          value={context}
+          onChange={(event) => setContext(event.target.value)}
+          placeholder="开工时会写进指令前面。空着就不会加。"
+        />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="ws-prefix">事项前缀</Label>
@@ -704,6 +726,7 @@ function GeneralPane({
             workspace_id: workspaceId,
             name: name.trim(),
             description,
+            context,
             issue_prefix: prefix.trim() || "COOR",
           }).then(onSaved);
         }}
@@ -800,97 +823,6 @@ function LabelsPane({
           </div>
         ))
       )}
-    </Pane>
-  );
-}
-
-function PropertiesPane({ workspaceId, onSaved }: { workspaceId: string | null; onSaved: () => void }) {
-  const [key, setKey] = useState("");
-  const [valueType, setValueType] = useState("text");
-  return (
-    <Pane title="属性" description="事项可以带自定义字段。工作区级定义目前没有独立查询，保存后能写进内核，这页不能列出已有项。">
-      <div className="grid gap-3 sm:grid-cols-[1fr_8rem_auto]">
-        <Input placeholder="字段名" value={key} onChange={(event) => setKey(event.target.value)} />
-        <Select
-          value={valueType}
-          items={{ text: "文本", number: "数字", date: "日期" }}
-          onValueChange={(value) => value && setValueType(value)}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="text">文本</SelectItem>
-            <SelectItem value="number">数字</SelectItem>
-            <SelectItem value="date">日期</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button
-          disabled={!workspaceId || !key.trim()}
-          onClick={() => {
-            if (!workspaceId) return;
-            void submit({
-              type: "SetCustomPropertyDef",
-              workspace_id: workspaceId,
-              key: key.trim(),
-              value_type: valueType,
-            }).then(() => {
-              setKey("");
-              onSaved();
-            });
-          }}
-        >
-          保存定义
-        </Button>
-      </div>
-    </Pane>
-  );
-}
-
-function McpPane({
-  workspaceId,
-  agents,
-  onSaved,
-}: {
-  workspaceId: string | null;
-  agents: ReturnType<typeof listableAgents>;
-  onSaved: () => void;
-}) {
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  return (
-    <Pane title="MCP" description="MCP 服务器挂在智能体上，不是工作区全局插件市场。">
-      {agents.length === 0 ? (
-        <p className="text-sm text-muted-foreground">还没有智能体。</p>
-      ) : (
-        agents.map((agent) => {
-          const value = drafts[agent.id] ?? (agent.mcp_servers ?? []).join(", ");
-          return (
-            <div key={agent.id} className="space-y-1.5 border-b border-border py-3">
-              <Label>{agentDisplayName(agent)}</Label>
-              <div className="flex gap-2">
-                <Input
-                  value={value}
-                  placeholder="server-a, server-b"
-                  onChange={(event) => setDrafts((current) => ({ ...current, [agent.id]: event.target.value }))}
-                />
-                <Button
-                  variant="secondary"
-                  onClick={() => {
-                    const servers = value
-                      .split(",")
-                      .map((item) => item.trim())
-                      .filter(Boolean);
-                    void submit({ type: "UpdateAgent", agent_id: agent.id, mcp_servers: servers }).then(onSaved);
-                  }}
-                >
-                  保存
-                </Button>
-              </div>
-            </div>
-          );
-        })
-      )}
-      {workspaceId ? null : <p className="text-sm text-muted-foreground">工作区还没就绪。</p>}
     </Pane>
   );
 }
