@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { join } from "path";
 import { exec } from "child_process";
 import { IPC } from "../shared/ipc-channels";
@@ -16,6 +16,9 @@ function createWindow() {
   const window = new BrowserWindow({
     width: 1280,
     height: 840,
+    title: "Coordy",
+    backgroundColor: "#fafafa",
+    autoHideMenuBar: true,
     webPreferences: {
       ...BROWSER_WINDOW_POLICY,
       preload: resolvePreloadPath(__dirname),
@@ -48,6 +51,9 @@ function guard(event: Electron.IpcMainInvokeEvent) {
 }
 
 app.whenReady().then(async () => {
+  if (process.platform !== "darwin") {
+    Menu.setApplicationMenu(null);
+  }
   await daemon.start();
   ipcMain.handle(IPC.submit, (event, command) => {
     guard(event);

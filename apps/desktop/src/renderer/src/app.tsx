@@ -22,8 +22,20 @@ export function App() {
       void queryClient.invalidateQueries();
     });
   }, [ready]);
-  if (error) return <p className="p-6 text-red-600">{error}</p>;
-  if (!ready) return <p className="p-6">Starting coordyd…</p>;
+  if (error) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-6 text-destructive">
+        {error}
+      </div>
+    );
+  }
+  if (!ready) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background p-6 text-sm text-muted-foreground">
+        Starting coordyd…
+      </div>
+    );
+  }
   return (
     <QueryClientProvider client={queryClient}>
       <HashRouter>

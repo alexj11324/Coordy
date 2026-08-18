@@ -4,14 +4,18 @@
   "rsc": false,
   "tsx": true,
   "tailwind": {
+    "config": "",
     "css": "src/globals.css",
     "baseColor": "zinc",
-    "cssVariables": true
+    "cssVariables": true,
+    "prefix": ""
   },
   "iconLibrary": "lucide",
   "aliases": {
-    "components": "@coordy/ui/components",
-    "ui": "@coordy/ui/components/ui",
-    "utils": "@coordy/ui/lib/utils"
+    "components": "@/components",
+    "utils": "@/lib/utils",
+    "ui": "@/components/ui",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
   }
 }

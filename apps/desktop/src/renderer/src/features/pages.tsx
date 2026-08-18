@@ -3,12 +3,42 @@ import {
   Badge,
   Button,
   Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
   Input,
   Label,
   PageHeader,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Switch,
   Textarea,
 } from "@coordy/ui";
+import type { LucideIcon } from "lucide-react";
+import {
+  AlertTriangle,
+  Bot,
+  FileText,
+  GitBranch,
+  Inbox,
+  LayoutDashboard,
+  Play,
+  Plus,
+  Shield,
+  StickyNote,
+  Users,
+} from "lucide-react";
 import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { submit, view } from "../lib/coordy/client";
 import { useSession } from "../state/session-store";
@@ -45,6 +75,32 @@ function useCommand() {
   });
 }
 
+function Toolbar({ children }: { children: ReactNode }) {
+  return <div className="mb-4 flex flex-wrap items-center gap-2">{children}</div>;
+}
+
+function EmptyList({
+  icon: Icon,
+  title,
+  description,
+}: {
+  icon: LucideIcon;
+  title: string;
+  description: string;
+}) {
+  return (
+    <Empty className="bg-muted/30">
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <Icon />
+        </EmptyMedia>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{description}</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
 export function BoardPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
   const commitments = useWorkspaceQuery((workspace_id) => ({
@@ -61,7 +117,7 @@ export function BoardPage() {
   const agentList = asAgents(agents.data);
   return (
     <section>
-      <PageHeader title="Board" />
+      <PageHeader title="Board" description="Tasks, worktrees, and the commitments that bind them." />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(event: FormEvent) => {
@@ -77,84 +133,110 @@ export function BoardPage() {
           value={title.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => title.set(event.target.value)}
         />
-        <Button type="submit">Create</Button>
+        <Button type="submit">
+          <Plus data-icon="inline-start" />
+          Create
+        </Button>
       </form>
-      <div className="grid gap-3">
-        {tasks.map((task) => (
-          <Card key={task.id}>
-            <div className="flex items-center justify-between">
-              <strong>{task.title}</strong>
-              <Badge>{task.status}</Badge>
-            </div>
-            {task.assignee_agent_id ? (
-              <p className="mt-1 text-xs text-zinc-500">agent {task.assignee_agent_id}</p>
-            ) : null}
-            {task.worktree_path ? (
-              <p className="mt-1 text-xs text-zinc-500">{task.worktree_path}</p>
-            ) : null}
-            {task.blocked_reason ? (
-              <p className="mt-2 text-sm text-red-600">{task.blocked_reason}</p>
-            ) : null}
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  const agent = agentList[0];
-                  if (agent) command.mutate({ type: "AssignTask", task_id: task.id, agent_id: agent.id });
-                }}
-              >
-                Assign agent
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  if (!workspaceId) return;
-                  command.mutate({
-                    type: "UpsertCommitment",
-                    workspace_id: workspaceId,
-                    task_id: task.id,
-                    commitment_type: "CONSTRAINT",
-                    claim: claim.value,
-                    polarity: "MUST_NOT",
-                    authority: "USER",
-                    scope: task.id,
-                  });
-                }}
-              >
-                Write commitment
-              </Button>
-              <Button variant="secondary" onClick={() => command.mutate({ type: "CreateWorktree", task_id: task.id })}>
-                Create worktree
-              </Button>
-            </div>
-            <div className="mt-2 flex gap-2">
-              <Input
-                placeholder="Patch to apply"
-                value={patch.value}
-                onChange={(event: ChangeEvent<HTMLInputElement>) => patch.set(event.target.value)}
-              />
-              <Button
-                variant="destructive"
-                onClick={() => command.mutate({ type: "ApplyPatch", task_id: task.id, patch: patch.value })}
-              >
-                Apply
-              </Button>
-            </div>
-          </Card>
-        ))}
-      </div>
-      <h2 className="mb-2 mt-6 text-lg font-medium">Commitments</h2>
+      {tasks.length === 0 ? (
+        <EmptyList
+          icon={LayoutDashboard}
+          title="No tasks yet"
+          description="Create a task to assign an agent, write a commitment, or open a worktree."
+        />
+      ) : (
+        <div className="grid gap-3">
+          {tasks.map((task) => (
+            <Card key={task.id}>
+              <CardHeader>
+                <CardTitle>{task.title}</CardTitle>
+                <CardDescription>
+                  {task.assignee_agent_id ? `Assigned to ${task.assignee_agent_id}` : "Unassigned"}
+                  {task.worktree_path ? ` · ${task.worktree_path}` : ""}
+                </CardDescription>
+                <CardAction>
+                  <Badge>{task.status}</Badge>
+                </CardAction>
+              </CardHeader>
+              {task.blocked_reason ? (
+                <CardContent>
+                  <p className="text-sm text-destructive">{task.blocked_reason}</p>
+                </CardContent>
+              ) : null}
+              <CardFooter className="flex-col items-stretch gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      const agent = agentList[0];
+                      if (agent) command.mutate({ type: "AssignTask", task_id: task.id, agent_id: agent.id });
+                    }}
+                  >
+                    Assign agent
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      if (!workspaceId) return;
+                      command.mutate({
+                        type: "UpsertCommitment",
+                        workspace_id: workspaceId,
+                        task_id: task.id,
+                        commitment_type: "CONSTRAINT",
+                        claim: claim.value,
+                        polarity: "MUST_NOT",
+                        authority: "USER",
+                        scope: task.id,
+                      });
+                    }}
+                  >
+                    Write commitment
+                  </Button>
+                  <Button variant="secondary" onClick={() => command.mutate({ type: "CreateWorktree", task_id: task.id })}>
+                    Create worktree
+                  </Button>
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Patch to apply"
+                    value={patch.value}
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => patch.set(event.target.value)}
+                  />
+                  <Button
+                    variant="destructive"
+                    onClick={() => command.mutate({ type: "ApplyPatch", task_id: task.id, patch: patch.value })}
+                  >
+                    Apply
+                  </Button>
+                </div>
+              </CardFooter>
+            </Card>
+          ))}
+        </div>
+      )}
+      <h2 className="mb-2 mt-8 text-lg font-medium">Commitments</h2>
       <Input
         className="mb-3"
         value={claim.value}
         onChange={(event: ChangeEvent<HTMLInputElement>) => claim.set(event.target.value)}
       />
-      {asCommitments(commitments.data).map((item) => (
-        <Card key={item.id} className="mb-2">
-          <Badge>{item.authority}</Badge> {item.claim}{" "}
-          <span className="text-xs text-zinc-500">{item.status}</span>
-        </Card>
-      ))}
+      {asCommitments(commitments.data).length === 0 ? (
+        <p className="text-sm text-muted-foreground">No commitments yet. They appear after you write one on a task.</p>
+      ) : (
+        asCommitments(commitments.data).map((item) => (
+          <Card key={item.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Badge>{item.authority}</Badge>
+                {item.claim}
+              </CardTitle>
+              <CardAction>
+                <Badge variant="outline">{item.status}</Badge>
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -167,7 +249,7 @@ export function PrincipalsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="Principals" />
+      <PageHeader title="Principals" description="People who own agents, memory, and contract votes." />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(event: FormEvent) => {
@@ -183,13 +265,25 @@ export function PrincipalsPage() {
           value={name.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => name.set(event.target.value)}
         />
-        <Button type="submit">Add</Button>
+        <Button type="submit">
+          <Plus data-icon="inline-start" />
+          Add
+        </Button>
       </form>
-      {items.map((person) => (
-        <Card key={person.id} className="mb-2">
-          {person.name} <Badge>{person.id}</Badge>
-        </Card>
-      ))}
+      {items.length === 0 ? (
+        <EmptyList icon={Users} title="No principals" description="Add the people this workspace coordinates." />
+      ) : (
+        items.map((person) => (
+          <Card key={person.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle>{person.name}</CardTitle>
+              <CardAction>
+                <Badge variant="outline">{person.id}</Badge>
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -205,7 +299,7 @@ export function AgentsPage() {
   const session = useSession();
   return (
     <section>
-      <PageHeader title="Agents" />
+      <PageHeader title="Agents" description="Harness-backed workers. They cannot outrank their principal." />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(event: FormEvent) => {
@@ -228,20 +322,28 @@ export function AgentsPage() {
           value={name.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => name.set(event.target.value)}
         />
-        <Button type="submit">Add</Button>
+        <Button type="submit">
+          <Plus data-icon="inline-start" />
+          Add
+        </Button>
       </form>
-      {items.map((agent) => (
-        <Card key={agent.id} className="mb-2">
-          {agent.name} <Badge>{agent.harness}</Badge>
-          <Button
-            className="ml-2"
-            variant="ghost"
-            onClick={() => session.setAgent(agent.id, agent.principal_id)}
-          >
-            Act as
-          </Button>
-        </Card>
-      ))}
+      {items.length === 0 ? (
+        <EmptyList icon={Bot} title="No agents" description="Add an agent owned by the first principal, then act as it from the sidebar." />
+      ) : (
+        items.map((agent) => (
+          <Card key={agent.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle>{agent.name}</CardTitle>
+              <CardDescription>Harness {agent.harness}</CardDescription>
+              <CardAction>
+                <Button variant="ghost" size="sm" onClick={() => session.setAgent(agent.id, agent.principal_id)}>
+                  Act as
+                </Button>
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -257,7 +359,7 @@ export function AuthorityPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="Authority" />
+      <PageHeader title="Authority" description="Grants never upgrade. Delegation is an attenuation." />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
@@ -306,17 +408,32 @@ export function AuthorityPage() {
           Delegate A1→A2
         </Button>
       </form>
-      {grants.map((grant) => (
-        <Card key={grant.id} className="mb-2">
-          {grant.grantor_id} → {grant.grantee_id} <Badge>{grant.action}</Badge> {grant.resource}
-          {grant.delegated ? <Badge className="ml-2">delegated</Badge> : null}
-          {grant.revoked ? <Badge className="ml-2">revoked</Badge> : (
-            <Button className="ml-2" variant="ghost" onClick={() => command.mutate({ type: "RevokeGrant", grant_id: grant.id })}>
-              Revoke
-            </Button>
-          )}
-        </Card>
-      ))}
+      {grants.length === 0 ? (
+        <EmptyList icon={Shield} title="No grants" description="Grant an action on a resource to the first agent, or delegate A1→A2." />
+      ) : (
+        grants.map((grant) => (
+          <Card key={grant.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle className="font-mono text-sm">
+                {grant.grantor_id} → {grant.grantee_id}
+              </CardTitle>
+              <CardDescription>
+                {grant.action} on {grant.resource}
+              </CardDescription>
+              <CardAction className="flex items-center gap-2">
+                {grant.delegated ? <Badge>delegated</Badge> : null}
+                {grant.revoked ? (
+                  <Badge variant="destructive">revoked</Badge>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => command.mutate({ type: "RevokeGrant", grant_id: grant.id })}>
+                    Revoke
+                  </Button>
+                )}
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -332,7 +449,7 @@ export function MemoryPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="Memory" />
+      <PageHeader title="Memory" description="Private notes stay on this machine. Sync never includes them." />
       <form
         className="mb-4 flex flex-wrap gap-2"
         onSubmit={(event: FormEvent) => {
@@ -349,50 +466,60 @@ export function MemoryPage() {
         }}
       >
         <Input
+          className="min-w-56 flex-1"
           placeholder="Memory body"
           value={body.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => body.set(event.target.value)}
         />
-        <select
-          className="rounded border border-zinc-300 px-2 text-sm"
-          value={visibility.value}
-          onChange={(event: ChangeEvent<HTMLSelectElement>) => visibility.set(event.target.value)}
-        >
-          <option value="principal">principal</option>
-          <option value="agent_private">agent_private</option>
-        </select>
+        <Select value={visibility.value} onValueChange={(value) => value && visibility.set(value)}>
+          <SelectTrigger className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="principal">principal</SelectItem>
+            <SelectItem value="agent_private">agent_private</SelectItem>
+          </SelectContent>
+        </Select>
         <Button type="submit">Append</Button>
       </form>
-      {items.map((memory) => (
-        <Card key={memory.id} className="mb-2">
-          <Badge>{memory.visibility}</Badge> <Badge>{memory.status}</Badge> {memory.body}
-          <div className="mt-2 flex gap-2">
-            <Button variant="secondary" onClick={() => command.mutate({ type: "PublishMemory", memory_id: memory.id })}>
-              Publish
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                const other = people.find((person) => person.id !== memory.owner_actor_id);
-                if (other) {
-                  command.mutate({
-                    type: "ShareMemory",
-                    memory_id: memory.id,
-                    to_principal_id: other.id,
-                  });
-                }
-              }}
-            >
-              Share
-            </Button>
-            {memory.status === "proposed_share" ? (
-              <Button onClick={() => command.mutate({ type: "AcceptShare", memory_id: memory.id })}>
-                Accept
+      {items.length === 0 ? (
+        <EmptyList icon={StickyNote} title="No memories" description="Append a principal or agent-private note. Private memory never uploads." />
+      ) : (
+        items.map((memory) => (
+          <Card key={memory.id} className="mb-2">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Badge>{memory.visibility}</Badge>
+                <Badge variant="outline">{memory.status}</Badge>
+              </CardTitle>
+              <CardDescription>{memory.body}</CardDescription>
+            </CardHeader>
+            <CardFooter className="gap-2">
+              <Button variant="secondary" onClick={() => command.mutate({ type: "PublishMemory", memory_id: memory.id })}>
+                Publish
               </Button>
-            ) : null}
-          </div>
-        </Card>
-      ))}
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  const other = people.find((person) => person.id !== memory.owner_actor_id);
+                  if (other) {
+                    command.mutate({
+                      type: "ShareMemory",
+                      memory_id: memory.id,
+                      to_principal_id: other.id,
+                    });
+                  }
+                }}
+              >
+                Share
+              </Button>
+              {memory.status === "proposed_share" ? (
+                <Button onClick={() => command.mutate({ type: "AcceptShare", memory_id: memory.id })}>Accept</Button>
+              ) : null}
+            </CardFooter>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -408,7 +535,7 @@ export function ContractsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="Contracts" />
+      <PageHeader title="Contracts" description="Proposals need the first two principals before they bind." />
       <form
         className="mb-4 grid gap-2"
         onSubmit={(event: FormEvent) => {
@@ -436,22 +563,32 @@ export function ContractsPage() {
           value={body.value}
           onChange={(event: ChangeEvent<HTMLTextAreaElement>) => body.set(event.target.value)}
         />
-        <Button type="submit">Propose with first two principals</Button>
+        <Button type="submit" className="w-fit">
+          Propose with first two principals
+        </Button>
       </form>
-      {items.map((contract) => (
-        <Card key={contract.id} className="mb-2">
-          <div className="flex items-center justify-between">
-            <strong>{contract.title}</strong>
-            <Badge>{contract.status}</Badge>
-          </div>
-          <p className="text-sm">{contract.body}</p>
-          {contract.status === "proposed" ? (
-            <Button className="mt-2" onClick={() => command.mutate({ type: "ApproveContract", contract_id: contract.id })}>
-              Approve
-            </Button>
-          ) : null}
-        </Card>
-      ))}
+      {items.length === 0 ? (
+        <EmptyList icon={FileText} title="No contracts" description="Add a second principal, then propose a contract they can approve." />
+      ) : (
+        items.map((contract) => (
+          <Card key={contract.id} className="mb-2">
+            <CardHeader>
+              <CardTitle>{contract.title}</CardTitle>
+              <CardDescription>{contract.body}</CardDescription>
+              <CardAction>
+                <Badge>{contract.status}</Badge>
+              </CardAction>
+            </CardHeader>
+            {contract.status === "proposed" ? (
+              <CardFooter>
+                <Button onClick={() => command.mutate({ type: "ApproveContract", contract_id: contract.id })}>
+                  Approve
+                </Button>
+              </CardFooter>
+            ) : null}
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -466,7 +603,7 @@ export function DependenciesPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="Dependencies" />
+      <PageHeader title="Dependencies" description="Declared edges the kernel can validate." />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
@@ -487,11 +624,23 @@ export function DependenciesPage() {
         <Input placeholder="entity" value={entity.value} onChange={(event: ChangeEvent<HTMLInputElement>) => entity.set(event.target.value)} />
         <Button type="submit">Declare</Button>
       </form>
-      {items.map((dep) => (
-        <Card key={dep.id} className="mb-2">
-          {dep.entity} {dep.from_id} → {dep.to_id} {dep.valid ? "valid" : "invalid"}
-        </Card>
-      ))}
+      {items.length === 0 ? (
+        <EmptyList icon={GitBranch} title="No dependencies" description="Declare an edge from one id to another, for example a repo lock." />
+      ) : (
+        items.map((dep) => (
+          <Card key={dep.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle className="font-mono text-sm">
+                {dep.from_id} → {dep.to_id}
+              </CardTitle>
+              <CardDescription>{dep.entity}</CardDescription>
+              <CardAction>
+                <Badge variant={dep.valid ? "outline" : "destructive"}>{dep.valid ? "valid" : "invalid"}</Badge>
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -501,12 +650,21 @@ export function ConflictsPage() {
   const items = asConflicts(q.data);
   return (
     <section>
-      <PageHeader title="Conflicts" />
-      {items.map((conflict) => (
-        <Card key={conflict.id} className="mb-2">
-          {conflict.summary} <Badge>{conflict.status}</Badge>
-        </Card>
-      ))}
+      <PageHeader title="Conflicts" description="Working plans that contradict a commitment land here." />
+      {items.length === 0 ? (
+        <EmptyList icon={AlertTriangle} title="No conflicts" description="Replay a compaction fixture on Runs to see a plan collide with a commitment." />
+      ) : (
+        items.map((conflict) => (
+          <Card key={conflict.id} size="sm" className="mb-2">
+            <CardHeader>
+              <CardTitle>{conflict.summary}</CardTitle>
+              <CardAction>
+                <Badge>{conflict.status}</Badge>
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -526,7 +684,7 @@ export function RunsPage() {
   const events = asRunDetail(detail.data)?.events ?? [];
   return (
     <section>
-      <PageHeader title="Runs">
+      <PageHeader title="Runs" description="JSONL and fixture harness traces, including compaction snapshots.">
         <Button
           onClick={() => {
             const task = tasks[0];
@@ -552,23 +710,36 @@ export function RunsPage() {
           Replay compaction fixture
         </Button>
       </PageHeader>
-      {items.map((run) => (
-        <Card key={run.id} className="mb-2">
-          <button className="flex w-full justify-between text-left" onClick={() => setRunId(run.id)}>
-            <span>{run.id}</span>
-            <Badge>{run.status}</Badge>
-          </button>
-          <div className="text-sm text-zinc-500">compactions: {run.compaction_count}</div>
-        </Card>
-      ))}
+      {items.length === 0 ? (
+        <EmptyList icon={Play} title="No runs" description="Create a task first, then replay the compaction fixture." />
+      ) : (
+        items.map((run) => (
+          <Card key={run.id} size="sm" className="mb-2">
+            <CardHeader>
+              <button className="text-left" onClick={() => setRunId(run.id)}>
+                <CardTitle className="font-mono text-sm">{run.id}</CardTitle>
+                <CardDescription>compactions: {run.compaction_count}</CardDescription>
+              </button>
+              <CardAction>
+                <Badge>{run.status}</Badge>
+              </CardAction>
+            </CardHeader>
+          </Card>
+        ))
+      )}
       {runId ? (
         <Card className="mt-4">
-          <h2 className="mb-2 font-medium">Events</h2>
-          {events.map((event) => (
-            <p key={event.seq} className="text-sm">
-              <Badge>{event.kind}</Badge> {event.payload}
-            </p>
-          ))}
+          <CardHeader>
+            <CardTitle>Events</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {events.map((event) => (
+              <p key={event.seq} className="text-sm">
+                <Badge className="mr-2">{event.kind}</Badge>
+                {event.payload}
+              </p>
+            ))}
+          </CardContent>
         </Card>
       ) : null}
     </section>
@@ -581,16 +752,27 @@ export function InboxPage() {
   const command = useCommand();
   return (
     <section>
-      <PageHeader title="Inbox" />
-      {items.map((item) => (
-        <Card key={item.id} className="mb-2">
-          <Badge>{item.kind}</Badge> <strong>{item.title}</strong>
-          <p className="text-sm">{item.body}</p>
-          <Button className="mt-2" variant="ghost" onClick={() => command.mutate({ type: "DismissInbox", item_id: item.id })}>
-            Dismiss
-          </Button>
-        </Card>
-      ))}
+      <PageHeader title="Inbox" description="Pause and replan items the kernel will not auto-apply." />
+      {items.length === 0 ? (
+        <EmptyList icon={Inbox} title="Inbox is empty" description="Drift, blocked applies, and share proposals show up here." />
+      ) : (
+        items.map((item) => (
+          <Card key={item.id} className="mb-2">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Badge>{item.kind}</Badge>
+                {item.title}
+              </CardTitle>
+              <CardDescription>{item.body}</CardDescription>
+            </CardHeader>
+            <CardFooter>
+              <Button variant="ghost" onClick={() => command.mutate({ type: "DismissInbox", item_id: item.id })}>
+                Dismiss
+              </Button>
+            </CardFooter>
+          </Card>
+        ))
+      )}
     </section>
   );
 }
@@ -607,26 +789,40 @@ export function SettingsPage() {
   const enabled = q.data?.type === "Settings" ? q.data.llm_advisor_enabled : false;
   return (
     <section>
-      <PageHeader title="Settings" />
+      <PageHeader title="Settings" description="This machine stays useful with the advisor off." />
       <Card>
-        <Label>Repository</Label>
-        <p className="mb-3 text-sm text-zinc-600">
-          {q.data?.type === "Settings" ? q.data.repo_path ?? "none" : "…"}
-        </p>
-        <Switch
-          checked={enabled}
-          label="Optional LLM advisor (deterministic gates stay on)"
-          onCheckedChange={(next) => {
-            if (workspaceId) {
-              command.mutate({
-                type: "SetSettings",
-                workspace_id: workspaceId,
-                llm_advisor_enabled: next,
-              });
-            }
-          }}
-        />
-        <div className="mt-3 flex flex-wrap gap-2">
+        <CardHeader>
+          <CardTitle>Workspace</CardTitle>
+          <CardDescription>Bind a git repository and keep deterministic gates on.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <Label>Repository</Label>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {q.data?.type === "Settings" ? q.data.repo_path ?? "none" : "…"}
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-border px-3 py-2">
+            <div>
+              <Label htmlFor="llm-advisor">Optional LLM advisor</Label>
+              <p className="text-sm text-muted-foreground">Deterministic gates stay on either way.</p>
+            </div>
+            <Switch
+              id="llm-advisor"
+              checked={enabled}
+              onCheckedChange={(next) => {
+                if (workspaceId) {
+                  command.mutate({
+                    type: "SetSettings",
+                    workspace_id: workspaceId,
+                    llm_advisor_enabled: Boolean(next),
+                  });
+                }
+              }}
+            />
+          </div>
+        </CardContent>
+        <CardFooter className="flex-wrap gap-2">
           <Button
             onClick={async () => {
               const path = await window.coordy.chooseRepository();
@@ -655,8 +851,8 @@ export function SettingsPage() {
           >
             Install CLI
           </Button>
-        </div>
-        {appInfo ? <p className="mt-2 text-xs text-zinc-500">{appInfo}</p> : null}
+          {appInfo ? <span className="text-xs text-muted-foreground">{appInfo}</span> : null}
+        </CardFooter>
       </Card>
     </section>
   );
@@ -670,7 +866,7 @@ function useForm(initial: string) {
 export function Page({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section>
-      <h1 className="mb-4 text-2xl font-semibold">{title}</h1>
+      <h1 className="mb-4 text-2xl font-semibold tracking-tight">{title}</h1>
       {children}
     </section>
   );
