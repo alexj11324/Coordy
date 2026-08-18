@@ -99,7 +99,7 @@ describe("agent creation studio helpers", () => {
     expect(readManualDraft("ws", store)?.name).toBe("助手");
   });
 
-  it("labels a runtime chip with the host OS like Multica", () => {
+  it("labels a runtime chip with the host OS", () => {
     expect(osShortLabel("darwin")).toBe("Mac");
     expect(runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin")).toBe("Claude Code (Mac)");
   });
