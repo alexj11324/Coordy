@@ -890,6 +890,56 @@ fn health_view_works() {
 }
 
 #[test]
+fn register_computer_upserts_same_workspace_name() {
+    let h = setup();
+    let first = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::RegisterComputer {
+                workspace_id: h.workspace_id.clone(),
+                name: "本机 (linux)".into(),
+                kind: "desktop".into(),
+                concurrency_limit: 20,
+            },
+        ))
+        .unwrap();
+    let second = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::RegisterComputer {
+                workspace_id: h.workspace_id.clone(),
+                name: "本机 (linux)".into(),
+                kind: "desktop".into(),
+                concurrency_limit: 8,
+            },
+        ))
+        .unwrap();
+    assert_eq!(first.ids["computer_id"], second.ids["computer_id"]);
+    let view = h
+        .kernel
+        .view_sync(q(
+            daemon(),
+            Query::Computers {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    match view {
+        View::Computers { items } => {
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].concurrency_limit, 8);
+        }
+        _ => panic!("computers"),
+    }
+}
+
+#[test]
 fn start_run_acp_spawns_against_bound_repo() {
     let ports = std::sync::Arc::new(RecordingPorts::default());
     let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));

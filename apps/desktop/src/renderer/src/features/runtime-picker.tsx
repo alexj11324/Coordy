@@ -1,7 +1,8 @@
 import { Badge } from "@coordy/ui";
 import type { DiscoveredAgentView } from "@coordy/protocol";
-import { presenceLabel } from "../lib/coordy/labels";
+import { presenceLabel, presenceLampTone } from "../lib/coordy/labels";
 import { ProviderLogo } from "./provider-logo";
+import { StatusLamp } from "./status-lamp";
 
 export function RuntimePicker({
   items,
@@ -42,13 +43,7 @@ export function RuntimePicker({
               <p className="truncate text-xs text-muted-foreground">{item.command}</p>
             </div>
             <Badge variant={item.installed ? "outline" : "secondary"}>
-              <span
-                className={
-                  item.installed
-                    ? "size-1.5 rounded-full bg-emerald-500"
-                    : "size-1.5 rounded-full bg-muted-foreground/50"
-                }
-              />
+              <StatusLamp tone={presenceLampTone(presence)} />
               {presenceLabel(presence)}
             </Badge>
           </button>

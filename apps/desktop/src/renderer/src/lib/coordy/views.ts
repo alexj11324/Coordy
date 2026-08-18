@@ -11,6 +11,7 @@ import type {
   ContractView,
   DependencyView,
   GrantView,
+  HealthView,
   InboxView,
   LabelView,
   MemoryView,
@@ -124,6 +125,20 @@ export function asStats(view: View | undefined): StatsView | null {
 
 export function asComputers(view: View | undefined): ComputerView[] {
   return view?.type === "Computers" ? view.items : [];
+}
+
+export function asHealth(view: View | undefined): HealthView | null {
+  if (view?.type === "Health") {
+    return {
+      status: view.status,
+      version: view.version,
+      protocol_version: view.protocol_version,
+      pid: view.pid,
+      workspace_count: view.workspace_count,
+    };
+  }
+  if (view?.type === "Settings") return view.daemon;
+  return null;
 }
 
 export function asAccount(view: View | undefined): AccountView | null {

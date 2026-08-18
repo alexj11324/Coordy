@@ -16,8 +16,9 @@ import {
 } from "@coordy/ui";
 import { Monitor, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { presenceLabel } from "../lib/coordy/labels";
+import { presenceLabel, presenceLampTone } from "../lib/coordy/labels";
 import { ProviderLogo } from "./provider-logo";
+import { StatusLamp } from "./status-lamp";
 
 export function RuntimesPage() {
   const qc = useQueryClient();
@@ -84,7 +85,7 @@ export function RuntimesPage() {
                 <ProviderLogo provider={item.id} className="size-4" />
                 {item.name}
                 <Badge variant="outline">
-                  <span className="size-1.5 rounded-full bg-emerald-500" />
+                  <StatusLamp tone={presenceLampTone("online")} />
                   {presenceLabel("online")}
                 </Badge>
               </CardTitle>
@@ -112,7 +113,7 @@ export function RuntimesPage() {
                   <ProviderLogo provider={item.id} className="size-4" />
                   {item.name}
                   <Badge variant="secondary">
-                    <span className="size-1.5 rounded-full bg-muted-foreground/50" />
+                    <StatusLamp tone={presenceLampTone("offline")} />
                     {presenceLabel("offline")}
                   </Badge>
                 </CardTitle>

@@ -172,6 +172,33 @@ export function healthLabel(status: string): string {
   return status;
 }
 
+export type LampTone = "green" | "yellow" | "red" | "gray";
+
+/** Maps a Health query result to a lamp. Green only if the Unix socket round-trip succeeded. */
+export function daemonConnectionStatus(input: {
+  isError: boolean;
+  status?: string | null;
+}): { tone: LampTone; label: string } {
+  if (input.isError) return { tone: "red", label: "离线" };
+  if (!input.status) return { tone: "yellow", label: "正在连接" };
+  if (input.status === "ok") return { tone: "green", label: healthLabel(input.status) };
+  if (input.status === "connecting") return { tone: "yellow", label: healthLabel(input.status) };
+  return { tone: "red", label: healthLabel(input.status) };
+}
+
+export function presenceLampTone(presence: AgentPresence): LampTone {
+  switch (presence) {
+    case "online":
+      return "green";
+    case "demo":
+      return "yellow";
+    case "offline":
+      return "red";
+    case "unknown":
+      return "gray";
+  }
+}
+
 export function taskStatusLabel(status: string): string {
   return TASK_STATUS_ITEMS[status] ?? status;
 }

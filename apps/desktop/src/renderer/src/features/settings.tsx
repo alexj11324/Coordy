@@ -38,19 +38,22 @@ import { submit, view } from "../lib/coordy/client";
 import { ISSUE_BOARD_COLUMNS, PRIORITY_ITEMS } from "../lib/coordy/issues";
 import {
   agentDisplayName,
+  daemonConnectionStatus,
   inboxKindLabel,
   listableAgents,
+  osShortLabel,
 } from "../lib/coordy/labels";
 import { modifierSymbol as shortcutMod } from "../lib/coordy/shortcuts";
 import {
   asAccount,
   asAgents,
-  asComputers,
+  asHealth,
   asLabels,
   asPrincipals,
   asWorkspace,
   asWorkspaces,
 } from "../lib/coordy/views";
+import { StatusLamp } from "./status-lamp";
 import { useSession } from "../state/session-store";
 import { applyTheme, useThemeStore, type ThemePreference } from "../state/theme-store";
 
@@ -226,10 +229,12 @@ function SettingsPane({
     enabled: Boolean(workspaceId) && tab === "labels",
     queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
   });
-  const computers = useQuery({
-    queryKey: ["view", { type: "Computers", workspace_id: workspaceId }, workspaceId],
-    enabled: Boolean(workspaceId) && tab === "daemon",
-    queryFn: () => view({ type: "Computers", workspace_id: workspaceId! }),
+  const health = useQuery({
+    queryKey: ["view", { type: "Health" }],
+    enabled: tab === "daemon",
+    queryFn: () => view({ type: "Health" }),
+    refetchInterval: 3000,
+    retry: false,
   });
   const agents = useQuery({
     queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
@@ -253,7 +258,6 @@ function SettingsPane({
   const name = me?.name || person?.name || "我";
   const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : ws?.repo_path;
   const enabled = settings.data?.type === "Settings" ? settings.data.llm_advisor_enabled : false;
-  const daemon = settings.data?.type === "Settings" ? settings.data.daemon : undefined;
   const noticeKinds = settings.data?.type === "Settings" ? (settings.data.notification_kinds ?? []) : [];
   const info = appInfo.data;
   const mod = shortcutMod(info?.os);
@@ -309,42 +313,11 @@ function SettingsPane({
       return <TokensPane status={secrets.data} />;
     case "daemon":
       return (
-        <Pane title="Daemon" description="coordyd 跑在这台电脑里，Unix socket，不走 localhost TCP。">
-          <Row label="状态" hint={daemon ? `${daemon.status} · pid ${daemon.pid}` : "还没读到"}>
-            <Badge variant={daemon?.status === "ok" ? "secondary" : "outline"}>{daemon?.status ?? "未知"}</Badge>
-          </Row>
-          <Row label="协议" hint={daemon?.protocol_version}>
-            <span className="text-sm">{daemon?.version ?? "…"}</span>
-          </Row>
-          <div className="space-y-2 pt-2">
-            <h3 className="text-sm font-medium">这台电脑</h3>
-            {asComputers(computers.data).length === 0 ? (
-              <p className="text-sm text-muted-foreground">还没登记。登记后智能体可以按机器限流。</p>
-            ) : (
-              asComputers(computers.data).map((item) => (
-                <p key={item.id} className="text-sm">
-                  {item.name}
-                  {item.online ? " · 在线" : " · 离线"}
-                </p>
-              ))
-            )}
-            <Button
-              variant="secondary"
-              disabled={!workspaceId}
-              onClick={() => {
-                if (!workspaceId) return;
-                void submit({
-                  type: "RegisterComputer",
-                  workspace_id: workspaceId,
-                  name: `本机 (${info?.os ?? "desktop"})`,
-                  kind: "desktop",
-                }).then(invalidate);
-              }}
-            >
-              登记这台电脑
-            </Button>
-          </div>
-        </Pane>
+        <DaemonPane
+          live={asHealth(health.data) ?? (health.isError ? null : asHealth(settings.data))}
+          isError={health.isError}
+          os={info?.os}
+        />
       );
     case "updates":
       return (
@@ -430,6 +403,52 @@ function SettingsPane({
     default:
       return null;
   }
+}
+
+function DaemonPane({
+  live,
+  isError,
+  os,
+}: {
+  live: ReturnType<typeof asHealth>;
+  isError: boolean;
+  os?: string;
+}) {
+  const conn = daemonConnectionStatus({ isError, status: live?.status });
+  const host = osShortLabel(os) || "本机";
+  return (
+    <Pane
+      title="Daemon"
+      description="绿灯表示桌面此刻能通过 Unix socket 问到本机 coordyd。不是点「登记」写进电脑清单的旗标。"
+    >
+      <Row
+        label="本机"
+        hint={
+          conn.tone === "red"
+            ? "Health 查询失败，coordyd 没应答。"
+            : "当前这台电脑上的 coordyd 进程"
+        }
+      >
+        <span className="inline-flex items-center justify-end gap-2 text-sm">
+          <StatusLamp tone={conn.tone} label={conn.label} className="size-2.5" />
+          {host} · {conn.label}
+        </span>
+      </Row>
+      {conn.tone === "green" && live ? (
+        <>
+          <Row label="进程" hint="coordyd 的进程号">
+            <span className="text-sm">pid {live.pid}</span>
+          </Row>
+          <Row label="协议">
+            <span className="text-sm">{live.protocol_version}</span>
+          </Row>
+          <Row label="版本">
+            <span className="text-sm">{live.version}</span>
+          </Row>
+        </>
+      ) : null}
+    </Pane>
+  );
 }
 
 function Pane({ title, description, children }: { title: string; description?: string; children: ReactNode }) {

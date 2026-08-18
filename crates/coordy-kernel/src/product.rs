@@ -1151,14 +1151,29 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             concurrency_limit,
         } => {
             require_member(world, actor, &workspace_id)?;
-            let id = ids::new("pc");
             let kind = if kind.is_empty() { "local".into() } else { kind };
             let concurrency_limit = if concurrency_limit == 0 { 20 } else { concurrency_limit };
+            if let Some(idx) = world
+                .computers
+                .iter()
+                .position(|c| c.workspace_id == workspace_id && c.name == name)
+            {
+                let id = {
+                    let computer = &mut world.computers[idx];
+                    computer.kind = kind;
+                    computer.concurrency_limit = concurrency_limit;
+                    computer.id.clone()
+                };
+                emit_changed(world, workspace_id);
+                return Ok(Outcome::ok("computer registered", json!({ "computer_id": id })));
+            }
+            let id = ids::new("pc");
             world.computers.push(Computer {
                 id: id.clone(),
                 workspace_id: workspace_id.clone(),
                 name,
                 kind,
+                // Registration-time flag only. Coordy does not probe host liveness.
                 online: true,
                 concurrency_limit,
             });

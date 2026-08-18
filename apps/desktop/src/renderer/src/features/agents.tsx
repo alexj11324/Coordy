@@ -24,10 +24,12 @@ import {
   agentSubtitle,
   listableAgents,
   presenceLabel,
+  presenceLampTone,
 } from "../lib/coordy/labels";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { ProviderLogo } from "./provider-logo";
+import { StatusLamp } from "./status-lamp";
 
 export function AgentsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
@@ -79,13 +81,7 @@ export function AgentsPage() {
                     <ProviderLogo provider={agent.harness} className="size-4" />
                     {agentDisplayName(agent, catalog.data)}
                     <Badge variant={presence === "online" || presence === "demo" ? "outline" : "secondary"}>
-                      <span
-                        className={
-                          presence === "online" || presence === "demo"
-                            ? "size-1.5 rounded-full bg-emerald-500"
-                            : "size-1.5 rounded-full bg-muted-foreground/50"
-                        }
-                      />
+                      <StatusLamp tone={presenceLampTone(presence)} />
                       {presenceLabel(presence)}
                     </Badge>
                   </CardTitle>

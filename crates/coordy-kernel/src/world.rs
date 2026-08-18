@@ -462,6 +462,7 @@ pub struct Computer {
     pub name: String,
     #[serde(default)]
     pub kind: String,
+    /// Set at registration. Not a heartbeat; UI must not treat this as liveness.
     #[serde(default)]
     pub online: bool,
     #[serde(default)]
