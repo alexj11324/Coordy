@@ -4,7 +4,12 @@ import { HomePage } from "../features/home";
 import { BoardPage } from "../features/board";
 import { TaskDetailPage } from "../features/task-detail";
 import { AgentsPage } from "../features/agents";
-import { CreateAgentPage } from "../features/create-agent";
+import {
+  AiBuilderSessionPage,
+  AiCreateAgentPage,
+  ChooseCreateMethodPage,
+  ManualCreateAgentPage,
+} from "../features/create-agent";
 import { AgentDetailPage } from "../features/agent-detail";
 import { RuntimesPage } from "../features/runtimes";
 import { SettingsPage } from "../features/settings";
@@ -56,13 +61,16 @@ export function AppRouter() {
           <Route path="/squads" element={<SquadsPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/agents/new" element={<ChooseCreateMethodPage />} />
+          <Route path="/agents/new/blank" element={<ManualCreateAgentPage />} />
+          <Route path="/agents/new/ai" element={<AiCreateAgentPage />} />
+          <Route path="/agents/new/ai/:sessionId" element={<AiBuilderSessionPage />} />
         </Route>
         <Route element={<PaddedCanvas />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/home" element={<Navigate to="/" replace />} />
           <Route path="/principals" element={<PrincipalsPage />} />
           <Route path="/agents" element={<AgentsPage />} />
-          <Route path="/agents/new" element={<CreateAgentPage />} />
           <Route path="/agents/:agentId" element={<AgentDetailPage />} />
           <Route path="/runtimes" element={<RuntimesPage />} />
           <Route path="/authority" element={<AuthorityPage />} />

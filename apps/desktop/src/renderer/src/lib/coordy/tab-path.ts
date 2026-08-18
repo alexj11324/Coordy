@@ -37,6 +37,8 @@ export function titleFromPath(path: string): string {
     case "/agents":
       return "智能体";
     case "/agents/new":
+    case "/agents/new/blank":
+    case "/agents/new/ai":
       return "创建智能体";
     case "/runtimes":
       return "运行时";
@@ -60,6 +62,7 @@ export function titleFromPath(path: string): string {
       break;
   }
   if (pathname.startsWith("/board/")) return "事项";
+  if (pathname.startsWith("/agents/new/")) return "创建智能体";
   if (pathname.startsWith("/agents/")) return "智能体";
   return pathname;
 }

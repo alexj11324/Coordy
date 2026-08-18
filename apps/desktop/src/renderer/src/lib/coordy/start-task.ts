@@ -13,6 +13,8 @@ export async function createNamedAgent(input: {
   harness: string;
   description?: string;
   instructions?: string;
+  model?: string;
+  access?: string;
 }): Promise<string> {
   const created = await submit({
     type: "CreateAgent",
@@ -24,12 +26,16 @@ export async function createNamedAgent(input: {
   const agentId = outcomeId(created.ids, "agent_id");
   const description = input.description?.trim() ?? "";
   const instructions = input.instructions?.trim() ?? "";
-  if (description || instructions) {
+  const model = input.model?.trim() ?? "";
+  const access = input.access?.trim() ?? "";
+  if (description || instructions || model || access) {
     await submit({
       type: "UpdateAgent",
       agent_id: agentId,
       description: description || null,
       instructions: instructions || null,
+      model: model || null,
+      access: access || null,
     });
   }
   return agentId;
