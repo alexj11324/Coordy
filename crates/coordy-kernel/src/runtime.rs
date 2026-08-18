@@ -661,14 +661,24 @@ impl Kernel {
                 if !can_command_agent(&world, &actor, &agent_id) {
                     return Err(CoordyError::denied("cannot command this agent"));
                 }
-                let _agent = world.agent(&agent_id).cloned().unwrap();
+                let agent = world
+                    .agent(&agent_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("agent"))?;
                 let run_id = ids::new("run");
                 let harness: String = match &source {
                     RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl".into(),
                     RunSource::Codex { .. } => "codex".into(),
                     RunSource::ClaudeCode { .. } => "claude_code".into(),
                     RunSource::OpenCode { .. } => "opencode".into(),
-                    RunSource::Acp { .. } => "acp".into(),
+                    RunSource::Acp { .. } => {
+                        let h = agent.harness.trim();
+                        if h.is_empty() || h == "jsonl" {
+                            "acp".into()
+                        } else {
+                            h.to_string()
+                        }
+                    }
                 };
                 world.runs.push(Run {
                     id: run_id.clone(),
@@ -1300,6 +1310,27 @@ fn ingest_event(
             exit_code,
             ..
         } => {
+            if name == coordy_protocol::HARNESS_SESSION_TOOL {
+                if let Some(active) = world.run_mut(run_id) {
+                    active.status = if exit_code.unwrap_or(0) == 0 {
+                        "completed".into()
+                    } else {
+                        "failed".into()
+                    };
+                }
+                if let Some(task) = world.task_mut(&run.task_id) {
+                    if task.status == "running" {
+                        task.status = if exit_code.unwrap_or(0) == 0 {
+                            "review".into()
+                        } else {
+                            "blocked".into()
+                        };
+                        if exit_code.unwrap_or(0) != 0 && task.blocked_reason.is_none() {
+                            task.blocked_reason = Some(output.clone());
+                        }
+                    }
+                }
+            }
             if matches!(name.as_str(), "git" | "test" | "patch_apply") {
                 let paused = world.runs.iter().find(|r| r.id == run_id).cloned();
                 if let Some(run) = paused {

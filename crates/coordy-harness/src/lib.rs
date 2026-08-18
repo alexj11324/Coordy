@@ -1,10 +1,14 @@
 //! Agent harness adapters. The kernel consumes `HarnessEvent` only.
 
 mod acp;
+mod discovery;
 
 pub use acp::{
     drive_session, map_session_update, resolve_acp_command, serve_fake_acp, spawn_acp_session,
-    suggested_acp_stub_command, ACP_STUB_REPLY,
+    ACP_STUB_REPLY,
+};
+pub use discovery::{
+    discover, extra_bin_dirs, resolve_launch, suggested_acp_stub_command, which_bin,
 };
 
 use coordy_protocol::{CoordyError, HarnessEvent, RunSource};
@@ -64,14 +68,7 @@ pub fn detect_on_path() -> Vec<DetectedHarness> {
 }
 
 fn which(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                let p = dir.join(name);
-                p.is_file()
-            })
-        })
-        .unwrap_or(false)
+    crate::which_bin(name).is_some()
 }
 
 pub fn spawn_command(

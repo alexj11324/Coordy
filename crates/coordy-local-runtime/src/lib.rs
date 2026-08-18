@@ -1,11 +1,13 @@
 //! Local IPC, SQLite persistence, Git worktrees, and harness process control.
 
+mod discovery;
 mod git;
 mod ipc;
 mod live;
 mod secrets;
 mod sqlite;
 
+pub use discovery::{import_agents, list_agents};
 pub use git::GitPorts;
 pub use ipc::{connect, serve, RpcClient};
 pub use secrets::{advisor_key_from_env, resolve_secret, write_secret_ref, SecretStore};

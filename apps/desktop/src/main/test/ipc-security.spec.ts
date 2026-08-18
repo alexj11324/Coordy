@@ -67,6 +67,9 @@ describe("product ipc channels", () => {
     expect(IPC.secretsStatus).toBe("coordy:secrets-status");
     expect(IPC.setSecret).toBe("coordy:set-secret");
     expect(IPC.clearSecret).toBe("coordy:clear-secret");
+    expect(IPC.discoverAgents).toBe("coordy:discover-agents");
+    expect(IPC.importAgents).toBe("coordy:import-agents");
+    expect(IPC.listDirectory).toBe("coordy:list-directory");
   });
 });
 

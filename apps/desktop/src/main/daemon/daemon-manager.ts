@@ -1,10 +1,21 @@
 import { spawn, ChildProcess } from "child_process";
 import { mkdirSync, writeFileSync, chmodSync, existsSync } from "fs";
-import { join } from "path";
+import { delimiter, join } from "path";
+import { homedir } from "os";
 import { app } from "electron";
 import { randomUUID } from "crypto";
 import { daemonBinaryPath } from "./daemon-binary-path";
 import { DaemonClient } from "./daemon-client";
+
+function daemonPath(): string {
+  const extras = [
+    join(homedir(), ".local/bin"),
+    join(homedir(), ".cargo/bin"),
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+  ];
+  return [process.env.PATH, ...extras].filter(Boolean).join(delimiter);
+}
 
 export class DaemonManager {
   process: ChildProcess | null = null;
@@ -31,7 +42,7 @@ export class DaemonManager {
     this.process = spawn(
       bin,
       ["--data-dir", dataDir, "--socket", this.socketPath, "--token", this.token],
-      { stdio: "pipe" },
+      { stdio: "pipe", env: { ...process.env, PATH: daemonPath() } },
     );
     await waitForSocket(this.socketPath, 50);
     this.client = new DaemonClient();

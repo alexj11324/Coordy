@@ -8,7 +8,10 @@ export const IPC = {
   openTerminal: "coordy:open-terminal",
   getAppInfo: "coordy:get-app-info",
   installCli: "coordy:install-cli",
-  secretsStatus: "coordy:secrets-status",
-  setSecret: "coordy:set-secret",
-  clearSecret: "coordy:clear-secret",
+    secretsStatus: "coordy:secrets-status",
+    setSecret: "coordy:set-secret",
+    clearSecret: "coordy:clear-secret",
+    discoverAgents: "coordy:discover-agents",
+    importAgents: "coordy:import-agents",
+    listDirectory: "coordy:list-directory",
 } as const;

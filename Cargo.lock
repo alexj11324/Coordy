@@ -372,6 +372,7 @@ dependencies = [
  "coordy-kernel",
  "coordy-protocol",
  "dirs",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",

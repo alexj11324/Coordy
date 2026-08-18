@@ -3,7 +3,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 use coordy_harness::{
-    parse_codex_jsonl_line, resolve_acp_command, spawn_acp_session, spawn_command, SecretEnv,
+    parse_codex_jsonl_line, resolve_launch, spawn_acp_session, spawn_command, SecretEnv,
 };
 use coordy_kernel::Ports;
 use coordy_protocol::{CoordyError, HarnessEvent};
@@ -53,19 +53,41 @@ impl Ports for LivePorts {
         let worktree = worktree.to_string();
         let prompt = prompt.to_string();
         let secrets = SecretStore::open(&self.data_dir).env();
+        let registry = std::fs::read_to_string(self.data_dir.join("cache/acp-registry.json")).ok();
         thread::spawn(move || {
             let emit = |event: HarnessEvent| {
                 let _ = tx.send((run_id.clone(), event));
             };
-            if let Err(err) = run_kind(&kind, &worktree, &prompt, &secrets, emit) {
-                let _ = tx.send((
-                    run_id,
-                    HarnessEvent::Message {
-                        role: "system".into(),
-                        content: err.to_string(),
-                    },
-                ));
-            }
+            let result = run_kind(
+                &kind,
+                &worktree,
+                &prompt,
+                &secrets,
+                registry.as_deref(),
+                emit,
+            );
+            let (output, exit_code) = match &result {
+                Ok(()) => ("end_turn".to_string(), 0),
+                Err(err) => {
+                    let _ = tx.send((
+                        run_id.clone(),
+                        HarnessEvent::Message {
+                            role: "system".into(),
+                            content: err.to_string(),
+                        },
+                    ));
+                    (err.to_string(), 1)
+                }
+            };
+            let _ = tx.send((
+                run_id,
+                HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: kind,
+                    output,
+                    exit_code: Some(exit_code),
+                },
+            ));
         });
         Ok(())
     }
@@ -76,14 +98,11 @@ fn run_kind(
     worktree: &str,
     prompt: &str,
     secrets: &SecretEnv,
+    registry_json: Option<&str>,
     mut emit: impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
     match kind {
-        "acp" => {
-            let (bin, args) = resolve_acp_command(secrets.acp_command.as_deref())?;
-            spawn_acp_session(&bin, &args, worktree, prompt, secrets, emit)
-        }
-        "codex" | "claude_code" | "opencode" => {
+        "codex" | "claude_code" => {
             let mut cmd = spawn_command(kind, worktree, prompt)?;
             for (key, value) in secrets.env_pairs() {
                 cmd.env(key, value);
@@ -120,6 +139,9 @@ fn run_kind(
             }
             Ok(())
         }
-        _ => Err(CoordyError::invalid(format!("unknown harness {kind}"))),
+        _ => {
+            let (bin, args) = resolve_launch(kind, secrets.acp_command.as_deref(), registry_json)?;
+            spawn_acp_session(&bin, &args, worktree, prompt, secrets, emit)
+        }
     }
 }

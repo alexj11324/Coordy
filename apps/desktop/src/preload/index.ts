@@ -13,11 +13,14 @@ const bridge: CoordyDesktopBridge = {
   chooseRepository: () => ipcRenderer.invoke(IPC.chooseRepository),
   revealFile: (path) => ipcRenderer.invoke(IPC.revealFile, path),
   openTerminal: (path) => ipcRenderer.invoke(IPC.openTerminal, path),
+  listDirectory: (path) => ipcRenderer.invoke(IPC.listDirectory, path),
   getAppInfo: () => ipcRenderer.invoke(IPC.getAppInfo),
   installCli: () => ipcRenderer.invoke(IPC.installCli),
   secretsStatus: () => ipcRenderer.invoke(IPC.secretsStatus),
   setSecret: (input) => ipcRenderer.invoke(IPC.setSecret, input),
   clearSecret: () => ipcRenderer.invoke(IPC.clearSecret),
+  discoverAgents: (refresh = false) => ipcRenderer.invoke(IPC.discoverAgents, refresh),
+  importAgents: (input) => ipcRenderer.invoke(IPC.importAgents, input),
 };
 
 contextBridge.exposeInMainWorld("coordy", bridge);

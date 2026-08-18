@@ -32,21 +32,21 @@ import {
   FileText,
   GitBranch,
   Inbox,
-  LayoutDashboard,
   Play,
   Plus,
+  RefreshCw,
   Shield,
   StickyNote,
   Users,
 } from "lucide-react";
-import { useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
-import { startAcpOnTask } from "../lib/coordy/start-task";
+import { startAcpOnTask, syncDiscoveredAgents } from "../lib/coordy/start-task";
 import { useSession } from "../state/session-store";
 import type { Command, Query } from "@coordy/protocol";
 import {
   asAgents,
-  asCommitments,
   asConflicts,
   asContracts,
   asDependencies,
@@ -76,10 +76,6 @@ function useCommand() {
   });
 }
 
-function Toolbar({ children }: { children: ReactNode }) {
-  return <div className="mb-4 flex flex-wrap items-center gap-2">{children}</div>;
-}
-
 function EmptyList({
   icon: Icon,
   title,
@@ -102,174 +98,9 @@ function EmptyList({
   );
 }
 
-export function BoardPage() {
-  const q = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
-  const commitments = useWorkspaceQuery((workspace_id) => ({
-    type: "Commitments",
-    workspace_id,
-  }));
-  const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
-  const title = useForm("");
-  const claim = useForm("never-deploy-without-approval");
-  const patch = useForm("");
-  const prompt = useForm("继续做这件事，用中文汇报进度。");
-  const command = useCommand();
-  const qc = useQueryClient();
-  const tasks = asTasks(q.data);
-  const workspaceId = useSession((s) => s.workspaceId);
-  const agentList = asAgents(agents.data);
-  return (
-    <section>
-      <PageHeader title="任务" description="把一句话交给 ACP 助手。承诺和补丁还在下面，但不挡开始。" />
-      <form
-        className="mb-4 flex gap-2"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          if (workspaceId && title.value) {
-            command.mutate({ type: "CreateTask", workspace_id: workspaceId, title: title.value });
-            title.set("");
-          }
-        }}
-      >
-        <Input
-          placeholder="新任务"
-          value={title.value}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => title.set(event.target.value)}
-        />
-        <Button type="submit">
-          <Plus data-icon="inline-start" />
-          创建
-        </Button>
-      </form>
-      <div className="mb-4 space-y-1.5">
-        <Label htmlFor="board-prompt">对助手说</Label>
-        <Textarea
-          id="board-prompt"
-          value={prompt.value}
-          onChange={(event: ChangeEvent<HTMLTextAreaElement>) => prompt.set(event.target.value)}
-        />
-      </div>
-      {tasks.length === 0 ? (
-        <EmptyList
-          icon={LayoutDashboard}
-          title="还没有任务"
-          description="创建一个任务，或回到「开始」页直接说一句话。"
-        />
-      ) : (
-        <div className="grid gap-3">
-          {tasks.map((task) => (
-            <Card key={task.id}>
-              <CardHeader>
-                <CardTitle>{task.title}</CardTitle>
-                <CardDescription>
-                  {task.assignee_agent_id ? `已指派 ${task.assignee_agent_id}` : "未指派"}
-                  {task.worktree_path ? ` · ${task.worktree_path}` : ""}
-                </CardDescription>
-                <CardAction>
-                  <Badge>{task.status}</Badge>
-                </CardAction>
-              </CardHeader>
-              {task.blocked_reason ? (
-                <CardContent>
-                  <p className="text-sm text-destructive">{task.blocked_reason}</p>
-                </CardContent>
-              ) : null}
-              <CardFooter className="flex-col items-stretch gap-2">
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    onClick={() => {
-                      const agent = agentList[0];
-                      void (async () => {
-                        if (agent && !task.assignee_agent_id) {
-                          await submit({ type: "AssignTask", task_id: task.id, agent_id: agent.id });
-                        }
-                        await startAcpOnTask(task.id, prompt.value || task.title);
-                        await qc.invalidateQueries();
-                      })();
-                    }}
-                  >
-                    <Play data-icon="inline-start" />
-                    开始
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      const agent = agentList[0];
-                      if (agent) command.mutate({ type: "AssignTask", task_id: task.id, agent_id: agent.id });
-                    }}
-                  >
-                    指派助手
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      if (!workspaceId) return;
-                      command.mutate({
-                        type: "UpsertCommitment",
-                        workspace_id: workspaceId,
-                        task_id: task.id,
-                        commitment_type: "CONSTRAINT",
-                        claim: claim.value,
-                        polarity: "MUST_NOT",
-                        authority: "USER",
-                        scope: task.id,
-                      });
-                    }}
-                  >
-                    写下承诺
-                  </Button>
-                  <Button variant="secondary" onClick={() => command.mutate({ type: "CreateWorktree", task_id: task.id })}>
-                    创建 worktree
-                  </Button>
-                </div>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="要应用的补丁"
-                    value={patch.value}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => patch.set(event.target.value)}
-                  />
-                  <Button
-                    variant="destructive"
-                    onClick={() => command.mutate({ type: "ApplyPatch", task_id: task.id, patch: patch.value })}
-                  >
-                    应用
-                  </Button>
-                </div>
-              </CardFooter>
-            </Card>
-          ))}
-        </div>
-      )}
-      <h2 className="mb-2 mt-8 text-lg font-medium">Commitments</h2>
-      <div className="mb-3 flex items-center gap-2">
-        <Label htmlFor="commitment-claim" className="shrink-0 text-muted-foreground">
-          Claim
-        </Label>
-        <Input
-          id="commitment-claim"
-          value={claim.value}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => claim.set(event.target.value)}
-        />
-      </div>
-      {asCommitments(commitments.data).length === 0 ? (
-        <p className="text-sm text-muted-foreground">No commitments yet. They appear after you write one on a task.</p>
-      ) : (
-        asCommitments(commitments.data).map((item) => (
-          <Card key={item.id} size="sm" className="mb-2">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Badge>{item.authority}</Badge>
-                {item.claim}
-              </CardTitle>
-              <CardAction>
-                <Badge variant="outline">{item.status}</Badge>
-              </CardAction>
-            </CardHeader>
-          </Card>
-        ))
-      )}
-    </section>
-  );
+function useForm(initial: string) {
+  const [value, set] = useState(initial);
+  return { value, set };
 }
 
 export function PrincipalsPage() {
@@ -280,7 +111,7 @@ export function PrincipalsPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   return (
     <section>
-      <PageHeader title="Principals" description="People who own agents, memory, and contract votes." />
+      <PageHeader title="成员" description="成员拥有助手、记忆和契约投票权。" />
       <form
         className="mb-4 flex gap-2"
         onSubmit={(event: FormEvent) => {
@@ -292,17 +123,17 @@ export function PrincipalsPage() {
         }}
       >
         <Input
-          placeholder="Name"
+          placeholder="姓名"
           value={name.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => name.set(event.target.value)}
         />
         <Button type="submit">
           <Plus data-icon="inline-start" />
-          Add
+          添加
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={Users} title="No principals" description="Add the people this workspace coordinates." />
+        <EmptyList icon={Users} title="还没有成员" description="先添加要参与协作的人。" />
       ) : (
         items.map((person) => (
           <Card key={person.id} size="sm" className="mb-2">
@@ -321,77 +152,101 @@ export function PrincipalsPage() {
 
 export function AgentsPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
-  const principals = useWorkspaceQuery((workspace_id) => ({ type: "Principals", workspace_id }));
   const items = asAgents(q.data);
-  const people = asPrincipals(principals.data);
-  const name = useForm("");
-  const harness = useForm("acp");
-  const command = useCommand();
+  const catalog = useQuery({
+    queryKey: ["discover-agents"],
+    queryFn: () => window.coordy.discoverAgents(false),
+  });
+  const qc = useQueryClient();
   const workspaceId = useSession((s) => s.workspaceId);
+  const principalId = useSession((s) => s.principalId);
   const session = useSession();
+  const importedIds = new Set(items.map((agent) => agent.harness));
+  const available = (catalog.data ?? []).filter((item) => !importedIds.has(item.id));
+  const autoImported = useRef(false);
+
+  useEffect(() => {
+    if (!workspaceId || !principalId || !catalog.isFetched || autoImported.current) return;
+    const missingInstalled = (catalog.data ?? []).filter((item) => item.installed && !importedIds.has(item.id));
+    if (missingInstalled.length === 0) return;
+    autoImported.current = true;
+    void syncDiscoveredAgents(workspaceId, principalId, false).then(() => qc.invalidateQueries());
+  }, [workspaceId, principalId, catalog.isFetched, catalog.data, importedIds, qc]);
+
   return (
-    <section>
-      <PageHeader title="助手" description="默认走 ACP。没有 Codex/Claude 时，到「开始」页用内置演示助手。" />
-      <form
-        className="mb-4 flex flex-wrap gap-2"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          const principal = people[0];
-          if (workspaceId && name.value && principal) {
-            command.mutate({
-              type: "CreateAgent",
-              workspace_id: workspaceId,
-              principal_id: principal.id,
-              name: name.value,
-              harness: harness.value,
-            });
-            name.set("");
-          }
-        }}
-      >
-        <Input
-          placeholder="助手名字"
-          value={name.value}
-          onChange={(event: ChangeEvent<HTMLInputElement>) => name.set(event.target.value)}
-        />
-        <Select
-          value={harness.value}
-          items={{ acp: "ACP", codex: "Codex CLI", claude_code: "Claude Code", opencode: "OpenCode", jsonl: "JSONL 回放" }}
-          onValueChange={(value) => value && harness.set(value)}
+    <section className="space-y-4">
+      <PageHeader title="助手" description="启动时自动扫描 PATH 和 ACP Registry。本机已安装的会导入成队友；其余条目可一键加入，不用手填命令。">
+        <Button
+          variant="secondary"
+          onClick={async () => {
+            if (!workspaceId || !principalId) return;
+            await syncDiscoveredAgents(workspaceId, principalId, true);
+            await qc.invalidateQueries();
+          }}
         >
-          <SelectTrigger className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="acp">ACP</SelectItem>
-            <SelectItem value="codex">Codex CLI</SelectItem>
-            <SelectItem value="claude_code">Claude Code</SelectItem>
-            <SelectItem value="opencode">OpenCode</SelectItem>
-            <SelectItem value="jsonl">JSONL 回放</SelectItem>
-          </SelectContent>
-        </Select>
-        <Button type="submit">
-          <Plus data-icon="inline-start" />
-          添加
+          <RefreshCw data-icon="inline-start" />
+          刷新发现
         </Button>
-      </form>
+      </PageHeader>
       {items.length === 0 ? (
-        <EmptyList icon={Bot} title="还没有助手" description="添加一个 ACP 助手，然后回到「开始」说一句话。" />
+        <EmptyList icon={Bot} title="还没有助手" description="装好 Claude / Codex / Gemini 等 CLI 后会自动出现。演示助手也会一并导入。" />
       ) : (
-        items.map((agent) => (
-          <Card key={agent.id} size="sm" className="mb-2">
-            <CardHeader>
-              <CardTitle>{agent.name}</CardTitle>
-              <CardDescription>接入 {agent.harness}</CardDescription>
-              <CardAction>
-                <Button variant="ghost" size="sm" onClick={() => session.setAgent(agent.id, agent.principal_id)}>
-                  以它的身份
-                </Button>
-              </CardAction>
-            </CardHeader>
-          </Card>
-        ))
+        items.map((agent) => {
+          const discovered = (catalog.data ?? []).find((item) => item.id === agent.harness);
+          return (
+            <Card key={agent.id} size="sm" className="mb-2">
+              <CardHeader>
+                <CardTitle>{agent.name}</CardTitle>
+                <CardDescription>
+                  {agent.harness}
+                  {discovered?.installed ? " · 本机已安装" : discovered ? " · Registry" : ""}
+                  {discovered?.command ? ` · ${discovered.command}` : ""}
+                </CardDescription>
+                <CardAction>
+                  <Button variant="ghost" size="sm" onClick={() => session.setAgent(agent.id, agent.principal_id)}>
+                    以它的身份
+                  </Button>
+                </CardAction>
+              </CardHeader>
+            </Card>
+          );
+        })
       )}
+      {available.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>发现但未导入</CardTitle>
+            <CardDescription>来自 ACP Registry。导入后就可以像指派同事一样指派它；启动时才按命令拉起，不会预先 npm install。</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {available.map((item) => (
+              <div key={item.id} className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium">{item.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.installed ? "本机已安装" : "Registry"} · {item.command}
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={async () => {
+                    if (!workspaceId || !principalId) return;
+                    await window.coordy.importAgents({
+                      workspace_id: workspaceId,
+                      principal_id: principalId,
+                      ids: [item.id],
+                    });
+                    await qc.invalidateQueries();
+                  }}
+                >
+                  导入为队友
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      ) : null}
     </section>
   );
 }
@@ -403,44 +258,93 @@ export function AuthorityPage() {
   const agentList = asAgents(agents.data);
   const resource = useForm("");
   const action = useForm("command");
+  const granteeId = useForm("");
+  const fromId = useForm("");
+  const toId = useForm("");
   const command = useCommand();
   const workspaceId = useSession((s) => s.workspaceId);
+  const selectedGrantee = granteeId.value || agentList[0]?.id || "";
+  const selectedFrom = fromId.value || agentList[0]?.id || "";
+  const selectedTo = toId.value || agentList[1]?.id || agentList[0]?.id || "";
+  const agentItems = Object.fromEntries(agentList.map((agent) => [agent.id, agent.name]));
   return (
     <section>
-      <PageHeader title="Authority" description="Grants never upgrade. Delegation is an attenuation." />
+      <PageHeader title="权限" description="把命令权授给某个助手。委托不能升级。" />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
-          const grantee = agentList[0];
-          if (workspaceId && grantee && resource.value) {
+          const grantee = agentList.find((agent) => agent.id === selectedGrantee) ?? agentList[0];
+          if (workspaceId && grantee) {
             command.mutate({
               type: "Grant",
               workspace_id: workspaceId,
               grantee_id: grantee.id,
-              resource: resource.value,
-              action: action.value,
+              resource: resource.value || `agent:${grantee.id}`,
+              action: action.value || "command",
             });
           }
         }}
       >
+        <Select value={selectedGrantee} items={agentItems} onValueChange={(value) => value && granteeId.set(value)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {agentList.map((agent) => (
+              <SelectItem key={agent.id} value={agent.id}>
+                {agent.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Input
-          placeholder="resource e.g. agent:…"
+          placeholder="资源，例如 agent:…"
           value={resource.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => resource.set(event.target.value)}
         />
         <Input
-          placeholder="action"
+          placeholder="动作"
           value={action.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => action.set(event.target.value)}
         />
-        <Button type="submit">Grant to first agent</Button>
+        <Button type="submit" disabled={agentList.length === 0}>
+          授予选中的助手
+        </Button>
+      </form>
+      <div className="mb-4 grid gap-2 md:grid-cols-4">
+        <Select value={selectedFrom} items={agentItems} onValueChange={(value) => value && fromId.set(value)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {agentList.map((agent) => (
+              <SelectItem key={agent.id} value={agent.id}>
+                从 {agent.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={selectedTo} items={agentItems} onValueChange={(value) => value && toId.set(value)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {agentList.map((agent) => (
+              <SelectItem key={agent.id} value={agent.id}>
+                到 {agent.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Button
           type="button"
           variant="secondary"
+          className="md:col-span-2"
+          disabled={!workspaceId || agentList.length < 2 || selectedFrom === selectedTo}
           onClick={() => {
-            const from = agentList[0];
-            const to = agentList[1];
+            const from = agentList.find((agent) => agent.id === selectedFrom);
+            const to = agentList.find((agent) => agent.id === selectedTo);
             if (workspaceId && from && to) {
               command.mutate({
                 type: "Delegate",
@@ -453,11 +357,11 @@ export function AuthorityPage() {
             }
           }}
         >
-          Delegate A1→A2
+          {agentList.length < 2 ? "需要至少两个助手才能委托" : "委托给选中的助手"}
         </Button>
-      </form>
+      </div>
       {grants.length === 0 ? (
-        <EmptyList icon={Shield} title="No grants" description="Grant an action on a resource to the first agent, or delegate A1→A2." />
+        <EmptyList icon={Shield} title="还没有授权" description="选一个助手授予动作，或把权限委托给另一个助手。" />
       ) : (
         grants.map((grant) => (
           <Card key={grant.id} size="sm" className="mb-2">
@@ -469,12 +373,12 @@ export function AuthorityPage() {
                 {grant.action} on {grant.resource}
               </CardDescription>
               <CardAction className="flex items-center gap-2">
-                {grant.delegated ? <Badge>delegated</Badge> : null}
+                {grant.delegated ? <Badge>已委托</Badge> : null}
                 {grant.revoked ? (
-                  <Badge variant="destructive">revoked</Badge>
+                  <Badge variant="destructive">已收回</Badge>
                 ) : (
                   <Button variant="ghost" size="sm" onClick={() => command.mutate({ type: "RevokeGrant", grant_id: grant.id })}>
-                    Revoke
+                    收回
                   </Button>
                 )}
               </CardAction>
@@ -493,11 +397,13 @@ export function MemoryPage() {
   const people = asPrincipals(principals.data);
   const body = useForm("");
   const visibility = useForm("principal");
+  const shareTo = useForm("");
   const command = useCommand();
   const workspaceId = useSession((s) => s.workspaceId);
+  const otherPeople = (ownerId: string) => people.filter((person) => person.id !== ownerId);
   return (
     <section>
-      <PageHeader title="Memory" description="Private notes stay on this machine. Sync never includes them." />
+      <PageHeader title="记忆" description="私人笔记留在这台电脑。同步永远不会带上它们。" />
       <form
         className="mb-4 flex flex-wrap gap-2"
         onSubmit={(event: FormEvent) => {
@@ -515,62 +421,89 @@ export function MemoryPage() {
       >
         <Input
           className="min-w-56 flex-1"
-          placeholder="Memory body"
+          placeholder="记忆内容"
           value={body.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => body.set(event.target.value)}
         />
         <Select
           value={visibility.value}
-          items={{ principal: "principal", agent_private: "agent_private" }}
+          items={{ principal: "成员私有", agent_private: "助手私有" }}
           onValueChange={(value) => value && visibility.set(value)}
         >
           <SelectTrigger className="w-44">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="principal">principal</SelectItem>
-            <SelectItem value="agent_private">agent_private</SelectItem>
+            <SelectItem value="principal">成员私有</SelectItem>
+            <SelectItem value="agent_private">助手私有</SelectItem>
           </SelectContent>
         </Select>
-        <Button type="submit">Append</Button>
+        <Button type="submit">记下</Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={StickyNote} title="No memories" description="Append a principal or agent-private note. Private memory never uploads." />
+        <EmptyList icon={StickyNote} title="还没有记忆" description="记下一条成员或助手私有笔记。私有记忆不会上传。" />
       ) : (
-        items.map((memory) => (
-          <Card key={memory.id} className="mb-2">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Badge>{memory.visibility}</Badge>
-                <Badge variant="outline">{memory.status}</Badge>
-              </CardTitle>
-              <CardDescription>{memory.body}</CardDescription>
-            </CardHeader>
-            <CardFooter className="gap-2">
-              <Button variant="secondary" onClick={() => command.mutate({ type: "PublishMemory", memory_id: memory.id })}>
-                Publish
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  const other = people.find((person) => person.id !== memory.owner_actor_id);
-                  if (other) {
-                    command.mutate({
-                      type: "ShareMemory",
-                      memory_id: memory.id,
-                      to_principal_id: other.id,
-                    });
-                  }
-                }}
-              >
-                Share
-              </Button>
-              {memory.status === "proposed_share" ? (
-                <Button onClick={() => command.mutate({ type: "AcceptShare", memory_id: memory.id })}>Accept</Button>
-              ) : null}
-            </CardFooter>
-          </Card>
-        ))
+        items.map((memory) => {
+          const recipients = otherPeople(memory.owner_actor_id);
+          const recipientId = shareTo.value || recipients[0]?.id || "";
+          return (
+            <Card key={memory.id} className="mb-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Badge>{memory.visibility}</Badge>
+                  <Badge variant="outline">{memory.status}</Badge>
+                </CardTitle>
+                <CardDescription>{memory.body}</CardDescription>
+              </CardHeader>
+              <CardFooter className="flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => command.mutate({ type: "PublishMemory", memory_id: memory.id })}>
+                  公开
+                </Button>
+                {recipients.length === 0 ? (
+                  <Button variant="secondary" disabled>
+                    需要另一位成员才能分享
+                  </Button>
+                ) : (
+                  <>
+                    <Select
+                      value={recipientId}
+                      items={Object.fromEntries(recipients.map((person) => [person.id, person.name]))}
+                      onValueChange={(value) => value && shareTo.set(value)}
+                    >
+                      <SelectTrigger className="w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {recipients.map((person) => (
+                          <SelectItem key={person.id} value={person.id}>
+                            {person.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        if (recipientId) {
+                          command.mutate({
+                            type: "ShareMemory",
+                            memory_id: memory.id,
+                            to_principal_id: recipientId,
+                          });
+                        }
+                      }}
+                    >
+                      分享给选中的人
+                    </Button>
+                  </>
+                )}
+                {memory.status === "proposed_share" ? (
+                  <Button onClick={() => command.mutate({ type: "AcceptShare", memory_id: memory.id })}>接受分享</Button>
+                ) : null}
+              </CardFooter>
+            </Card>
+          );
+        })
       )}
     </section>
   );
@@ -583,22 +516,27 @@ export function ContractsPage() {
   const people = asPrincipals(principals.data);
   const title = useForm("");
   const body = useForm("");
+  const first = useForm("");
+  const second = useForm("");
   const command = useCommand();
   const workspaceId = useSession((s) => s.workspaceId);
+  const firstId = first.value || people[0]?.id || "";
+  const secondId = second.value || people[1]?.id || "";
+  const peopleItems = Object.fromEntries(people.map((person) => [person.id, person.name]));
   return (
     <section>
-      <PageHeader title="Contracts" description="Proposals need the first two principals before they bind." />
+      <PageHeader title="契约" description="选两位成员作为参与方，双方批准后契约才生效。" />
       <form
         className="mb-4 grid gap-2"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
-          if (workspaceId && title.value && people.length >= 2) {
+          if (workspaceId && title.value && firstId && secondId && firstId !== secondId) {
             command.mutate({
               type: "ProposeContract",
               workspace_id: workspaceId,
               title: title.value,
               body: body.value,
-              participant_ids: people.slice(0, 2).map((person) => person.id),
+              participant_ids: [firstId, secondId],
             });
             title.set("");
             body.set("");
@@ -606,21 +544,47 @@ export function ContractsPage() {
         }}
       >
         <Input
-          placeholder="Contract title"
+          placeholder="契约标题"
           value={title.value}
           onChange={(event: ChangeEvent<HTMLInputElement>) => title.set(event.target.value)}
         />
         <Textarea
-          placeholder="Body"
+          placeholder="正文"
           value={body.value}
           onChange={(event: ChangeEvent<HTMLTextAreaElement>) => body.set(event.target.value)}
         />
-        <Button type="submit" className="w-fit">
-          Propose with first two principals
+        <div className="grid gap-2 md:grid-cols-2">
+          <Select value={firstId} items={peopleItems} onValueChange={(value) => value && first.set(value)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {people.map((person) => (
+                <SelectItem key={person.id} value={person.id}>
+                  {person.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={secondId} items={peopleItems} onValueChange={(value) => value && second.set(value)}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {people.map((person) => (
+                <SelectItem key={person.id} value={person.id}>
+                  {person.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <Button type="submit" className="w-fit" disabled={people.length < 2 || !firstId || !secondId || firstId === secondId}>
+          {people.length < 2 ? "需要至少两位成员才能提议契约" : "向选中的两位成员提议契约"}
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={FileText} title="No contracts" description="Add a second principal, then propose a contract they can approve." />
+        <EmptyList icon={FileText} title="还没有契约" description="再添加一位成员，然后选两个人提议契约。" />
       ) : (
         items.map((contract) => (
           <Card key={contract.id} className="mb-2">
@@ -634,7 +598,7 @@ export function ContractsPage() {
             {contract.status === "proposed" ? (
               <CardFooter>
                 <Button onClick={() => command.mutate({ type: "ApproveContract", contract_id: contract.id })}>
-                  Approve
+                  批准
                 </Button>
               </CardFooter>
             ) : null}
@@ -647,37 +611,72 @@ export function ContractsPage() {
 
 export function DependenciesPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Dependencies", workspace_id }));
+  const board = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
+  const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
   const items = asDependencies(q.data);
+  const tasks = asTasks(board.data);
+  const agentList = asAgents(agents.data);
+  const nodes = [
+    ...tasks.map((task) => ({ id: task.id, label: `任务 · ${task.title}` })),
+    ...agentList.map((agent) => ({ id: agent.id, label: `助手 · ${agent.name}` })),
+  ];
+  const nodeItems = Object.fromEntries(nodes.map((node) => [node.id, node.label]));
   const fromId = useForm("");
   const toId = useForm("");
   const entity = useForm("repo");
   const command = useCommand();
   const workspaceId = useSession((s) => s.workspaceId);
+  const selectedFrom = fromId.value || nodes[0]?.id || "";
+  const selectedTo = toId.value || nodes[1]?.id || nodes[0]?.id || "";
   return (
     <section>
-      <PageHeader title="Dependencies" description="Declared edges the kernel can validate." />
+      <PageHeader title="依赖" description="声明内核可以校验的边，例如任务锁住仓库。" />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
           event.preventDefault();
-          if (workspaceId && fromId.value && toId.value) {
+          if (workspaceId && selectedFrom && selectedTo) {
             command.mutate({
               type: "DeclareDependency",
               workspace_id: workspaceId,
-              from_id: fromId.value,
-              to_id: toId.value,
-              entity: entity.value,
+              from_id: selectedFrom,
+              to_id: selectedTo,
+              entity: entity.value || "repo",
             });
           }
         }}
       >
-        <Input placeholder="from id" value={fromId.value} onChange={(event: ChangeEvent<HTMLInputElement>) => fromId.set(event.target.value)} />
-        <Input placeholder="to id" value={toId.value} onChange={(event: ChangeEvent<HTMLInputElement>) => toId.set(event.target.value)} />
-        <Input placeholder="entity" value={entity.value} onChange={(event: ChangeEvent<HTMLInputElement>) => entity.set(event.target.value)} />
-        <Button type="submit">Declare</Button>
+        <Select value={selectedFrom} items={nodeItems} onValueChange={(value) => value && fromId.set(value)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {nodes.map((node) => (
+              <SelectItem key={node.id} value={node.id}>
+                {node.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={selectedTo} items={nodeItems} onValueChange={(value) => value && toId.set(value)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {nodes.map((node) => (
+              <SelectItem key={node.id} value={node.id}>
+                {node.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input placeholder="实体，例如 repo" value={entity.value} onChange={(event: ChangeEvent<HTMLInputElement>) => entity.set(event.target.value)} />
+        <Button type="submit" disabled={nodes.length < 1 || !selectedFrom || !selectedTo}>
+          声明依赖
+        </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={GitBranch} title="No dependencies" description="Declare an edge from one id to another, for example a repo lock." />
+        <EmptyList icon={GitBranch} title="还没有依赖" description="先有任务或助手，再声明一条从 A 到 B 的边。" />
       ) : (
         items.map((dep) => (
           <Card key={dep.id} size="sm" className="mb-2">
@@ -687,7 +686,7 @@ export function DependenciesPage() {
               </CardTitle>
               <CardDescription>{dep.entity}</CardDescription>
               <CardAction>
-                <Badge variant={dep.valid ? "outline" : "destructive"}>{dep.valid ? "valid" : "invalid"}</Badge>
+                <Badge variant={dep.valid ? "outline" : "destructive"}>{dep.valid ? "有效" : "失效"}</Badge>
               </CardAction>
             </CardHeader>
           </Card>
@@ -700,11 +699,16 @@ export function DependenciesPage() {
 export function ConflictsPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Conflicts", workspace_id }));
   const items = asConflicts(q.data);
+  const navigate = useNavigate();
   return (
     <section>
-      <PageHeader title="Conflicts" description="Working plans that contradict a commitment land here." />
+      <PageHeader title="冲突" description="工作计划与承诺打架时会出现在这里。处理入口在收件箱。">
+        <Button variant="secondary" onClick={() => navigate("/inbox")}>
+          去收件箱
+        </Button>
+      </PageHeader>
       {items.length === 0 ? (
-        <EmptyList icon={AlertTriangle} title="No conflicts" description="Replay a compaction fixture on Runs to see a plan collide with a commitment." />
+        <EmptyList icon={AlertTriangle} title="没有冲突" description="助手在压缩后改计划并撞上承诺时，会记一条冲突并投递到收件箱。" />
       ) : (
         items.map((conflict) => (
           <Card key={conflict.id} size="sm" className="mb-2">
@@ -714,6 +718,11 @@ export function ConflictsPage() {
                 <Badge>{conflict.status}</Badge>
               </CardAction>
             </CardHeader>
+            <CardFooter>
+              <Button variant="secondary" onClick={() => navigate("/inbox")}>
+                去收件箱处理
+              </Button>
+            </CardFooter>
           </Card>
         ))
       )}
@@ -724,53 +733,70 @@ export function ConflictsPage() {
 export function RunsPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Runs", workspace_id }));
   const board = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
+  const agents = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
   const items = asRuns(q.data);
   const tasks = asTasks(board.data);
+  const agentList = asAgents(agents.data);
   const [runId, setRunId] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState("");
+  const prompt = useForm("继续做这件事，用中文汇报进度。");
   const detail = useQuery({
     queryKey: ["run", runId],
     enabled: Boolean(runId),
     queryFn: () => view({ type: "Run", run_id: runId! }),
+    refetchInterval: 800,
   });
-  const command = useCommand();
+  const qc = useQueryClient();
   const events = asRunDetail(detail.data)?.events ?? [];
+  const selectedTask = taskId || tasks[0]?.id || "";
+  const taskItems = Object.fromEntries(tasks.map((task) => [task.id, task.title]));
   return (
     <section>
-      <PageHeader title="运行" description="ACP 会话事件会进这里。下面的夹具只给研究回放用。">
+      <PageHeader title="运行" description="ACP 会话事件会进这里。选一个任务继续说，助手会接着干。" />
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Select value={selectedTask} items={taskItems} onValueChange={(value) => value && setTaskId(value)}>
+          <SelectTrigger className="w-56">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {tasks.map((task) => (
+              <SelectItem key={task.id} value={task.id}>
+                {task.title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Input
+          className="min-w-56 flex-1"
+          value={prompt.value}
+          onChange={(event) => prompt.set(event.target.value)}
+        />
         <Button
-          onClick={() => {
-            const task = tasks[0];
+          disabled={!selectedTask || agentList.length === 0}
+          onClick={async () => {
+            const task = tasks.find((item) => item.id === selectedTask) ?? tasks[0];
             if (!task) return;
-            command.mutate({
-              type: "StartRun",
-              task_id: task.id,
-              source: {
-                type: "Fixture",
-                events: [
-                  {
-                    type: "Message",
-                    role: "user",
-                    content: "GOAL: preserve-release-gate\nCONSTRAINT: never-deploy-without-approval",
-                  },
-                  { type: "Compaction", summary: "working on stuff" },
-                  { type: "Message", role: "assistant", content: "PLAN: ship directly to production" },
-                ],
-              },
-            });
+            const agentId = task.assignee_agent_id || agentList[0]?.id;
+            const outcome = await startAcpOnTask(task.id, prompt.value || task.title, agentId);
+            const nextRun = String(outcome.ids.run_id ?? "");
+            if (nextRun) setRunId(nextRun);
+            await qc.invalidateQueries();
           }}
         >
-          Replay compaction fixture
+          继续让助手干
         </Button>
-      </PageHeader>
+      </div>
       {items.length === 0 ? (
-        <EmptyList icon={Play} title="No runs" description="Create a task first, then replay the compaction fixture." />
+        <EmptyList icon={Play} title="还没有运行" description="在「开始」或「任务」里派给助手，事件会出现在这里。" />
       ) : (
         items.map((run) => (
           <Card key={run.id} size="sm" className="mb-2">
             <CardHeader>
               <button className="text-left" onClick={() => setRunId(run.id)}>
                 <CardTitle className="font-mono text-sm">{run.id}</CardTitle>
-                <CardDescription>compactions: {run.compaction_count}</CardDescription>
+                <CardDescription>
+                  {run.harness} · 压缩 {run.compaction_count} 次
+                </CardDescription>
               </button>
               <CardAction>
                 <Badge>{run.status}</Badge>
@@ -782,11 +808,11 @@ export function RunsPage() {
       {runId ? (
         <Card className="mt-4">
           <CardHeader>
-            <CardTitle>Events</CardTitle>
+            <CardTitle>事件</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {events.map((event) => (
-              <p key={event.seq} className="text-sm">
+              <p key={event.seq} className="whitespace-pre-wrap text-sm">
                 <Badge className="mr-2">{event.kind}</Badge>
                 {event.payload}
               </p>
@@ -804,9 +830,9 @@ export function InboxPage() {
   const command = useCommand();
   return (
     <section>
-      <PageHeader title="Inbox" description="Pause and replan items the kernel will not auto-apply." />
+      <PageHeader title="收件箱" description="暂停、重规划、被挡住的应用，内核不会自动处理。" />
       {items.length === 0 ? (
-        <EmptyList icon={Inbox} title="Inbox is empty" description="Drift, blocked applies, and share proposals show up here." />
+        <EmptyList icon={Inbox} title="收件箱是空的" description="漂移、被挡住的补丁和分享提议会出现在这里。" />
       ) : (
         items.map((item) => (
           <Card key={item.id} className="mb-2">
@@ -819,7 +845,7 @@ export function InboxPage() {
             </CardHeader>
             <CardFooter>
               <Button variant="ghost" onClick={() => command.mutate({ type: "DismissInbox", item_id: item.id })}>
-                Dismiss
+                忽略
               </Button>
             </CardFooter>
           </Card>
@@ -841,30 +867,29 @@ export function SettingsPage() {
     queryKey: ["secrets"],
     queryFn: () => window.coordy.secretsStatus(),
   });
+  const appInfoQuery = useQuery({
+    queryKey: ["app-info"],
+    queryFn: () => window.coordy.getAppInfo(),
+  });
   const command = useCommand();
-  const [appInfo, setAppInfo] = useState<string>("");
+  const [notice, setNotice] = useState("");
   const [provider, setProvider] = useState("openai");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
-  const [acpCommand, setAcpCommand] = useState("");
   const enabled = q.data?.type === "Settings" ? q.data.llm_advisor_enabled : false;
   const status = secrets.data;
+  const info = appInfoQuery.data;
   return (
     <section className="space-y-4">
-      <PageHeader title="设置" description="密钥只留在这台电脑。没有助手二进制时，用内置 `coordy acp-stub`。" />
+      <PageHeader title="设置" description="密钥留在这台电脑。助手由 PATH + ACP Registry 自动发现，不必手填命令。" />
       <Card>
         <CardHeader>
-          <CardTitle>BYOK 与 ACP</CardTitle>
-          <CardDescription>密钥写 0600 文件，不进数据库。启动子进程时注入 OPENAI_API_KEY / ANTHROPIC_API_KEY。</CardDescription>
+          <CardTitle>你自己的密钥</CardTitle>
+          <CardDescription>写 0600 文件，不进数据库。启动子进程时注入 OPENAI_API_KEY / ANTHROPIC_API_KEY。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center gap-2 text-sm">
             {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">还没密钥</Badge>}
-            {status?.acp_command ? (
-              <Badge variant="outline">{status.acp_command}</Badge>
-            ) : (
-              <Badge variant="secondary">未指定 ACP 命令</Badge>
-            )}
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5">
@@ -904,15 +929,6 @@ export function SettingsPage() {
                 onChange={(event) => setBaseUrl(event.target.value)}
               />
             </div>
-            <div className="space-y-1.5 md:col-span-2">
-              <Label htmlFor="settings-acp">ACP 启动命令</Label>
-              <Input
-                id="settings-acp"
-                placeholder={status?.acp_command ?? status?.suggested_acp_command ?? "codex acp"}
-                value={acpCommand}
-                onChange={(event) => setAcpCommand(event.target.value)}
-              />
-            </div>
           </div>
         </CardContent>
         <CardFooter className="flex-wrap gap-2">
@@ -922,9 +938,9 @@ export function SettingsPage() {
                 provider,
                 api_key: apiKey.trim() ? apiKey.trim() : null,
                 base_url: baseUrl.trim() ? baseUrl.trim() : null,
-                acp_command: acpCommand.trim() ? acpCommand.trim() : null,
               });
               setApiKey("");
+              setNotice("密钥已保存。");
               await qc.invalidateQueries({ queryKey: ["secrets"] });
             }}
           >
@@ -933,19 +949,8 @@ export function SettingsPage() {
           <Button
             variant="secondary"
             onClick={async () => {
-              const info = await window.coordy.getAppInfo();
-              const stub = status?.suggested_acp_command ?? (info.cliPath ? `${info.cliPath} acp-stub` : "coordy acp-stub");
-              setAcpCommand(stub);
-              await window.coordy.setSecret({ provider, acp_command: stub });
-              await qc.invalidateQueries({ queryKey: ["secrets"] });
-            }}
-          >
-            使用内置演示助手
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => {
               await window.coordy.clearSecret();
+              setNotice("已清除本机密钥。");
               await qc.invalidateQueries({ queryKey: ["secrets"] });
             }}
           >
@@ -984,6 +989,10 @@ export function SettingsPage() {
               }}
             />
           </div>
+          <p className="text-xs text-muted-foreground">
+            {info ? `${info.version} / ${info.os}${info.cliPath ? ` / ${info.cliPath}` : ""}` : "读取应用信息…"}
+          </p>
+          {notice ? <p className="text-xs text-muted-foreground">{notice}</p> : null}
         </CardContent>
         <CardFooter className="flex-wrap gap-2">
           <Button
@@ -1000,31 +1009,16 @@ export function SettingsPage() {
           <Button
             variant="secondary"
             onClick={async () => {
-              const info = await window.coordy.getAppInfo();
-              setAppInfo(`${info.version} / ${info.os}`);
-            }}
-          >
-            应用信息
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={async () => {
               const result = await window.coordy.installCli();
-              setAppInfo(result.message);
+              setNotice(result.message);
             }}
           >
-            安装 CLI
+            安装 CLI 到 ~/.local/bin
           </Button>
-          {appInfo ? <span className="text-xs text-muted-foreground">{appInfo}</span> : null}
         </CardFooter>
       </Card>
     </section>
   );
-}
-
-function useForm(initial: string) {
-  const [value, set] = useState(initial);
-  return { value, set };
 }
 
 export function Page({ title, children }: { title: string; children: ReactNode }) {

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { queryClient } from "./app/query-client";
 import { AppRouter } from "./app/router";
 import { submitAsDaemon, viewAsDaemon } from "./lib/coordy/client";
+import { syncDiscoveredAgents } from "./lib/coordy/start-task";
 import { useSession } from "./state/session-store";
 
 export function App() {
@@ -68,14 +69,13 @@ async function bootstrap() {
     principalId = String(created.ids.principal_id);
   }
   useSession.getState().setPrincipal(principalId);
-  const agents = await viewAsDaemon({ type: "Agents", workspace_id: workspaceId });
-  if (agents.type === "Agents" && agents.items.length === 0) {
-    await submitAsDaemon({
-      type: "CreateAgent",
-      workspace_id: workspaceId,
-      principal_id: principalId,
-      name: "助手",
-      harness: "acp",
-    });
+  try {
+    await syncDiscoveredAgents(workspaceId, principalId, true);
+  } catch {
+    try {
+      await syncDiscoveredAgents(workspaceId, principalId, false);
+    } catch {
+      /* offline / empty PATH still lets the window open; Home retries */
+    }
   }
 }

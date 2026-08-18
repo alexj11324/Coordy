@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: &str = "coordy-local-v1";
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Live harnesses emit this tool when an ACP/CLI session ends so the kernel
+/// can mark the run complete and return the task for review.
+pub const HARNESS_SESSION_TOOL: &str = "coordy.session";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -505,6 +508,16 @@ pub enum RpcRequest {
     ClearSecret {
         id: String,
     },
+    DiscoverAgents {
+        id: String,
+        refresh: bool,
+    },
+    ImportDiscoveredAgents {
+        id: String,
+        workspace_id: String,
+        principal_id: String,
+        ids: Option<Vec<String>>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -521,6 +534,22 @@ pub struct SecretStatus {
 pub struct DetectedHarnessView {
     pub kind: String,
     pub binary: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveredAgentView {
+    pub id: String,
+    pub name: String,
+    pub installed: bool,
+    pub command: String,
+    pub source: String,
+    pub version: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportAgentsResult {
+    pub imported: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

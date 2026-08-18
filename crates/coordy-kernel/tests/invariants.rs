@@ -920,7 +920,7 @@ fn start_run_acp_spawns_against_bound_repo() {
                 workspace_id: workspace_id.clone(),
                 principal_id: principal_id.clone(),
                 name: "ACP".into(),
-                harness: "acp".into(),
+                harness: "claude-acp".into(),
             },
         ))
         .unwrap()
@@ -968,7 +968,130 @@ fn start_run_acp_spawns_against_bound_repo() {
     assert!(!outcome.blocked);
     let spawns = ports.spawns.lock().unwrap();
     assert_eq!(spawns.len(), 1);
-    assert_eq!(spawns[0].0, "acp");
+    assert_eq!(spawns[0].0, "claude-acp");
     assert_eq!(spawns[0].1, "/tmp/coordy-acp-repo");
     assert_eq!(spawns[0].2, "hello acp");
+}
+
+#[test]
+fn acp_session_tool_returns_task_for_review() {
+    let ports = std::sync::Arc::new(RecordingPorts::default());
+    let kernel = Kernel::new(ports, std::sync::Arc::new(DeterministicAdvisor));
+    let workspace_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace {
+                name: "review".into(),
+            },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let principal_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "ACP".into(),
+                harness: "claude-acp".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let task_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: workspace_id.clone(),
+                title: "talk".into(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    let run_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: task_id.clone(),
+                source: RunSource::Acp {
+                    prompt: "hello acp".into(),
+                },
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: run_id.clone(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: "claude-acp".into(),
+                    output: "end_turn".into(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+    let View::Run { run, .. } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Run { run_id },
+        ))
+        .unwrap()
+    else {
+        panic!("run view");
+    };
+    assert_eq!(run.status, "completed");
+    let View::Board { tasks } = kernel
+        .view_sync(q(Actor::Daemon, Query::Board { workspace_id }))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    assert_eq!(tasks[0].id, task_id);
+    assert_eq!(tasks[0].status, "review");
 }

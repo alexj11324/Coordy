@@ -96,4 +96,16 @@ export class DaemonClient {
   async clearSecret() {
     return this.request({ type: "ClearSecret" });
   }
+
+  async discoverAgents(refresh = false) {
+    return this.request({ type: "DiscoverAgents", refresh });
+  }
+
+  async importAgents(input: {
+    workspace_id: string;
+    principal_id: string;
+    ids?: string[] | null;
+  }) {
+    return this.request({ type: "ImportDiscoveredAgents", ...input });
+  }
 }

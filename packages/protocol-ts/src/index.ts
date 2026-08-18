@@ -1,5 +1,8 @@
 /** Generated-from-Rust protocol mirror. Do not invent fields here. */
 
+export const PROTOCOL_VERSION = "coordy-local-v1";
+export const HARNESS_SESSION_TOOL = "coordy.session";
+
 export type Actor =
   | { type: "principal"; id: string }
   | { type: "agent"; id: string; principal_id: string }
@@ -186,6 +189,15 @@ export type CoordyError = { code: string; message: string };
 
 export type AppInfo = { version: string; os: string; cliPath?: string };
 export type InstallCliResult = { ok: boolean; message: string };
+export type DiscoveredAgentView = {
+  id: string;
+  name: string;
+  installed: boolean;
+  command: string;
+  source: string;
+  version?: string | null;
+};
+export type ImportAgentsResult = { imported: string[]; skipped: string[] };
 export type DetectedHarnessView = { kind: string; binary: string };
 export type SecretStatus = {
   provider: string;

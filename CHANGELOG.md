@@ -5,6 +5,8 @@
 - Relocate the Python S0 harness to `research/s0-validation/`.
 - Add the Electron desktop, Rust kernel/daemon, local SQLite runtime, harness adapters, advisor, and optional control plane.
 - Wire BYOK secrets (0600 files, never SQLite) and Agent Client Protocol stdio sessions into Start Run.
+- Discover ACP agents from PATH plus the registry CDN on launch and import installed CLIs as teammates without a hand-typed command.
+- Assign-to-start on the task board, return finished runs for review, and list the bound repository.
 
 ## 0.1.0 - 2026-08-16
 

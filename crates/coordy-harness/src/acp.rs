@@ -12,64 +12,10 @@ use serde_json::{json, Value};
 
 use crate::SecretEnv;
 
-pub const ACP_STUB_REPLY: &str = "内置演示助手已接通。这不是云端模型：在设置里填入你自己的 API 密钥，并把 ACP 启动命令改成 `codex acp` 或 `claude acp`，即可用自己的助手。";
-
-pub fn suggested_acp_stub_command() -> Option<String> {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for name in ["coordy", "coordy.exe"] {
-                let candidate = dir.join(name);
-                if candidate.is_file() {
-                    return Some(format!("{} acp-stub", candidate.display()));
-                }
-            }
-        }
-    }
-    if which("coordy") {
-        return Some("coordy acp-stub".into());
-    }
-    None
-}
+pub const ACP_STUB_REPLY: &str = "内置演示助手已接通。这不是云端模型：本机发现 Codex/Claude 后会自动导入；填入你自己的 API 密钥即可用真助手。";
 
 pub fn resolve_acp_command(configured: Option<&str>) -> Result<(String, Vec<String>), CoordyError> {
-    if let Some(raw) = configured.map(str::trim).filter(|s| !s.is_empty()) {
-        return split_command(raw);
-    }
-    for (bin, args) in [
-        ("codex", &["acp"][..]),
-        ("claude", &["acp"][..]),
-        ("gemini", &["--acp"][..]),
-        ("copilot", &["--acp"][..]),
-    ] {
-        if which(bin) {
-            return Ok((bin.into(), args.iter().map(|s| (*s).to_string()).collect()));
-        }
-    }
-    if let Some(stub) = suggested_acp_stub_command() {
-        return split_command(&stub);
-    }
-    Err(CoordyError::unavailable(
-        "no ACP agent on PATH; set an ACP launch command in Settings (for example `codex acp`), or install the Coordy CLI and use `coordy acp-stub` to try the built-in demo",
-    ))
-}
-
-fn split_command(raw: &str) -> Result<(String, Vec<String>), CoordyError> {
-    let mut parts = raw.split_whitespace();
-    let bin = parts
-        .next()
-        .ok_or_else(|| CoordyError::invalid("empty ACP command"))?;
-    Ok((bin.into(), parts.map(str::to_string).collect()))
-}
-
-fn which(name: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                let p = dir.join(name);
-                p.is_file()
-            })
-        })
-        .unwrap_or(false)
+    crate::discovery::resolve_launch("acp", configured, None)
 }
 
 pub fn spawn_acp_session(

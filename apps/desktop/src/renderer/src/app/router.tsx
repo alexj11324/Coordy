@@ -1,10 +1,10 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { DesktopShell } from "../shell/desktop-shell";
 import { HomePage } from "../features/home";
+import { BoardPage } from "../features/board";
 import {
   AgentsPage,
   AuthorityPage,
-  BoardPage,
   ConflictsPage,
   ContractsPage,
   DependenciesPage,

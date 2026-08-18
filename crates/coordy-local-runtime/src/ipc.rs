@@ -175,6 +175,21 @@ async fn dispatch(runtime: &Runtime, req: RpcRequest) -> RpcResponse {
                 Err(e) => err(id, e),
             }
         }
+        RpcRequest::DiscoverAgents { id, refresh } => {
+            let agents = crate::discovery::list_agents(&runtime.data_dir, refresh).await;
+            ok(id, serde_json::to_value(agents).unwrap())
+        }
+        RpcRequest::ImportDiscoveredAgents {
+            id,
+            workspace_id,
+            principal_id,
+            ids,
+        } => {
+            match crate::discovery::import_agents(runtime, workspace_id, principal_id, ids).await {
+                Ok(result) => ok(id, serde_json::to_value(result).unwrap()),
+                Err(e) => err(id, e),
+            }
+        }
     }
 }
 

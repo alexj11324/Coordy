@@ -9,6 +9,8 @@ import {
 } from "./security/browser-window-policy";
 import { DaemonManager } from "./daemon/daemon-manager";
 import { cliBinaryPath } from "./daemon/daemon-binary-path";
+import { installCliBinaries } from "./install-cli";
+import { listDirectory } from "./list-directory";
 import { resolvePreloadPath } from "./preload-path";
 
 const daemon = new DaemonManager();
@@ -83,13 +85,18 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle(IPC.openTerminal, async (event, path: string) => {
     guard(event);
-    if (process.platform === "darwin") exec(`open -a Terminal "${path}"`);
-    else if (process.platform === "win32") exec(`start cmd /K cd /d "${path}"`);
-    else exec(`x-terminal-emulator --working-directory="${path}"`);
+    await openTerminalAt(path);
+  });
+  ipcMain.handle(IPC.listDirectory, (event, path: string) => {
+    guard(event);
+    if (!path || typeof path !== "string") {
+      throw new Error("invalid path");
+    }
+    return listDirectory(path);
   });
   ipcMain.handle(IPC.installCli, async (event) => {
     guard(event);
-    return { ok: true, message: "Use the bundled coordy binary next to coordyd" };
+    return installCliBinaries();
   });
   ipcMain.handle(IPC.secretsStatus, (event) => {
     guard(event);
@@ -107,6 +114,18 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.clearSecret, (event) => {
     guard(event);
     return daemon.client!.clearSecret();
+  });
+  ipcMain.handle(IPC.discoverAgents, (event, refresh?: boolean) => {
+    guard(event);
+    return daemon.client!.discoverAgents(Boolean(refresh));
+  });
+  ipcMain.handle(IPC.importAgents, (event, input: unknown) => {
+    guard(event);
+    return daemon.client!.importAgents(input as {
+      workspace_id: string;
+      principal_id: string;
+      ids?: string[] | null;
+    });
   });
   createWindow();
   let cursor = 0;
@@ -130,3 +149,24 @@ app.whenReady().then(async () => {
     daemon.stop();
   });
 });
+
+function openTerminalAt(path: string): Promise<void> {
+  const quoted = path.replace(/"/g, '\\"');
+  const command =
+    process.platform === "darwin"
+      ? `open -a Terminal "${quoted}"`
+      : process.platform === "win32"
+        ? `start cmd /K cd /d "${quoted}"`
+        : [
+            `x-terminal-emulator --working-directory="${quoted}"`,
+            `xfce4-terminal --working-directory="${quoted}"`,
+            `gnome-terminal --working-directory="${quoted}"`,
+            `xterm -e "cd \\"${quoted}\\" && exec $SHELL"`,
+          ].join(" || ");
+  return new Promise((resolve, reject) => {
+    exec(command, (error) => {
+      if (error) reject(new Error(`无法打开终端：${error.message}`));
+      else resolve();
+    });
+  });
+}
