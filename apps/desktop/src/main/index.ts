@@ -16,6 +16,10 @@ import { resolvePreloadPath } from "./preload-path";
 
 const daemon = new DaemonManager();
 
+if (process.platform === "linux" && process.env.ELECTRON_ENABLE_GPU !== "1") {
+  app.disableHardwareAcceleration();
+}
+
 function createWindow() {
   const window = new BrowserWindow({
     width: 1280,
@@ -25,6 +29,7 @@ function createWindow() {
     title: "Coordy",
     backgroundColor: "#fafafa",
     autoHideMenuBar: true,
+    show: false,
     ...(process.platform === "darwin"
       ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 14 } }
       : {}),
@@ -48,14 +53,29 @@ function createWindow() {
     });
   });
   window.webContents.on("will-navigate", (event, url) => {
-    if (!url.startsWith("http://localhost") && !url.startsWith("file:")) {
+    if (
+      !url.startsWith("http://localhost") &&
+      !url.startsWith("http://127.0.0.1") &&
+      !url.startsWith("file:")
+    ) {
       event.preventDefault();
     }
   });
+  const reveal = () => {
+    if (window.isDestroyed() || window.isVisible()) return;
+    window.show();
+    window.focus();
+  };
+  window.once("ready-to-show", reveal);
+  window.webContents.on("did-fail-load", (_event, code, description, url) => {
+    console.error(`window failed to load (${code}) ${description} ${url}`);
+    reveal();
+  });
+  setTimeout(reveal, 8000);
   if (process.env.ELECTRON_RENDERER_URL) {
-    window.loadURL(process.env.ELECTRON_RENDERER_URL);
+    void window.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
-    window.loadFile(join(__dirname, "../renderer/index.html"));
+    void window.loadFile(join(__dirname, "../renderer/index.html"));
   }
 }
 
@@ -160,6 +180,11 @@ app.whenReady().then(async () => {
     clearInterval(timer);
     daemon.stop();
   });
+}).catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(error);
+  dialog.showErrorBox("Coordy 打不开", message);
+  app.quit();
 });
 
 function openTerminalAt(path: string): Promise<void> {

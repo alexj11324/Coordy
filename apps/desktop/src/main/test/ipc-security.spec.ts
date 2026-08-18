@@ -30,6 +30,7 @@ describe("content security policy", () => {
     process.env.ELECTRON_RENDERER_URL = "http://localhost:5173/";
     expect(contentSecurityPolicy()).toBe(DEV_CSP);
     expect(contentSecurityPolicy()).toContain("unsafe-eval");
+    expect(contentSecurityPolicy()).toContain("127.0.0.1");
   });
 
   it("keeps the production policy strict", () => {

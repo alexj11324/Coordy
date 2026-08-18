@@ -28,4 +28,9 @@ function run(command, args, cwd) {
 
 applyLinuxDisplayFlags();
 await run("cargo", ["build", "-p", "coordyd", "-p", "coordy"], repoRoot);
-await run(resolve(desktopRoot, "node_modules/.bin/electron-vite"), ["dev"], desktopRoot);
+const vite = resolve(desktopRoot, "node_modules/.bin/electron-vite");
+const electronArgs =
+  process.platform === "linux" && process.env.ELECTRON_ENABLE_GPU !== "1"
+    ? ["dev", "--", "--disable-gpu", "--disable-dev-shm-usage"]
+    : ["dev"];
+await run(vite, electronArgs, desktopRoot);
