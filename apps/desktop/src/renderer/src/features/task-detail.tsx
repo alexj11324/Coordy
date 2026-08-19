@@ -58,6 +58,7 @@ import { useTabTitle } from "../shell/use-tab-title";
 import { ActivityLine } from "./activity-marker";
 import { AgentAvatar, NamedAgent } from "./agent-avatar";
 import { PriorityGlyph, StatusGlyph } from "./issue-status";
+import { IssuePullRequests } from "./issue-pull-requests";
 
 const uiText = "text-[13px] leading-5 md:text-[13px]";
 const titleField =
@@ -114,14 +115,14 @@ export function TaskDetailPage() {
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
   });
-  const workspaces = useQuery({
-    queryKey: ["view", { type: "Workspaces" }],
-    queryFn: () => view({ type: "Workspaces" }),
-  });
-  const settings = useQuery({
+  const settingsQuery = useQuery({
     queryKey: ["settings", workspaceId],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Settings", workspace_id: workspaceId! }),
+  });
+  const workspaces = useQuery({
+    queryKey: ["view", { type: "Workspaces" }],
+    queryFn: () => view({ type: "Workspaces" }),
   });
   const catalog = useQuery({
     queryKey: ["discover-agents"],
@@ -162,7 +163,7 @@ export function TaskDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [blockerPick, setBlockerPick] = useState("none");
-  const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : null;
+  const repoPath = settingsQuery.data?.type === "Settings" ? settingsQuery.data.repo_path : null;
   const workPath = task?.worktree_path || repoPath;
   const workspaceName =
     asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)?.name?.trim() || "coordy";
@@ -918,6 +919,15 @@ export function TaskDetailPage() {
             </PropertyRow>
           </div>
         </section>
+
+        {taskId ? (
+          <IssuePullRequests
+            taskId={taskId}
+            pullRequests={task.pull_requests ?? []}
+            github={settingsQuery.data?.type === "Settings" ? settingsQuery.data.github : undefined}
+            onChanged={refresh}
+          />
+        ) : null}
 
         <section>
           <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">前置事项</h2>

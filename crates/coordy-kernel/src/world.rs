@@ -56,6 +56,8 @@ pub struct World {
     #[serde(default)]
     pub integrations: Vec<Integration>,
     #[serde(default)]
+    pub github: Vec<GithubState>,
+    #[serde(default)]
     pub notification_kinds: Vec<String>,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
@@ -497,6 +499,21 @@ pub struct Integration {
     pub enabled: bool,
     #[serde(default)]
     pub config: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GithubState {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub cli_available: bool,
+    #[serde(default)]
+    pub authenticated: bool,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub last_error: String,
+    #[serde(default)]
+    pub last_synced_at: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

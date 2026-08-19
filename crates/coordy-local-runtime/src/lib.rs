@@ -3,13 +3,14 @@
 mod discovery;
 mod draft;
 mod git;
+mod github;
 mod ipc;
 mod live;
 mod secrets;
 mod sqlite;
 
-pub use discovery::{import_agents, list_agents};
 pub use git::GitPorts;
+pub use github::{collect, parse_github_remote, parse_pr_list};
 pub use ipc::{connect, serve, RpcClient};
 pub use secrets::{advisor_key_from_env, resolve_secret, write_secret_ref, SecretStore};
 pub use sqlite::SqliteStore;
@@ -77,6 +78,8 @@ impl Runtime {
                     let _ = store.save(&sweep_kernel.export_world());
                 }
             }
+            drop(_gate);
+            refresh_github_workspaces(&sweep_kernel, &sweep_persist, sweep_gate.as_ref());
         });
         let _ = crate::write_secret_ref(data_dir, "COORDY_ADVISOR_API_KEY");
         Ok(Self {
@@ -103,6 +106,7 @@ impl Runtime {
         &self,
         command: AuthenticatedCommand,
     ) -> Result<Outcome, CoordyError> {
+        let command = self.expand_github_refresh(command);
         let _gate = self.persist_gate.lock().expect("persist gate");
         let snapshot = self.kernel.export_world();
         match self.kernel.submit_sync(command) {
@@ -114,6 +118,24 @@ impl Runtime {
                 Ok(outcome)
             }
             Err(err) => Err(err),
+        }
+    }
+
+    fn expand_github_refresh(&self, command: AuthenticatedCommand) -> AuthenticatedCommand {
+        let Command::RefreshGithub { workspace_id } = &command.command else {
+            return command;
+        };
+        let workspace_id = workspace_id.clone();
+        let repo = self
+            .kernel
+            .export_world()
+            .workspaces
+            .iter()
+            .find(|ws| ws.id == workspace_id)
+            .and_then(|ws| ws.repo_path.clone());
+        AuthenticatedCommand {
+            actor: command.actor,
+            command: crate::github::collect(repo.as_deref()).into_command(workspace_id),
         }
     }
 }
@@ -130,6 +152,42 @@ fn automation_sweep_mutated(outcome: &Outcome) -> bool {
         .and_then(|value| value.as_array())
         .is_some_and(|rows| !rows.is_empty());
     armed > 0 || triggered
+}
+
+fn github_enabled(world: &coordy_kernel::World, workspace_id: &str) -> bool {
+    world
+        .integrations
+        .iter()
+        .find(|row| row.workspace_id == workspace_id && row.kind == "github")
+        .map(|row| row.enabled)
+        .unwrap_or(true)
+}
+
+fn refresh_github_workspaces(kernel: &Kernel, persist_path: &Path, gate: &Mutex<()>) {
+    let world = kernel.export_world();
+    let jobs: Vec<(String, Option<String>)> = world
+        .workspaces
+        .iter()
+        .filter(|ws| {
+            !ws.archived
+                && github_enabled(&world, &ws.id)
+                && ws.repo_path.as_deref().is_some_and(|path| !path.is_empty())
+        })
+        .map(|ws| (ws.id.clone(), ws.repo_path.clone()))
+        .collect();
+    for (workspace_id, repo) in jobs {
+        let fetched = crate::github::collect(repo.as_deref());
+        let _gate = gate.lock().expect("persist gate");
+        let outcome = kernel.submit_sync(AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: fetched.into_command(workspace_id),
+        });
+        if outcome.is_ok() {
+            if let Ok(store) = SqliteStore::open(persist_path) {
+                let _ = store.save(&kernel.export_world());
+            }
+        }
+    }
 }
 
 pub fn default_paths() -> Result<(PathBuf, PathBuf), CoordyError> {

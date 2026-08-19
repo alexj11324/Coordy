@@ -50,7 +50,9 @@ fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
     assert_eq!(codex[0], "exec");
     assert!(codex.iter().any(|a| a == "--json"));
     assert_eq!(codex.last().map(String::as_str), Some("review this"));
-    assert!(!codex.iter().any(|a| a.starts_with("model_reasoning_effort=")));
+    assert!(!codex
+        .iter()
+        .any(|a| a.starts_with("model_reasoning_effort=")));
     assert!(!codex.iter().any(|a| a.starts_with("service_tier=")));
 
     let gemini = native_launch_args(
