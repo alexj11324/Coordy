@@ -12,6 +12,7 @@ import {
   Textarea,
 } from "@coordy/ui";
 import { ArrowLeft, FolderKanban, Play, Puzzle, UsersRound, Workflow } from "lucide-react";
+import { DatePickerField } from "./date-picker-field";
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit } from "../lib/coordy/client";
@@ -249,8 +250,20 @@ function ProjectEditor({
               ))}
             </SelectContent>
           </Select>
-          <Input type="date" value={startDate} className="h-7 w-36" onChange={(event) => setStartDate(event.target.value)} />
-          <Input type="date" value={dueDate} className="h-7 w-36" onChange={(event) => setDueDate(event.target.value)} />
+          <DatePickerField
+            value={startDate}
+            placeholder="开始日期"
+            aria-label="开始日期"
+            className="h-7 w-36 rounded-md border border-border px-2 text-xs"
+            onChange={setStartDate}
+          />
+          <DatePickerField
+            value={dueDate}
+            placeholder="截止日期"
+            aria-label="截止日期"
+            className="h-7 w-36 rounded-md border border-border px-2 text-xs"
+            onChange={setDueDate}
+          />
         </div>
         <div className="space-y-1.5">
           <Label>资源 / 目录</Label>

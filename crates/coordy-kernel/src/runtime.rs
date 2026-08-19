@@ -1757,6 +1757,9 @@ impl Kernel {
                 }
                 return Ok(outcome);
             }
+            Command::RefreshGithub { .. } => Err(CoordyError::unavailable(
+                "github refresh requires coordyd to invoke the GitHub CLI",
+            )),
             other => {
                 let outcome = product::submit(&mut world, &actor, other)?;
                 let released = Self::released_task_ids(&outcome);
@@ -2034,6 +2037,7 @@ impl Kernel {
                     repo_path,
                     llm_advisor_enabled: world.llm_advisor_enabled,
                     notification_kinds: world.notification_kinds.clone(),
+                    github: product::github_view(&world, &workspace_id),
                 })
             }
             Query::AgentContext { agent_id } => {

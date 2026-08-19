@@ -3,7 +3,8 @@ use coordy_kernel::{
     parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
 };
 use coordy_protocol::{
-    Actor, AuthenticatedCommand, AuthorizedQuery, Command, HarnessEvent, Query, RunSource, View,
+    Actor, AuthenticatedCommand, AuthorizedQuery, Command, GithubPullRequestItem, GithubSync,
+    HarnessEvent, Query, RunSource, View,
 };
 
 fn daemon() -> Actor {
@@ -3207,4 +3208,385 @@ fn finishing_one_of_two_blockers_does_not_start() {
         ))
         .unwrap();
     assert_eq!(ports.spawns.lock().unwrap().len(), 1);
+}
+
+fn pr_item(
+    number: u32,
+    branch: &str,
+    title: &str,
+    body: &str,
+    state: &str,
+) -> GithubPullRequestItem {
+    GithubPullRequestItem {
+        number,
+        url: format!("https://github.com/acme/app/pull/{number}"),
+        title: title.into(),
+        state: state.into(),
+        repo: "acme/app".into(),
+        branch: branch.into(),
+        author: "dev".into(),
+        body: body.into(),
+        additions: 4,
+        deletions: 1,
+        changed_files: 2,
+        mergeable: "mergeable".into(),
+        merge_state: "clean".into(),
+        checks_rollup: "success".into(),
+        checks_total: 3,
+        checks_passed: 3,
+        checks_failed: 0,
+        checks_running: 0,
+        failed_check_names: Vec::new(),
+        snapshot_available: true,
+    }
+}
+
+#[test]
+fn github_auto_link_attaches_ci_snapshot() {
+    let h = setup();
+    let created = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "登录跳转".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    let task_id = created.ids["task_id"].as_str().unwrap().to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(
+                    41,
+                    "coor-1-fix-login",
+                    "COOR-1 fix login",
+                    "notes",
+                    "open",
+                )],
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.pull_requests.len(), 1);
+    let pr = &task.pull_requests[0];
+    assert_eq!(pr.number, 41);
+    assert_eq!(pr.state, "open");
+    assert_eq!(pr.checks_rollup, "success");
+    assert_eq!(pr.checks_passed, 3);
+    assert_eq!(pr.merge_state, "clean");
+    assert_eq!(pr.linked_by, "auto");
+    let settings = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Settings {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Settings { github, .. } = settings else {
+        panic!("settings");
+    };
+    assert!(github.cli_available);
+    assert!(github.authenticated);
+    assert_eq!(github.account, "dev");
+}
+
+#[test]
+fn github_merged_close_intent_completes_issue() {
+    let h = setup();
+    let created = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "完成登录".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    let task_id = created.ids["task_id"].as_str().unwrap().to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: String::new(),
+                items: vec![pr_item(9, "feat", "login", "Closes COOR-1", "merged")],
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.status, "done");
+    assert!(task.pull_requests[0].close_intent);
+}
+
+#[test]
+fn github_related_to_does_not_link_or_complete() {
+    let h = setup();
+    let created = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "旁路".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    let task_id = created.ids["task_id"].as_str().unwrap().to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                error: String::new(),
+                account: "dev".into(),
+                fetched_at: String::new(),
+                items: vec![pr_item(
+                    3,
+                    "other",
+                    "unrelated",
+                    "Related to COOR-1",
+                    "merged",
+                )],
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert!(task.pull_requests.is_empty());
+    assert_eq!(task.status, "open");
+}
+
+#[test]
+fn github_sync_error_keeps_auto_links_and_marks_stale() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "登录跳转".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(
+                    41,
+                    "coor-1-fix-login",
+                    "COOR-1 fix login",
+                    "notes",
+                    "open",
+                )],
+            })),
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: "尚未绑定代码仓库。".into(),
+                fetched_at: "2026-08-19T00:01:00Z".into(),
+                items: Vec::new(),
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    let pr = &task.pull_requests[0];
+    assert_eq!(pr.number, 41);
+    assert!(pr.snapshot_stale);
+    let settings = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Settings {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Settings { github, .. } = settings else {
+        panic!("settings");
+    };
+    assert_eq!(github.last_error, "尚未绑定代码仓库。");
+}
+
+#[test]
+fn github_refresh_without_daemon_is_unavailable() {
+    let h = setup();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::RefreshGithub {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "unavailable");
+}
+
+#[test]
+fn github_sync_rejects_member_forged_snapshots() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "不能由客户端伪造完成".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "forged".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(99, "other", "unrelated", "Closes COOR-1", "merged")],
+            })),
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "denied");
+
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.status, "open");
+    assert!(task.pull_requests.is_empty());
 }

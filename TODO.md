@@ -116,10 +116,11 @@
 - [x] 我的账号：资料、偏好、快捷键列表、任务/聊天说明、通知、模型密钥、Daemon、更新说明
 - [x] 工作区常规：名称、描述、上下文、slug、任务前缀、离开/删除
 - [x] 代码仓库（绑定本机目录）
-- [x] 云通道：一条说明，本机不提供 GitHub / IM 云通道（不造 OAuth 表单）
+- [x] 云通道：一条说明，本机不提供 IM 云通道（不造 OAuth 表单）
 - [x] 成员、标签、实验室顾问开关
 - [x] MCP 页：Coordy 不托管 MCP，各 CLI 读自己的配置
-- [ ] GitHub App / PR 侧栏 / CI
+- [x] GitHub：本机 `gh` 同步 PR / CI，事项侧栏展示状态、检查与可合并性
+- [ ] GitHub App / 公网 webhook / OAuth 安装
 - [ ] 飞书 / Slack / 钉钉 / 企业微信
 - [ ] 自定义属性编辑入口
 - [ ] 快捷键录制 / 冲突 / 重置
@@ -127,7 +128,7 @@
 ## CLI 与集成（本机不做）
 
 - [ ] 产品级 CLI 覆盖 issue / project / agent / skill / squad / automation / runtime
-- [ ] GitHub App：按编号关联 PR、合并关 issue
+- [ ] GitHub App：按编号关联 PR、合并关 issue（本机 `gh` 路径已覆盖只读同步与关闭语句转 Done）
 - [ ] 聊天工具接入（飞书 / Slack / 钉钉 / 企业微信）
 - [ ] 公网 Webhook 监听
 
