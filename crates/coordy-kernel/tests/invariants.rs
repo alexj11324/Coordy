@@ -126,6 +126,50 @@ fn setup_kernel(kernel: Kernel) -> Harness {
 }
 
 #[test]
+fn chat_backing_tasks_do_not_change_user_visible_issue_stats() {
+    let h = setup();
+    let actor = Actor::Principal {
+        id: h.alice.clone(),
+    };
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Visible issue".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateChat {
+                workspace_id: h.workspace_id.clone(),
+                agent_id: h.a1.clone(),
+                project_id: None,
+            },
+        ))
+        .unwrap();
+
+    let View::Stats { stats } = h
+        .kernel
+        .view_sync(q(
+            actor,
+            Query::Stats {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("stats");
+    };
+    assert_eq!(stats.issue_count, 1);
+    assert_eq!(stats.open_count, 1);
+    assert_eq!(stats.done_count, 0);
+}
+
+#[test]
 fn private_memory_isolated() {
     let h = setup();
     let mem = h

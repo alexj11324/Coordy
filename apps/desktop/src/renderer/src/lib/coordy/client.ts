@@ -1,14 +1,14 @@
-import type { AuthenticatedCommand, AuthorizedQuery, Command, Query, View } from "@coordy/protocol";
+import type { Actor, AuthenticatedCommand, AuthorizedQuery, Command, Query, View } from "@coordy/protocol";
 import { useSession } from "../../state/session-store";
 
-export async function submit(command: Command) {
-  const actor = useSession.getState().actor;
+export async function submit(command: Command, actorOverride?: Actor) {
+  const actor = actorOverride ?? useSession.getState().actor;
   const envelope: AuthenticatedCommand = { actor, command };
   return window.coordy.submit(envelope);
 }
 
-export async function view(query: Query): Promise<View> {
-  const actor = useSession.getState().actor;
+export async function view(query: Query, actorOverride?: Actor): Promise<View> {
+  const actor = actorOverride ?? useSession.getState().actor;
   const envelope: AuthorizedQuery = { actor, query };
   return window.coordy.view(envelope);
 }

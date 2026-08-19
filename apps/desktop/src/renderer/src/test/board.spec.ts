@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   acpRunSource,
   chatTurnCommands,
+  normalizedAgentId,
+  resolveAgentId,
+  startAcpRun,
   taskSplitRequest,
 } from "../lib/coordy/start-task";
 import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
@@ -23,12 +26,14 @@ import {
 } from "../lib/coordy/issues";
 import {
   asTasks,
+  activeHomeRun,
   boardColumn,
   isPlaceholderHarness,
   latestRunForTask,
   outcomeId,
 } from "../lib/coordy/views";
 import type { AgentView, RunView, TaskView, View } from "@coordy/protocol";
+import { useSession } from "../state/session-store";
 
 describe("board view helpers", () => {
   it("reads tasks from a Board view", () => {
@@ -104,6 +109,79 @@ describe("board view helpers", () => {
       },
     ];
     expect(latestRunForTask(runs, "t1")?.id).toBe("run_2");
+  });
+
+  it("keeps every Home progress action on the pinned run", () => {
+    const runs: RunView[] = [
+      { id: "run_old", task_id: "task_old", agent_id: "a", status: "running", harness: "codex", compaction_count: 0 },
+      { id: "run_new", task_id: "task_new", agent_id: "a", status: "running", harness: "codex", compaction_count: 0 },
+    ];
+    expect(activeHomeRun(runs, "run_old")).toMatchObject({ id: "run_old", task_id: "task_old" });
+    expect(activeHomeRun(runs, null)?.id).toBe("run_new");
+  });
+
+  it("does not carry a pinned Home run into another workspace run list", () => {
+    const workspaceARuns: RunView[] = [
+      { id: "run_a", task_id: "task_a", agent_id: "agent_a", status: "running", harness: "codex", compaction_count: 0 },
+    ];
+    const workspaceBRuns: RunView[] = [
+      { id: "run_b", task_id: "task_b", agent_id: "agent_b", status: "running", harness: "codex", compaction_count: 0 },
+    ];
+    expect(activeHomeRun(workspaceARuns, "run_a")?.id).toBe("run_a");
+    expect(activeHomeRun(workspaceBRuns, "run_a")).toBeUndefined();
+    expect(activeHomeRun(workspaceBRuns, null)?.id).toBe("run_b");
+  });
+
+  it("keeps a pending Home dispatch on its invocation actor after a workspace switch", async () => {
+    let resolveAgents!: (value: unknown) => void;
+    const agentsResult = new Promise((resolve) => {
+      resolveAgents = resolve;
+    });
+    const submitMock = vi.fn(async (envelope: {
+      actor: { type: string; id?: string };
+      command: { type: string };
+    }) => {
+      if (envelope.command.type === "CreateTask") {
+        return { message: "created", ids: { task_id: "task_a" }, blocked: false };
+      }
+      if (envelope.command.type === "AssignTask") {
+        return { message: "assigned", ids: {}, blocked: false };
+      }
+      return { message: "started", ids: { run_id: "run_a" }, blocked: false };
+    });
+    const viewMock = vi.fn(async () => agentsResult);
+    const previousWindow = Reflect.get(globalThis, "window");
+    Reflect.set(globalThis, "window", {
+      coordy: { view: viewMock, submit: submitMock },
+    });
+    useSession.getState().setWorkspace("workspace_a");
+    useSession.getState().setPrincipal("principal_a");
+
+    try {
+      const pending = startAcpRun({
+        workspaceId: "workspace_a",
+        principalId: "principal_a",
+        title: "A task",
+        prompt: "A prompt",
+        agentId: "agent_a",
+      });
+      await vi.waitFor(() => expect(viewMock).toHaveBeenCalledTimes(1));
+      useSession.getState().setWorkspace("workspace_b");
+      useSession.getState().setPrincipal("principal_b");
+      resolveAgents({
+        type: "Agents",
+        items: [{ id: "agent_a", workspace_id: "workspace_a", principal_id: "principal_a", name: "A", harness: "codex" }],
+      });
+      await expect(pending).resolves.toMatchObject({ taskId: "task_a", runId: "run_a" });
+      expect(submitMock.mock.calls.map(([envelope]) => envelope.actor)).toEqual([
+        { type: "principal", id: "principal_a" },
+        { type: "principal", id: "principal_a" },
+        { type: "principal", id: "principal_a" },
+      ]);
+    } finally {
+      if (previousWindow === undefined) Reflect.deleteProperty(globalThis, "window");
+      else Reflect.set(globalThis, "window", previousWindow);
+    }
   });
 
   it("hides leftover placeholder agents that are not a real CLI", () => {
@@ -281,6 +359,23 @@ describe("board view helpers", () => {
     expect(
       tasksAssignedToMe(tasks, { principalId: null, agentId: null }),
     ).toEqual([]);
+  });
+
+  it("keeps assigned chat backing tasks out of my tasks", () => {
+    const tasks: TaskView[] = [
+      { id: "task_1", workspace_id: "ws", title: "我的", status: "open", assignee_principal_id: "p1" },
+      { id: "task_chat", workspace_id: "ws", title: "对话", status: "backlog", stage: "chat", labels: ["chat"], assignee_principal_id: "p1", assignee_agent_id: "a1" },
+    ];
+    expect(tasksAssignedToMe(boardIssues(tasks), { principalId: "p1", agentId: "a1" }).map((task) => task.id)).toEqual(["task_1"]);
+  });
+
+  it("normalizes workspace selections but rejects an explicit stale agent at dispatch", () => {
+    const agents: AgentView[] = [
+      { id: "agent_b", workspace_id: "workspace_b", principal_id: "p", name: "B", harness: "codex" },
+    ];
+    expect(normalizedAgentId(agents, "agent_from_workspace_a")).toBe("agent_b");
+    expect(() => resolveAgentId(agents, "agent_from_workspace_a")).toThrow("不属于当前工作区");
+    expect(resolveAgentId(agents, "agent_b")).toBe("agent_b");
   });
 
   it("keeps chat-backed tasks off the issue board", () => {

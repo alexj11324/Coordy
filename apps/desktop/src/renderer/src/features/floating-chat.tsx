@@ -10,7 +10,7 @@ import {
   cn,
 } from "@coordy/ui";
 import { Archive, ChevronDown, Maximize2, MessageCircle, Minimize2, Minus, Plus, SendHorizonal, Square } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { chatTimeline } from "../lib/coordy/activity";
@@ -79,6 +79,13 @@ export function FloatingChat() {
   });
   const runEvents = asRunDetail(runDetail.data)?.events ?? [];
   const agentName = agent ? agentDisplayName(agent) : "智能体";
+
+  useEffect(() => {
+    if (activeChatId === null) {
+      setDraft("");
+      setError(null);
+    }
+  }, [activeChatId]);
 
   const timeline = useMemo(
     () => chatTimeline(chatDetail?.messages ?? [], runEvents, latestRun?.id),
