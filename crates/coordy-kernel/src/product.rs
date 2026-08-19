@@ -2056,7 +2056,8 @@ pub(crate) fn is_conductor_review(
     agent_id: &str,
     trigger: &str,
 ) -> bool {
-    trigger == "graph" && workspace_conductor_id(world, workspace_id).as_deref() == Some(agent_id)
+    trigger == "graph_review"
+        && workspace_conductor_id(world, workspace_id).as_deref() == Some(agent_id)
 }
 
 pub(crate) fn can_reaffirm_dependency(world: &World, actor: &Actor, workspace_id: &str) -> bool {

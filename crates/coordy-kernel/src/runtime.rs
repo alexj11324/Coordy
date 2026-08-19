@@ -165,7 +165,7 @@ impl Kernel {
                     .filter(|path| !path.is_empty())
             })
             .unwrap_or_else(|| ".".into());
-        self.ports.spawn_harness(
+        if let Err(error) = self.ports.spawn_harness(
             &harness,
             &worktree,
             &prompt,
@@ -174,7 +174,13 @@ impl Kernel {
             &agent.thinking,
             &agent.speed,
             &agent.cli_args,
-        )?;
+        ) {
+            if let Some(run) = world.runs.iter_mut().find(|run| run.id == run_id) {
+                run.status = "failed".into();
+                run.queue_status = "failed".into();
+            }
+            return Err(error);
+        }
         Ok(Outcome::ok("harness started", json!({ "run_id": run_id })))
     }
 
@@ -370,7 +376,7 @@ impl Kernel {
             if world.runs.iter().any(|run| {
                 run.task_id == *task_id
                     && run.status == "running"
-                    && run.trigger == "graph"
+                    && run.trigger == "graph_review"
                     && run.agent_id == conductor_id
             }) {
                 continue;
@@ -392,7 +398,7 @@ impl Kernel {
                 &conductor_id,
                 prompt,
                 None,
-                "graph",
+                "graph_review",
                 true,
             ) {
                 product::push_notice(
@@ -417,7 +423,7 @@ impl Kernel {
             return Ok(());
         };
         match event {
-            HarnessEvent::Message { role, content } if role != "user" => {
+            HarnessEvent::Message { role, content } if role == "assistant" => {
                 if !product::is_conductor_review(
                     world,
                     &run.workspace_id,
@@ -445,7 +451,7 @@ impl Kernel {
             }
             HarnessEvent::Tool {
                 name, exit_code, ..
-            } if name == coordy_protocol::HARNESS_SESSION_TOOL && exit_code.unwrap_or(0) == 0 => {
+            } if name == coordy_protocol::HARNESS_SESSION_TOOL && *exit_code == Some(0) => {
                 if product::workspace_conductor_id(world, &run.workspace_id).is_none() {
                     return Ok(());
                 }
@@ -863,6 +869,15 @@ impl Kernel {
                 }
                 if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                     row.archived = true;
+                }
+                if let Some(workspace) = world
+                    .workspaces
+                    .iter_mut()
+                    .find(|workspace| workspace.id == agent.workspace_id)
+                {
+                    if workspace.conductor_agent_id.as_deref() == Some(agent_id.as_str()) {
+                        workspace.conductor_agent_id = None;
+                    }
                 }
                 Self::emit(
                     &mut world,
@@ -1548,6 +1563,11 @@ impl Kernel {
                 chat_id,
                 trigger,
             } => {
+                if trigger == "graph_review" {
+                    return Err(CoordyError::invalid(
+                        "graph_review runs may only be created by the internal scheduler",
+                    ));
+                }
                 let task = world
                     .task(&task_id)
                     .cloned()
