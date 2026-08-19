@@ -7,6 +7,8 @@ import {
   projectStatusLabel,
   scheduleLabel,
   scheduleSelectItems,
+  SKILL_STARTERS,
+  skillStarterById,
   starterById,
 } from "../lib/coordy/catalog";
 import { navItemActive } from "../shell/nav";
@@ -87,12 +89,31 @@ describe("automation starters", () => {
   });
 });
 
+describe("skill starters", () => {
+  it("ships a Coordy-authored graph coordination skill, not a third-party workflow editor", () => {
+    expect(SKILL_STARTERS.map((item) => item.id)).toEqual(["coordy-graph"]);
+    const starter = skillStarterById("coordy-graph");
+    expect(starter?.title).toBe("协调图");
+    expect(starter?.body).toContain("GOAL:");
+    expect(starter?.body).toContain("CONSTRAINT:");
+    expect(starter?.body).toContain("DECISION:");
+    expect(starter?.body).toContain("DEPENDS:");
+    expect(starter?.body).toContain("PLAN:");
+    expect(starter?.body).toContain("ACCEPTANCE:");
+    expect(starter?.body.includes("React Flow")).toBe(false);
+    expect(starter?.body.includes("LangGraph")).toBe(false);
+    expect(skillStarterById(null)).toBeNull();
+  });
+});
+
 describe("catalog routes", () => {
   it("keeps collection tabs titled and sidebar items active on detail paths", () => {
+    expect(titleFromPath("/graph")).toBe("图");
     expect(titleFromPath("/projects/proj_1")).toBe("项目");
     expect(titleFromPath("/automations/auto_1")).toBe("自动化");
     expect(titleFromPath("/skills/skill_1")).toBe("Skills");
     expect(titleFromPath("/squads/squad_1")).toBe("小队");
+    expect(navItemActive("/graph", { to: "/graph" })).toBe(true);
     expect(navItemActive("/projects/proj_1", { to: "/projects" })).toBe(true);
     expect(navItemActive("/automations/auto_1", { to: "/automations" })).toBe(true);
   });

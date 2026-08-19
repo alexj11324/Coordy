@@ -1,4 +1,4 @@
-import { BarChart3, FileSearch, FolderKanban, ListTodo, Puzzle, UsersRound, Workflow } from "lucide-react";
+import { BarChart3, FileSearch, FolderKanban, ListTodo, Puzzle, Share2, UsersRound, Workflow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -8,7 +8,10 @@ import {
   formatRelativeTime,
   projectIssueStats,
   scheduleLabel,
+  SKILL_STARTERS,
+  skillStarterById,
   type AutomationStarterId,
+  type SkillStarterId,
 } from "../lib/coordy/catalog";
 import { PRIORITY_ITEMS } from "../lib/coordy/issues";
 import { agentDisplayName, createActionLabel, emptyCreateHint, listableAgents } from "../lib/coordy/labels";
@@ -210,12 +213,21 @@ export function AutomationsPage() {
   );
 }
 
+const SKILL_STARTER_ICONS: Record<SkillStarterId, LucideIcon> = {
+  "coordy-graph": Share2,
+};
+
 export function SkillsPage() {
   const q = useWorkspaceQuery((workspace_id) => ({ type: "Skills", workspace_id }));
   const items = asSkills(q.data);
   const navigate = useNavigate();
   const { creating, setCreating } = useCatalogComposer("new-skill");
+  const [starterId, setStarterId] = useState<SkillStarterId | null>(null);
   const createLabel = createActionLabel("Skill");
+  const openCreate = (id: SkillStarterId | null) => {
+    setStarterId(id);
+    setCreating(true);
+  };
   return (
     <section className="flex h-full min-h-0 flex-col">
       <CatalogPageHeader
@@ -223,16 +235,36 @@ export function SkillsPage() {
         title="Skills"
         count={items.length}
         actionLabel={createLabel}
-        onCreate={() => setCreating(true)}
+        onCreate={() => openCreate(null)}
       />
       {items.length === 0 ? (
         <CatalogEmpty
           icon={Puzzle}
           title={emptyCreateHint("Skill")}
-          description="Skill 含名称与正文。绑定到智能体后，下一次运行会注入指令。"
-          actionLabel={createLabel}
-          onCreate={() => setCreating(true)}
-        />
+          description="Skill 含名称与正文。绑定到智能体后，下一次运行会注入指令。不会自动绑到全部智能体。"
+          actionLabel="从空白开始"
+          onCreate={() => openCreate(null)}
+        >
+          <div className="mt-6 grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-2">
+            {SKILL_STARTERS.map((starter) => {
+              const Icon = SKILL_STARTER_ICONS[starter.id];
+              return (
+                <button
+                  key={starter.id}
+                  type="button"
+                  className="flex items-start gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/40"
+                  onClick={() => openCreate(starter.id)}
+                >
+                  <Icon className="mt-0.5 size-5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium">从模板创建 · {starter.title}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">{starter.summary}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </CatalogEmpty>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           <CatalogListHeader columns="md:grid-cols-[minmax(0,1fr)_minmax(12rem,1.2fr)]">
@@ -253,7 +285,14 @@ export function SkillsPage() {
           ))}
         </div>
       )}
-      <SkillCreateDialog open={creating} onClose={() => setCreating(false)} />
+      <SkillCreateDialog
+        open={creating}
+        starter={skillStarterById(starterId)}
+        onClose={() => {
+          setCreating(false);
+          setStarterId(null);
+        }}
+      />
     </section>
   );
 }

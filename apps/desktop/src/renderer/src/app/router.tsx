@@ -3,6 +3,7 @@ import { DesktopShell } from "../shell/desktop-shell";
 import { HomePage } from "../features/home";
 import { BoardPage } from "../features/board";
 import { TaskDetailPage } from "../features/task-detail";
+import { GraphPage } from "../features/graph";
 import { AgentsPage } from "../features/agents";
 import {
   AiBuilderSessionPage,
@@ -57,6 +58,7 @@ export function AppRouter() {
         <Route element={<FlushCanvas />}>
           <Route path="/board" element={<BoardPage />} />
           <Route path="/board/:taskId" element={<TaskDetailPage />} />
+          <Route path="/graph" element={<GraphPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/mine" element={<MyIssuesPage />} />
           <Route path="/projects" element={<ProjectsPage />} />

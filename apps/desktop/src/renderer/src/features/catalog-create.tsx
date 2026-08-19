@@ -22,6 +22,7 @@ import {
   scheduleLabel,
   scheduleSelectItems,
   type AutomationStarter,
+  type SkillStarter,
 } from "../lib/coordy/catalog";
 import { PRIORITY_ITEMS, priorityTone } from "../lib/coordy/issues";
 import { agentDisplayName, createActionLabel, listableAgents } from "../lib/coordy/labels";
@@ -340,7 +341,15 @@ export function AutomationCreateDialog({
   );
 }
 
-export function SkillCreateDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function SkillCreateDialog({
+  open,
+  starter,
+  onClose,
+}: {
+  open: boolean;
+  starter?: SkillStarter | null;
+  onClose: () => void;
+}) {
   const workspaceId = useSession((s) => s.workspaceId);
   const navigate = useNavigate();
   const qc = useQueryClient();
@@ -350,12 +359,12 @@ export function SkillCreateDialog({ open, onClose }: { open: boolean; onClose: (
 
   useEffect(() => {
     if (!open) return;
-    setName("");
-    setBody("");
+    setName(starter?.title ?? "");
+    setBody(starter?.body ?? "");
     setError(null);
     const timer = window.setTimeout(() => document.getElementById("skill-create-title")?.focus(), 20);
     return () => window.clearTimeout(timer);
-  }, [open]);
+  }, [open, starter]);
 
   const create = useMutation({
     mutationFn: async () => {

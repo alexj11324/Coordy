@@ -145,3 +145,44 @@ export function starterById(id: AutomationStarterId | null | undefined): Automat
   if (!id) return null;
   return AUTOMATION_STARTERS.find((item) => item.id === id) ?? null;
 }
+
+export type SkillStarterId = "coordy-graph";
+
+export type SkillStarter = {
+  id: SkillStarterId;
+  title: string;
+  summary: string;
+  body: string;
+};
+
+export const SKILL_STARTERS: SkillStarter[] = [
+  {
+    id: "coordy-graph",
+    title: "协调图",
+    summary: "按 Coordy 内核前缀声明目标、约束与依赖，供图模式投影。",
+    body: [
+      "在计划和评论中用内核可解析的前缀写结构化状态。绑定后下一次运行会注入本说明；不要写进 Codex / Claude Code 全局技能目录。",
+      "",
+      "适用：多智能体协作、跨任务依赖、改共享契约或仓库实体。",
+      "",
+      "开始前：先写当前目标与约束，再改代码。不要发明私有图语法。",
+      "",
+      "格式（每行一条）：",
+      "GOAL: <当前目标>",
+      "CONSTRAINT: <必须遵守的约束>",
+      "DECISION: <已做决定>",
+      "DEPENDS: <所依赖的任务、契约或仓库实体>",
+      "PLAN: <下一步计划>",
+      "ACCEPTANCE: <怎样算完成>",
+      "",
+      "改 API、契约或仓库实体后，用 DEPENDS 写明谁还依赖这份实体。下游会在图上显示为失效，需要重规划。",
+      "",
+      "目标冲突、无法声明依赖、或必须打破 CONSTRAINT 时，停下来询问成员。",
+    ].join("\n"),
+  },
+];
+
+export function skillStarterById(id: SkillStarterId | null | undefined): SkillStarter | null {
+  if (!id) return null;
+  return SKILL_STARTERS.find((item) => item.id === id) ?? null;
+}
