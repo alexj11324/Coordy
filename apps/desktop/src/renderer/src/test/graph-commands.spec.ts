@@ -8,14 +8,22 @@ import {
 } from "../features/graph/graph-commands";
 
 describe("graph inspector commands", () => {
-  it("maps a selected stale dependency edge to ReaffirmDependency with generation", () => {
+  it("maps a selected stale dependency edge to a generation-bound validation decision", () => {
     expect(
       reaffirmCommandForStaleEdge({
         edgeId: "dep:dep_1",
         stale: true,
         generation: 2,
       }),
-    ).toEqual({ type: "ReaffirmDependency", dependency_id: "dep_1", expected_generation: 2 });
+    ).toEqual({
+      type: "ValidationDecision",
+      dependency_id: "dep_1",
+      expected_generation: 2,
+      decision: "reaffirm",
+      evidence_refs: ["graph-inspector"],
+      rationale: "Member reaffirmed the stale dependency in Graph Inspector.",
+      validator_run_id: null,
+    });
   });
 
   it("does not reaffirm assigned, blocker, valid, or generation-less edges", () => {
@@ -25,11 +33,17 @@ describe("graph inspector commands", () => {
     expect(reaffirmCommandForStaleEdge({ edgeId: "dep:dep_1", stale: true })).toBeNull();
   });
 
-  it("removes only kernel dependency edges", () => {
-    expect(removeCommandForDependencyEdge("dep:dep_1")).toEqual({
-      type: "RemoveDependency",
+  it("removes only generation-bound kernel dependency edges through validation", () => {
+    expect(removeCommandForDependencyEdge("dep:dep_1", 2)).toEqual({
+      type: "ValidationDecision",
       dependency_id: "dep_1",
+      expected_generation: 2,
+      decision: "remove",
+      evidence_refs: ["graph-inspector"],
+      rationale: "Member removed the dependency in Graph Inspector.",
+      validator_run_id: null,
     });
+    expect(removeCommandForDependencyEdge("dep:dep_1")).toBeNull();
     expect(removeCommandForDependencyEdge("blocker:task_api:task_ui")).toBeNull();
     expect(dependencyIdFromGraphEdgeId("dep:")).toBeNull();
   });
