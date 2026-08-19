@@ -8,20 +8,22 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Textarea,
 } from "@coordy/ui";
 import type { DiscoveredAgentView } from "@coordy/protocol";
 import { Loader2 } from "lucide-react";
 import type { ReactNode } from "react";
 import {
+  applyDraftFastChange,
   applyDraftModelChange,
   applyDraftRuntimeChange,
-  applyDraftSpeedChange,
   applyDraftThinkingChange,
   DEFAULT_MODEL_VALUE,
+  harnessHasFastToggle,
+  isCodexFast,
   modelSelectValue,
   modelsForHarness,
-  speedForHarness,
   thinkingForHarness,
   type AgentAccess,
   type AgentDraft,
@@ -104,7 +106,7 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择启动运行时使用的 harness、模型，以及该 CLI 支持的思考强度与速度档。留空则使用 CLI 默认值。原生 CLI 通过对应命令行参数下发；ACP 家族仅下发模型。"
+        description="选择启动运行时使用的 harness、模型与思考强度。Codex 可开启 Fast。未指定的项使用 CLI 默认值。原生 CLI 通过对应命令行参数下发；ACP 家族仅下发模型。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
           <HarnessDropdown
@@ -122,7 +124,7 @@ export function AgentConfigurationPanel({
             disabled={!draft.harness}
             onModelChange={(model) => onChange(applyDraftModelChange(draft, model))}
             onThinkingChange={(thinking) => onChange(applyDraftThinkingChange(draft, thinking))}
-            onSpeedChange={(speed) => onChange(applyDraftSpeedChange(draft, speed))}
+            onFastChange={(on) => onChange(applyDraftFastChange(draft, on))}
           />
         </div>
       </SettingsBlock>
@@ -231,7 +233,7 @@ export function RuntimeCapabilityFields({
   disabled,
   onModelChange,
   onThinkingChange,
-  onSpeedChange,
+  onFastChange,
 }: {
   harness: string;
   model: string;
@@ -240,10 +242,9 @@ export function RuntimeCapabilityFields({
   disabled?: boolean;
   onModelChange: (model: string) => void;
   onThinkingChange: (thinking: string) => void;
-  onSpeedChange: (speed: string) => void;
+  onFastChange: (on: boolean) => void;
 }) {
   const thinkingOptions = thinkingForHarness(harness, model);
-  const speedOptions = speedForHarness(harness);
   return (
     <>
       <ModelDropdown harness={harness} value={model} disabled={disabled} onChange={onModelChange} />
@@ -257,15 +258,19 @@ export function RuntimeCapabilityFields({
           onChange={onThinkingChange}
         />
       ) : null}
-      {speedOptions.length > 0 ? (
-        <TokenDropdown
-          label="速度档"
-          value={speed}
-          presets={speedOptions}
-          emptyLabel="默认（CLI）"
-          disabled={disabled}
-          onChange={onSpeedChange}
-        />
+      {harnessHasFastToggle(harness) ? (
+        <div className="flex min-h-10 min-w-0 items-center justify-between gap-3">
+          <div className="min-w-0">
+            <Label htmlFor="agent-codex-fast">Fast</Label>
+            <p className="text-xs text-muted-foreground">开启后向 Codex 传入 service_tier=fast。</p>
+          </div>
+          <Switch
+            id="agent-codex-fast"
+            checked={isCodexFast(speed)}
+            disabled={disabled}
+            onCheckedChange={(on) => onFastChange(Boolean(on))}
+          />
+        </div>
       ) : null}
     </>
   );

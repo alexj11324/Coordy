@@ -5,9 +5,9 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   applyBuilderTurn,
+  applyDraftFastChange,
   applyDraftModelChange,
   applyDraftRuntimeChange,
-  applyDraftSpeedChange,
   applyDraftThinkingChange,
   BUILDER_STARTER_PROMPTS,
   classifyCreateAgentError,
@@ -104,7 +104,7 @@ export function AiCreateAgentPage() {
             </span>
             <h2 className="mt-5 text-xl font-semibold">选择新智能体的 harness 与执行参数</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              此对话在本机进行，不会调用 harness。Harness、模型、思考强度与速度档仅在创建完成后、启动运行时使用。
+              此对话在本机进行，不会调用 harness。Harness、模型、思考强度与 Codex Fast 仅在创建完成后、启动运行时使用。
             </p>
             <div className="mt-6 space-y-4">
               <HarnessDropdown
@@ -122,7 +122,7 @@ export function AiCreateAgentPage() {
                 disabled={!draft.harness}
                 onModelChange={(model) => setDraft((current) => applyDraftModelChange(current, model))}
                 onThinkingChange={(thinking) => setDraft((current) => applyDraftThinkingChange(current, thinking))}
-                onSpeedChange={(speed) => setDraft((current) => applyDraftSpeedChange(current, speed))}
+                onFastChange={(on) => setDraft((current) => applyDraftFastChange(current, on))}
               />
             </div>
             {error ? (

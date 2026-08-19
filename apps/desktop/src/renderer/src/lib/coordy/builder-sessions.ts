@@ -1,5 +1,5 @@
 import { formatAgentAvatar } from "./agent-avatar";
-import { EMPTY_AGENT_DRAFT, type AgentDraft, type BuilderMessage } from "./agent-draft";
+import { EMPTY_AGENT_DRAFT, normalizeCodexFast, type AgentDraft, type BuilderMessage } from "./agent-draft";
 
 export const BUILDER_SESSION_KEY_PREFIX = "coordy.agent-builder.";
 export const MANUAL_DRAFT_KEY_PREFIX = "coordy.agent-create.manual.";
@@ -141,7 +141,7 @@ function asAgentDraft(value: unknown): AgentDraft | null {
     harness,
     model: typeof row.model === "string" ? row.model : "",
     thinking: typeof row.thinking === "string" ? row.thinking : "",
-    speed: typeof row.speed === "string" ? row.speed : "",
+    speed: typeof row.speed === "string" ? normalizeCodexFast(row.speed) : "",
     avatar: storedAvatar || formatAgentAvatar([name, harness, instructions].filter(Boolean).join("|") || "agent"),
     access: row.access === "workspace" ? "workspace" : "owner",
   };

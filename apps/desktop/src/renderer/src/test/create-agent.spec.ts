@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBuilderTurn,
+  applyDraftFastChange,
   applyDraftModelChange,
   applyDraftRuntimeChange,
   classifyCreateAgentError,
+  CODEX_FAST_SPEED,
   DEFAULT_MODEL_VALUE,
   draftAgentFromGoal,
   EMPTY_AGENT_DRAFT,
   emptyAgentDraft,
+  harnessHasFastToggle,
   modelsForHarness,
   modelSelectValue,
-  speedForHarness,
   thinkingForHarness,
 } from "../lib/coordy/agent-draft";
 import {
@@ -50,7 +52,7 @@ describe("agent creation studio helpers", () => {
     expect(draft.instructions).toContain("只看 TypeScript");
   });
 
-    it("clears the model, thinking, and speed when the harness changes", () => {
+  it("clears the model, thinking, and speed when the harness changes", () => {
     const next = applyDraftRuntimeChange(
       { ...EMPTY_AGENT_DRAFT, harness: "claude-acp", model: "opus", thinking: "high", speed: "fast" },
       "codex-acp",
@@ -168,8 +170,15 @@ describe("agent creation studio helpers", () => {
     );
     expect(thinkingForHarness("codex", "gpt-5.3-codex").map((item) => item.id)).not.toContain("ultra");
     expect(thinkingForHarness("gemini", "gemini-2.5-pro")).toEqual([]);
-    expect(speedForHarness("codex").map((item) => item.id)).toEqual(["fast", "flex"]);
-    expect(speedForHarness("claude")).toEqual([]);
+    expect(harnessHasFastToggle("codex")).toBe(true);
+    expect(harnessHasFastToggle("codex-acp")).toBe(true);
+    expect(harnessHasFastToggle("claude")).toBe(false);
+  });
+
+  it("toggles Codex Fast on and off", () => {
+    const on = applyDraftFastChange({ ...EMPTY_AGENT_DRAFT, harness: "codex" }, true);
+    expect(on.speed).toBe(CODEX_FAST_SPEED);
+    expect(applyDraftFastChange(on, false).speed).toBe("");
   });
 
   it("matches leftover ACP-era harness ids onto the native catalog", () => {

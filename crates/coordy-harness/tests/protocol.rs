@@ -85,13 +85,13 @@ fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
         "review this",
         "gpt-5.6-sol",
         "high",
-        "flex",
+        "fast",
     );
     assert!(codex.windows(2).any(|w| w == ["--model", "gpt-5.6-sol"]));
     assert!(codex
         .windows(2)
         .any(|w| w == ["-c", "model_reasoning_effort=high"]));
-    assert!(codex.windows(2).any(|w| w == ["-c", "service_tier=flex"]));
+    assert!(codex.windows(2).any(|w| w == ["-c", "service_tier=fast"]));
     assert_eq!(codex.last().map(String::as_str), Some("review this"));
 
     let opencode = native_launch_args(

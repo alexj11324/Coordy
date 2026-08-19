@@ -72,14 +72,23 @@ export function applyDraftModelChange(draft: AgentDraft, model: string): AgentDr
   return { ...draft, model: next, thinking };
 }
 
+export const CODEX_FAST_SPEED = "fast";
+
 export function applyDraftThinkingChange(draft: AgentDraft, thinking: string): AgentDraft {
   const next = thinking === DEFAULT_MODEL_VALUE ? "" : thinking;
   return { ...draft, thinking: next };
 }
 
-export function applyDraftSpeedChange(draft: AgentDraft, speed: string): AgentDraft {
-  const next = speed === DEFAULT_MODEL_VALUE ? "" : speed;
-  return { ...draft, speed: next };
+export function applyDraftFastChange(draft: AgentDraft, on: boolean): AgentDraft {
+  return { ...draft, speed: on ? CODEX_FAST_SPEED : "" };
+}
+
+export function isCodexFast(speed: string): boolean {
+  return speed.trim() === CODEX_FAST_SPEED;
+}
+
+export function normalizeCodexFast(speed: string): string {
+  return isCodexFast(speed) ? CODEX_FAST_SPEED : "";
 }
 
 export function sanitizeThinking(harness: string, model: string, thinking: string): string {
@@ -126,11 +135,6 @@ const CODEX_THINKING: HarnessModelOption[] = [
   { id: "xhigh", label: "极高" },
   { id: "max", label: "最大" },
   { id: "ultra", label: "Ultra" },
-];
-
-const CODEX_SPEED: HarnessModelOption[] = [
-  { id: "fast", label: "Fast" },
-  { id: "flex", label: "Flex" },
 ];
 
 const COPILOT_MODELS: HarnessModelOption[] = [
@@ -205,8 +209,8 @@ export function thinkingForHarness(harness: string, model: string): HarnessModel
   }
 }
 
-export function speedForHarness(harness: string): HarnessModelOption[] {
-  return canonicalHarnessId(harness) === "codex" ? CODEX_SPEED : [];
+export function harnessHasFastToggle(harness: string): boolean {
+  return canonicalHarnessId(harness) === "codex";
 }
 
 function claudeThinkingForModel(model: string): HarnessModelOption[] {

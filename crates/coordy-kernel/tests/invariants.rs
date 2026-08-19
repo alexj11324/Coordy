@@ -1772,7 +1772,7 @@ fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
                 avatar: None,
                 model: Some("gpt-5.6-sol".into()),
                 thinking: Some("high".into()),
-                speed: Some("flex".into()),
+                speed: Some("fast".into()),
                 access: None,
                 access_member_ids: None,
                 concurrency_limit: None,
@@ -1826,5 +1826,5 @@ fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
     assert_eq!(spawns[0].0, "codex");
     assert_eq!(spawns[0].4, "gpt-5.6-sol");
     assert_eq!(spawns[0].5, "high");
-    assert_eq!(spawns[0].6, "flex");
+    assert_eq!(spawns[0].6, "fast");
 }

@@ -12,7 +12,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { formatAgentAvatar } from "../lib/coordy/agent-avatar";
 import { agentDisplayName, canonicalHarnessId, listableAgents, pickerRuntimes } from "../lib/coordy/labels";
-import { sanitizeThinking } from "../lib/coordy/agent-draft";
+import { CODEX_FAST_SPEED, normalizeCodexFast, sanitizeThinking } from "../lib/coordy/agent-draft";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { RuntimeCapabilityFields } from "./create-agent/agent-create-form";
@@ -59,7 +59,7 @@ export function AgentDetailPage() {
     setHarness(canonicalHarnessId(agent.harness));
     setModel(agent.model ?? "");
     setThinking(agent.thinking ?? "");
-    setSpeed(agent.speed ?? "");
+    setSpeed(normalizeCodexFast(agent.speed ?? ""));
     setAvatar(agent.avatar ?? "");
   }, [agent]);
 
@@ -174,7 +174,7 @@ export function AgentDetailPage() {
               setThinking((current) => sanitizeThinking(harness || agent.harness, next, current));
             }}
             onThinkingChange={setThinking}
-            onSpeedChange={setSpeed}
+            onFastChange={(on) => setSpeed(on ? CODEX_FAST_SPEED : "")}
           />
         </div>
         <div className="flex flex-wrap gap-2">
