@@ -1,12 +1,14 @@
 use coordy_advisor::DeterministicAdvisor;
 use coordy_kernel::{
-    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
+    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, NoopPorts,
+    RecordingPorts,
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
     HarnessEvent, NodeKind, Query, RunRole, RunSource, ValidationChoice, View,
     STALE_DEPENDENCY_REASON,
 };
+use std::sync::Arc;
 
 fn daemon() -> Actor {
     Actor::Daemon
@@ -1493,6 +1495,83 @@ fn invalidate_only_consumes_from_changed_source() {
 }
 
 #[test]
+fn every_source_change_advances_a_stale_dependency_generation() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "api");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+
+    for patch in ["first change", "second change"] {
+        h.kernel
+            .submit_sync(cmd(
+                alice_actor(&h),
+                Command::ApplyPatch {
+                    task_id: producer.clone(),
+                    patch: patch.into(),
+                },
+            ))
+            .unwrap();
+    }
+
+    let dep = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dependency");
+    assert_eq!(dep.state, GraphEdgeState::Stale);
+    assert_eq!(dep.generation, 3);
+    assert_eq!(dep.current_version, Some(2));
+}
+
+#[test]
+fn legacy_dependency_endpoint_rejects_archived_agent() {
+    let h = setup();
+    let consumer = issue_title(&h, "ui");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ArchiveAgent {
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &consumer, &h.a1, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("不存在"));
+}
+
+#[test]
+fn public_dependency_cannot_claim_an_unrelated_same_workspace_run() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let unrelated = issue_title(&h, "unrelated");
+    assign_a1(&h, &unrelated);
+    let unrelated_run = start_fixture(&h, &unrelated, vec![]);
+    let mut command = declare_cmd(&h.workspace_id, &consumer, &producer, "repo");
+    let Command::DeclareDependency { origin_run_id, .. } = &mut command else {
+        unreachable!();
+    };
+    *origin_run_id = Some(unrelated_run);
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(alice_actor(&h), command))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("origin run"));
+    assert!(alice_deps(&h).is_empty());
+}
+
+#[test]
 fn done_consumer_stays_done_when_materialization_goes_stale() {
     let h = setup();
     let producer = issue_title(&h, "api");
@@ -1768,6 +1847,36 @@ fn graph_scheduler_opens_downstream_once_after_upstream_session() {
             .count(),
         1
     );
+}
+
+#[test]
+fn graph_scheduler_does_not_leave_running_run_after_spawn_failure() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    let failing = Harness {
+        kernel: Kernel::with_world(
+            h.kernel.export_world(),
+            Arc::new(NoopPorts),
+            Arc::new(DeterministicAdvisor),
+        ),
+        workspace_id: h.workspace_id.clone(),
+        alice: h.alice.clone(),
+        bob: h.bob.clone(),
+        a1: h.a1.clone(),
+        a2: h.a2.clone(),
+    };
+
+    assign_a1(&failing, &producer);
+    let first = graph_execute_runs(&failing);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].status, "failed");
+
+    assign_a1(&failing, &producer);
+    let second = graph_execute_runs(&failing);
+    assert_eq!(second.len(), 2, "a failed spawn must remain retryable");
+    assert!(second.iter().all(|run| run.status == "failed"));
 }
 
 #[test]

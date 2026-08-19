@@ -255,13 +255,10 @@ pub fn invalidate_dependencies(
         if dep.kind != GraphEdgeKind::Consumes {
             continue;
         }
-        if dep.entity != changed_entity {
-            continue;
-        }
         if dep.source.id != changer_task {
             continue;
         }
-        if !dep.state.is_active() && dep.state != GraphEdgeState::PendingValidation {
+        if dep.state == GraphEdgeState::Superseded {
             continue;
         }
         dep.state = GraphEdgeState::Stale;

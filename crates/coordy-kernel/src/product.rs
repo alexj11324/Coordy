@@ -2308,6 +2308,9 @@ pub(crate) fn resolve_node_in_workspace(
         return Ok(NodeRef::task(id));
     }
     if let Some(agent) = world.agent(id) {
+        if agent.archived {
+            return Err(CoordyError::invalid("依赖端点不存在"));
+        }
         if agent.workspace_id != workspace_id {
             return Err(CoordyError::invalid("依赖端点不能跨工作区"));
         }
@@ -2483,9 +2486,13 @@ pub(crate) fn record_dependency_edge(
         json!({
             "source": draft.source.id,
             "target": draft.target.id,
+            "source_kind": draft.source.kind,
+            "target_kind": draft.target.kind,
             "kind": draft.kind,
             "entity": entity,
             "origin_run_id": draft.origin_run_id,
+            "observed_version": version,
+            "current_version": version,
         }),
     );
     emit_changed(world, workspace_id.to_string());
@@ -2511,6 +2518,11 @@ pub(crate) fn declare_dependency(
         &request.from_id,
         &request.to_id,
     )?;
+    if request.origin_run_id.is_some() {
+        return Err(CoordyError::invalid(
+            "origin run is reserved for internally observed dependencies",
+        ));
+    }
     record_dependency_edge(
         world,
         actor,
