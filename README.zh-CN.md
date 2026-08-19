@@ -64,24 +64,47 @@ cargo run -p coordy -- acp-stub
 
 ## 智能体接入
 
-Coordy 内置了 6 个原生 CLI 适配器。它们直接使用各工具自己的无头接口，并提供对应的启动参数、权限控制和事件解析。
+Coordy 目前支持 38 个编码智能体：6 个使用原生 CLI 适配器，另外 32 个通过 ACP 接入。原生适配器直接使用各工具自己的无头接口，并提供对应的启动参数、权限控制和事件解析。
 
 ### 内置原生适配器
 
-| `PATH` 中的 CLI          | 接入方式                       |
-| ------------------------ | ------------------------------ |
-| `claude` / `claude-code` | Claude stream JSON             |
-| `codex`                  | Codex `exec --json`            |
-| `gemini`                 | Gemini CLI prompt mode         |
-| `copilot`                | GitHub Copilot CLI prompt mode |
-| `opencode`               | OpenCode `run`                 |
-| `cursor-agent` / `agent` | Cursor print / stream mode     |
+<table>
+  <tr>
+    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/claude-acp.svg" width="36" alt="Claude Code 图标"><br><strong>Claude Code</strong><br><sub><code>claude</code> · stream JSON</sub></td>
+    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/codex-acp.svg" width="36" alt="Codex 图标"><br><strong>Codex</strong><br><sub><code>codex exec --json</code></sub></td>
+    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/gemini.svg" width="36" alt="Gemini CLI 图标"><br><strong>Gemini CLI</strong><br><sub><code>gemini -p</code></sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/github-copilot-cli.svg" width="36" alt="GitHub Copilot 图标"><br><strong>GitHub Copilot</strong><br><sub><code>copilot</code> · JSON</sub></td>
+    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/opencode.svg" width="36" alt="OpenCode 图标"><br><strong>OpenCode</strong><br><sub><code>opencode run</code></sub></td>
+    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/cursor.svg" width="36" alt="Cursor 图标"><br><strong>Cursor</strong><br><sub><code>cursor-agent</code> · stream JSON</sub></td>
+  </tr>
+</table>
 
 ### ACP 智能体
 
-上面的表格不是完整目录。Coordy 还会读取实时的 [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry)，并可导入提供 `npx`、`uvx` 或平台二进制启动命令的智能体。Registry 智能体通过 ACP 运行，并与内置适配器一起显示在 Harness 目录中。
+Coordy 会读取实时的 [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry)，并导入提供 `npx`、`uvx` 或平台二进制启动命令的智能体。当前 Registry 除上面的 6 个智能体外，还包含以下 32 个 ACP 接入：
 
-Registry 会持续更新，因此 README 不硬编码完整智能体名单。运行其中的智能体可能需要对应的包运行时、账号或服务商凭据；模型访问可以在设置中使用你自己的服务商密钥进行配置。
+|                                                                                                                          | 智能体      |                                                                                                                            | 智能体         |
+| :----------------------------------------------------------------------------------------------------------------------: | ----------- | :------------------------------------------------------------------------------------------------------------------------: | -------------- |
+| <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/agoragentic-acp.svg" width="24" alt="Agoragentic 图标"> | Agoragentic |          <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/amp-acp.svg" width="24" alt="Amp 图标">          | Amp            |
+|      <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/auggie.svg" width="24" alt="Auggie CLI 图标">      | Auggie CLI  |    <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/autohand.svg" width="24" alt="Autohand Code 图标">     | Autohand Code  |
+|         <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/cline.svg" width="24" alt="Cline 图标">         | Cline       | <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/codebuddy-code.svg" width="24" alt="Codebuddy Code 图标"> | Codebuddy Code |
+|   <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/cortex-code.svg" width="24" alt="Cortex Code 图标">   | Cortex Code |   <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/corust-agent.svg" width="24" alt="Corust Agent 图标">   | Corust Agent   |
+|      <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/crow-cli.svg" width="24" alt="crow-cli 图标">      | crow-cli    |     <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/deepagents.svg" width="24" alt="DeepAgents 图标">     | DeepAgents     |
+|         <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/devin.svg" width="24" alt="Devin 图标">         | Devin       |        <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/dimcode.svg" width="24" alt="DimCode 图标">        | DimCode        |
+|         <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/dirac.svg" width="24" alt="Dirac 图标">         | Dirac       |  <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/factory-droid.svg" width="24" alt="Factory Droid 图标">  | Factory Droid  |
+|    <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/fast-agent.svg" width="24" alt="fast-agent 图标">    | fast-agent  |    <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/glm-acp-agent.svg" width="24" alt="GLM Agent 图标">    | GLM Agent      |
+|         <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/goose.svg" width="24" alt="goose 图标">         | goose       |     <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/grok-build.svg" width="24" alt="Grok Build 图标">     | Grok Build     |
+|          <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/harn.svg" width="24" alt="Harn 图标">          | Harn        |          <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/junie.svg" width="24" alt="Junie 图标">          | Junie          |
+|          <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg" width="24" alt="Kilo 图标">          | Kilo        |         <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/kimi.svg" width="24" alt="Kimi CLI 图标">         | Kimi CLI       |
+|   <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/minion-code.svg" width="24" alt="Minion Code 图标">   | Minion Code |   <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/mistral-vibe.svg" width="24" alt="Mistral Vibe 图标">   | Mistral Vibe   |
+|          <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/nova.svg" width="24" alt="Nova 图标">          | Nova        |         <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/pi-acp.svg" width="24" alt="pi ACP 图标">         | pi ACP         |
+|      <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/poolside.svg" width="24" alt="Poolside 图标">      | Poolside    |        <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/qoder.svg" width="24" alt="Qoder CLI 图标">        | Qoder CLI      |
+|     <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/qwen-code.svg" width="24" alt="Qwen Code 图标">     | Qwen Code   |       <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/sigit.svg" width="24" alt="siGit Code 图标">        | siGit Code     |
+|       <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/stakpak.svg" width="24" alt="Stakpak 图标">       | Stakpak     |        <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/vtcode.svg" width="24" alt="VT Code 图标">         | VT Code        |
+
+Registry 智能体会与原生适配器一起显示在 Harness 目录中。运行其中的智能体可能需要对应的包运行时、账号或服务商凭据；模型访问可以在设置中使用你自己的服务商密钥进行配置。
 
 ## 本机优先
 
