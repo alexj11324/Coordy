@@ -96,6 +96,26 @@ fn update_agent_fields_default_when_omitted() {
 }
 
 #[test]
+fn update_workspace_conductor_defaults_when_omitted() {
+    let cmd: coordy_protocol::Command = serde_json::from_value(json!({
+        "type": "UpdateWorkspace",
+        "workspace_id": "ws"
+    }))
+    .unwrap();
+    match cmd {
+        coordy_protocol::Command::UpdateWorkspace {
+            conductor_agent_id,
+            name,
+            ..
+        } => {
+            assert!(conductor_agent_id.is_none());
+            assert!(name.is_none());
+        }
+        other => panic!("expected UpdateWorkspace, got {other:?}"),
+    }
+}
+
+#[test]
 fn run_source_acp_keeps_pascal_variant() {
     let value = serde_json::to_value(coordy_protocol::RunSource::Acp {
         prompt: "hello".into(),

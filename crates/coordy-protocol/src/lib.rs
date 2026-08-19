@@ -143,6 +143,8 @@ pub enum Command {
         slug: Option<String>,
         #[serde(default)]
         issue_prefix: Option<String>,
+        #[serde(default)]
+        conductor_agent_id: Option<String>,
     },
     DeleteWorkspace {
         workspace_id: String,
@@ -842,6 +844,8 @@ pub struct WorkspaceView {
     pub issue_prefix: String,
     #[serde(default)]
     pub next_issue_number: u64,
+    #[serde(default)]
+    pub conductor_agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

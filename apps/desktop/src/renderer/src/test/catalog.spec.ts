@@ -100,6 +100,9 @@ describe("skill starters", () => {
     expect(starter?.body).toContain("DEPENDS: <id 或 COOR-n> [entity]");
     expect(starter?.body).toContain("PLAN:");
     expect(starter?.body).toContain("ACCEPTANCE:");
+    expect(starter?.body).toContain("REAFFIRM: <dependency_id>");
+    expect(starter?.body).toContain("HOLD: <dependency_id>");
+    expect(starter?.body).toContain("绿灯且已指派");
     expect(starter?.body).toContain("失效后须带当前 generation 确认");
     expect(starter?.body).toContain("source→target");
     expect(starter?.body.includes("两边指派")).toBe(false);

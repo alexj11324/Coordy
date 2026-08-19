@@ -1,6 +1,6 @@
 use coordy_advisor::DeterministicAdvisor;
 use coordy_kernel::{
-    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
+    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, NoopPorts, RecordingPorts,
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GithubPullRequestItem, GithubSync,
@@ -30,7 +30,10 @@ struct Harness {
 }
 
 fn setup() -> Harness {
-    let kernel = Kernel::default_in_process();
+    setup_kernel(Kernel::default_in_process())
+}
+
+fn setup_kernel(kernel: Kernel) -> Harness {
     let ws = kernel
         .submit_sync(cmd(
             daemon(),
@@ -1088,6 +1091,56 @@ fn declare_dep(h: &Harness, from_id: &str, to_id: &str, entity: &str) -> String 
         .to_string()
 }
 
+fn set_conductor(h: &Harness, agent_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::UpdateWorkspace {
+                workspace_id: h.workspace_id.clone(),
+                name: None,
+                icon: None,
+                description: None,
+                context: None,
+                slug: None,
+                issue_prefix: None,
+                conductor_agent_id: Some(agent_id.into()),
+            },
+        ))
+        .unwrap();
+}
+
+fn ingest_assistant(h: &Harness, run_id: &str, content: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: run_id.into(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: content.into(),
+                },
+            },
+        ))
+        .unwrap();
+}
+
+fn ingest_session_ok(h: &Harness, run_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: run_id.into(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: String::new(),
+                    output: "ok".into(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+}
+
 fn reaffirm_dep(h: &Harness, dependency_id: &str) {
     let generation = alice_deps(h)
         .into_iter()
@@ -2113,7 +2166,6 @@ fn start_run_acp_spawns_against_bound_repo() {
     assert_eq!(spawns[0].4, "");
     assert_eq!(spawns[0].5, "");
     assert_eq!(spawns[0].6, "");
-    assert_eq!(spawns[0].8, "auto");
 }
 
 #[test]
@@ -2453,20 +2505,19 @@ fn cancel_run_stops_active_round_and_ignores_later_session_tool() {
         ports.cancelled.lock().unwrap().as_slice(),
         &[run_id.clone()]
     );
-    kernel
-        .submit_sync(cmd(
-            Actor::Daemon,
-            Command::IngestHarnessEvent {
-                run_id: run_id.clone(),
-                event: HarnessEvent::Tool {
-                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
-                    input: "claude-acp".into(),
-                    output: "end_turn".into(),
-                    exit_code: Some(0),
-                },
+    let late = kernel.submit_sync(cmd(
+        Actor::Daemon,
+        Command::IngestHarnessEvent {
+            run_id: run_id.clone(),
+            event: HarnessEvent::Tool {
+                name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                input: "claude-acp".into(),
+                output: "end_turn".into(),
+                exit_code: Some(0),
             },
-        ))
-        .unwrap();
+        },
+    ));
+    assert_eq!(late.unwrap_err().code, "invalid");
     let View::Run { run, events } = kernel
         .view_sync(q(
             Actor::Principal { id: principal_id },
@@ -2593,8 +2644,8 @@ fn update_agent_stores_description_and_instructions() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
-                tool_access: None,
                 mcp_servers: None,
+                tool_access: None,
             },
         ))
         .unwrap();
@@ -2615,7 +2666,6 @@ fn update_agent_stores_description_and_instructions() {
     assert_eq!(agent.description, "审查前端 Pull Request");
     assert_eq!(agent.instructions, "只在评论里写结论，不要改代码。");
     assert_eq!(agent.harness, "claude-acp");
-    assert_eq!(agent.tool_access, "auto");
 }
 
 #[test]
@@ -2690,8 +2740,8 @@ fn start_run_prepends_agent_instructions() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
-                tool_access: None,
                 mcp_servers: None,
+                tool_access: None,
             },
         ))
         .unwrap();
@@ -2812,8 +2862,8 @@ fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
-                tool_access: None,
                 mcp_servers: None,
+                tool_access: None,
             },
         ))
         .unwrap();
@@ -2978,8 +3028,8 @@ fn update_agent_cli_and_limit(
                 access_member_ids: None,
                 concurrency_limit,
                 cli_args,
-                tool_access: None,
                 mcp_servers: None,
+                tool_access: None,
             },
         ))
         .unwrap();
@@ -4065,6 +4115,1255 @@ fn finishing_one_of_two_blockers_does_not_start() {
     assert_eq!(ports.spawns.lock().unwrap().len(), 1);
 }
 
+#[test]
+fn apply_patch_invalidates_only_edges_pointing_at_changer() {
+    let h = setup();
+    let producer_a = issue_title(&h, "api-a");
+    let producer_b = issue_title(&h, "api-b");
+    let consumer_a = issue_title(&h, "ui-a");
+    let consumer_b = issue_title(&h, "ui-b");
+    assign_a1(&h, &producer_a);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer_a);
+    let dep_a = declare_dep(&h, &consumer_a, &producer_a, "repo");
+    let dep_b = declare_dep(&h, &consumer_b, &producer_b, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer_a,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let deps = alice_deps(&h);
+    assert!(
+        deps.iter().any(|dep| dep.id == dep_a && !dep.valid),
+        "edge pointing at the patched producer must go stale"
+    );
+    assert!(
+        deps.iter().any(|dep| dep.id == dep_b && dep.valid),
+        "unrelated repo edge must stay valid"
+    );
+}
+
+#[test]
+fn assign_without_conductor_does_not_auto_start() {
+    let h = setup();
+    let task = issue_title(&h, "solo");
+    assign_a1(&h, &task);
+    assert!(
+        alice_runs(&h).is_empty(),
+        "no conductor means assign must not StartRun"
+    );
+}
+
+#[test]
+fn conductor_auto_starts_assigned_green_task() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let ws = h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::Workspace {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    match ws {
+        View::Workspace(view) => {
+            assert_eq!(view.conductor_agent_id.as_deref(), Some(h.a2.as_str()));
+        }
+        other => panic!("expected workspace, got {other:?}"),
+    }
+    let task = issue_title(&h, "ready");
+    assign_a1(&h, &task);
+    let runs = alice_runs(&h);
+    assert!(
+        runs.iter()
+            .any(|run| run.task_id == task && run.agent_id == h.a1 && run.trigger == "graph"),
+        "conductor mode must StartRun the assignee with trigger graph"
+    );
+}
+
+#[test]
+fn failed_automatic_spawn_does_not_leave_a_running_run() {
+    let kernel = Kernel::new(
+        std::sync::Arc::new(NoopPorts),
+        std::sync::Arc::new(DeterministicAdvisor),
+    );
+    let h = setup_kernel(kernel);
+    set_conductor(&h, &h.a2);
+    let task = issue_title(&h, "spawn failure");
+
+    assign_a1(&h, &task);
+
+    let run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == task && run.trigger == "graph")
+        .expect("failed graph dispatch must remain auditable");
+    assert_eq!(run.status, "failed");
+    assert_eq!(run.queue_status, "failed");
+}
+
+#[test]
+fn conductor_starts_waiting_task_when_blocker_finishes() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let blocker = issue_title(&h, "design");
+    let waiting = issue_title(&h, "implement");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    assign_a1(&h, &blocker);
+    assign_a1(&h, &waiting);
+    assert!(
+        !alice_runs(&h)
+            .iter()
+            .any(|run| run.task_id == waiting && run.trigger == "graph"),
+        "blocked waiting task must not auto-start"
+    );
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::SetTaskStatus {
+                task_id: blocker,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let runs = alice_runs(&h);
+    assert!(
+        runs.iter()
+            .any(|run| run.task_id == waiting && run.trigger == "graph" && run.agent_id == h.a1),
+        "conductor mode starts the waiting assignee with graph, not blocker"
+    );
+    assert!(
+        !runs
+            .iter()
+            .any(|run| run.task_id == waiting && run.trigger == "blocker"),
+        "conductor mode must not also open a blocker-triggered run"
+    );
+}
+
+#[test]
+fn conductor_reviews_stale_edge_then_reaffirm_starts_executor() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let executor_before = alice_runs(&h)
+        .into_iter()
+        .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+        .count();
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let after_patch = alice_runs(&h);
+    assert!(
+        after_patch.iter().any(|run| {
+            run.task_id == consumer && run.agent_id == h.a2 && run.trigger == "graph_review"
+        }),
+        "stale downstream must StartRun the conductor"
+    );
+    assert_eq!(
+        after_patch
+            .iter()
+            .filter(|run| run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.status == "running")
+            .count(),
+        0,
+        "executor must not auto-start while the edge is stale"
+    );
+    let conductor_run = after_patch
+        .iter()
+        .find(|run| {
+            run.task_id == consumer && run.agent_id == h.a2 && run.trigger == "graph_review"
+        })
+        .expect("conductor run")
+        .id
+        .clone();
+    ingest_assistant(&h, &conductor_run, &format!("REAFFIRM: {dep_id}"));
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && dep.valid));
+    let after_reaffirm = alice_runs(&h);
+    assert!(
+        after_reaffirm.iter().any(|run| {
+            run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.trigger == "graph"
+                && run.status == "running"
+        }),
+        "REAFFIRM must start the consumer assignee with a replan graph run"
+    );
+    assert!(
+        after_reaffirm
+            .iter()
+            .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+            .count()
+            > executor_before
+    );
+    let executor_run = after_reaffirm
+        .iter()
+        .find(|run| {
+            run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.trigger == "graph"
+                && run.status == "running"
+        })
+        .expect("executor run");
+    let View::Run { events, .. } = h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::Run {
+                run_id: executor_run.id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("run detail");
+    };
+    assert!(
+        events
+            .iter()
+            .any(|event| event.payload.contains("重规划") && event.payload.contains("user:")),
+        "executor prompt must be a replan, not the previous loop"
+    );
+}
+
+#[test]
+fn executor_agent_cannot_reaffirm_but_principal_and_conductor_can() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dependency")
+        .generation;
+    let denied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a1.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::ReaffirmDependency {
+                dependency_id: dep_id.clone(),
+                expected_generation: generation,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(denied.code, "denied");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a2.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::ReaffirmDependency {
+                dependency_id: dep_id.clone(),
+                expected_generation: generation,
+            },
+        ))
+        .unwrap();
+    let producer_b = issue_title(&h, "other-api");
+    assign_a1(&h, &producer_b);
+    create_worktree(&h, &producer_b);
+    let dep_b = declare_dep(&h, &consumer, &producer_b, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer_b,
+                patch: "another change".into(),
+            },
+        ))
+        .unwrap();
+    reaffirm_dep(&h, &dep_b);
+}
+
+#[test]
+fn conductor_session_complete_starts_green_successor() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.trigger == "graph")
+        .expect("producer run")
+        .id;
+    let consumer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph")
+        .expect("consumer run")
+        .id;
+    ingest_session_ok(&h, &consumer_run);
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer && run.status == "running")
+            .count(),
+        0
+    );
+    ingest_session_ok(&h, &producer_run);
+    assert!(
+        alice_runs(&h).iter().any(|run| {
+            run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.trigger == "graph"
+                && run.status == "running"
+                && run.id != consumer_run
+        }),
+        "successful producer session must start a still-green successor"
+    );
+}
+
+#[test]
+fn executor_graph_run_cannot_reaffirm_by_prefix() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let executor_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.agent_id == h.a1)
+        .map(|run| run.id);
+    if let Some(run_id) = executor_run {
+        let _ = h.kernel.submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id,
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: format!("REAFFIRM: {dep_id}"),
+                },
+            },
+        ));
+    }
+    assert!(
+        alice_deps(&h)
+            .iter()
+            .any(|dep| dep.id == dep_id && !dep.valid),
+        "only the conductor graph run may ingest REAFFIRM"
+    );
+}
+
+#[test]
+fn public_start_run_cannot_spoof_an_internal_graph_review() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    set_conductor(&h, &h.a2);
+    let legitimate_reviews = alice_runs(&h)
+        .iter()
+        .filter(|run| run.task_id == consumer && run.trigger == "graph_review")
+        .count();
+    let spoofed_source = || RunSource::Fixture {
+        events: vec![HarnessEvent::Message {
+            role: "assistant".into(),
+            content: format!("REAFFIRM: {dep_id}"),
+        }],
+    };
+
+    for actor in [
+        alice_actor(&h),
+        Actor::Agent {
+            id: h.a2.clone(),
+            principal_id: h.alice.clone(),
+        },
+    ] {
+        let error = h
+            .kernel
+            .submit_sync(cmd(
+                actor,
+                Command::StartRun {
+                    task_id: consumer.clone(),
+                    source: spoofed_source(),
+                    agent_id: Some(h.a2.clone()),
+                    chat_id: None,
+                    trigger: "graph_review".into(),
+                },
+            ))
+            .unwrap_err();
+        assert_eq!(error.code, "invalid");
+    }
+
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer && run.trigger == "graph_review")
+            .count(),
+        legitimate_reviews
+    );
+}
+
+#[test]
+fn only_assistant_messages_from_the_review_run_can_reaffirm() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let review_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph_review")
+        .expect("review run")
+        .id;
+
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: review_run.clone(),
+                event: HarnessEvent::Message {
+                    role: "system".into(),
+                    content: format!("REAFFIRM: {dep_id}"),
+                },
+            },
+        ))
+        .unwrap();
+
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CancelRun {
+                run_id: review_run.clone(),
+            },
+        ))
+        .unwrap();
+    let late = h.kernel.submit_sync(cmd(
+        daemon(),
+        Command::IngestHarnessEvent {
+            run_id: review_run,
+            event: HarnessEvent::Message {
+                role: "assistant".into(),
+                content: format!("REAFFIRM: {dep_id}"),
+            },
+        },
+    ));
+    assert_eq!(late.unwrap_err().code, "invalid");
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+}
+
+#[test]
+fn conductor_review_cannot_reaffirm_a_newer_dependency_generation() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer.clone(),
+                patch: "first change".into(),
+            },
+        ))
+        .unwrap();
+    let old_review = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph_review")
+        .expect("first-generation review run");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "second change".into(),
+            },
+        ))
+        .unwrap();
+    let new_review = alice_runs(&h)
+        .into_iter()
+        .find(|run| {
+            run.task_id == consumer
+                && run.trigger == "graph_review"
+                && run.id != old_review.id
+                && run.status == "running"
+        })
+        .expect("current-generation review run");
+    assert_eq!(
+        alice_deps(&h)
+            .into_iter()
+            .find(|dep| dep.id == dep_id)
+            .expect("dependency")
+            .generation,
+        3
+    );
+    let executor_runs_before = alice_runs(&h)
+        .iter()
+        .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+        .count();
+
+    let late = h.kernel.submit_sync(cmd(
+        daemon(),
+        Command::IngestHarnessEvent {
+            run_id: old_review.id,
+            event: HarnessEvent::Message {
+                role: "assistant".into(),
+                content: format!("REAFFIRM: {dep_id}"),
+            },
+        },
+    ));
+    assert_eq!(late.unwrap_err().code, "invalid");
+
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+            .count(),
+        executor_runs_before
+    );
+
+    ingest_assistant(&h, &new_review.id, &format!("REAFFIRM: {dep_id}"));
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && dep.valid));
+    assert!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+            .count()
+            > executor_runs_before
+    );
+}
+
+#[test]
+fn missing_session_exit_code_does_not_start_a_successor() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.trigger == "graph")
+        .expect("producer run")
+        .id;
+    let consumer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph")
+        .expect("consumer run")
+        .id;
+    ingest_session_ok(&h, &consumer_run);
+
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: producer_run,
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: String::new(),
+                    output: "unknown".into(),
+                    exit_code: None,
+                },
+            },
+        ))
+        .unwrap();
+
+    assert!(!alice_runs(&h).iter().any(|run| {
+        run.task_id == consumer && run.status == "running" && run.id != consumer_run
+    }));
+}
+
+#[test]
+fn a_conductor_execution_run_is_not_a_review_run() {
+    let h = setup();
+    set_conductor(&h, &h.a1);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let executor_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph")
+        .expect("executor run")
+        .id;
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+
+    let late = h.kernel.submit_sync(cmd(
+        daemon(),
+        Command::IngestHarnessEvent {
+            run_id: executor_run,
+            event: HarnessEvent::Message {
+                role: "assistant".into(),
+                content: format!("REAFFIRM: {dep_id}"),
+            },
+        },
+    ));
+    assert_eq!(late.unwrap_err().code, "invalid");
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+    assert!(alice_runs(&h).iter().any(|run| {
+        run.task_id == consumer && run.agent_id == h.a1 && run.trigger == "graph_review"
+    }));
+}
+
+#[test]
+fn archiving_the_conductor_clears_the_workspace_setting() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ArchiveAgent {
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+
+    let View::Workspace(workspace) = h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::Workspace {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("workspace");
+    };
+    assert!(workspace.conductor_agent_id.is_none());
+}
+
+#[test]
+fn setting_or_changing_conductor_reconciles_ready_and_stale_tasks() {
+    let h = setup();
+    let ready = issue_title(&h, "ready before conductor");
+    assign_a1(&h, &ready);
+    assert!(alice_runs(&h).is_empty());
+
+    set_conductor(&h, &h.a2);
+    assert!(alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == ready && run.trigger == "graph"));
+
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::UpdateWorkspace {
+                workspace_id: h.workspace_id.clone(),
+                name: None,
+                icon: None,
+                description: None,
+                context: None,
+                slug: None,
+                issue_prefix: None,
+                conductor_agent_id: Some(String::new()),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "change".into(),
+            },
+        ))
+        .unwrap();
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+
+    set_conductor(&h, &h.a2);
+    let first_review = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph_review")
+        .expect("setting conductor starts stale review");
+    set_conductor(&h, &h.a1);
+    assert!(alice_runs(&h).iter().any(|run| {
+        run.task_id == consumer
+            && run.trigger == "graph_review"
+            && run.agent_id == h.a1
+            && run.id != first_review.id
+    }));
+}
+
+#[test]
+fn late_or_duplicate_terminal_events_do_not_dispatch_successors() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.trigger == "graph")
+        .expect("producer run")
+        .id;
+    let initial_consumer = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph")
+        .expect("consumer run")
+        .id;
+    ingest_session_ok(&h, &initial_consumer);
+    ingest_session_ok(&h, &producer_run);
+    let successor = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.status == "running")
+        .expect("successor")
+        .id;
+    ingest_session_ok(&h, &successor);
+    let consumer_count = alice_runs(&h)
+        .iter()
+        .filter(|run| run.task_id == consumer)
+        .count();
+
+    let duplicate = h.kernel.submit_sync(cmd(
+        daemon(),
+        Command::IngestHarnessEvent {
+            run_id: producer_run,
+            event: HarnessEvent::Tool {
+                name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                input: String::new(),
+                output: "duplicate".into(),
+                exit_code: Some(0),
+            },
+        },
+    ));
+    assert_eq!(duplicate.unwrap_err().code, "invalid");
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer)
+            .count(),
+        consumer_count
+    );
+
+    let cancelled_producer = issue_title(&h, "cancelled producer");
+    let waiting = issue_title(&h, "must stay waiting");
+    declare_dep(&h, &waiting, &cancelled_producer, "repo");
+    assign_a1(&h, &cancelled_producer);
+    let cancelled_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == cancelled_producer && run.status == "running")
+        .expect("cancelled producer run")
+        .id;
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CancelRun {
+                run_id: cancelled_run.clone(),
+            },
+        ))
+        .unwrap();
+    let late = h.kernel.submit_sync(cmd(
+        daemon(),
+        Command::IngestHarnessEvent {
+            run_id: cancelled_run,
+            event: HarnessEvent::Tool {
+                name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                input: String::new(),
+                output: "late".into(),
+                exit_code: Some(0),
+            },
+        },
+    ));
+    assert_eq!(late.unwrap_err().code, "invalid");
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == waiting && run.status == "running"));
+}
+
+#[test]
+fn graph_reconcile_retries_capacity_blocked_sibling_and_review() {
+    let h = setup();
+    update_agent_cli_and_limit(&h.kernel, &h.alice, &h.a1, None, Some(1));
+    set_conductor(&h, &h.a2);
+    let first = issue_title(&h, "first");
+    let sibling = issue_title(&h, "sibling");
+    assign_a1(&h, &first);
+    assign_a1(&h, &sibling);
+    let first_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == first && run.status == "running")
+        .expect("first run")
+        .id;
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == sibling && run.status == "running"));
+    ingest_session_ok(&h, &first_run);
+    assert!(alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == sibling && run.status == "running"));
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == first && run.trigger == "graph")
+            .count(),
+        1
+    );
+
+    update_agent_cli_and_limit(&h.kernel, &h.alice, &h.a2, None, Some(1));
+    let occupying = issue_title(&h, "conductor occupied");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: occupying.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let occupying_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == occupying && run.status == "running")
+        .expect("occupying run")
+        .id;
+    let producer = issue_title(&h, "producer");
+    let consumer = issue_title(&h, "stale consumer");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "change".into(),
+            },
+        ))
+        .unwrap();
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph_review"));
+    ingest_session_ok(&h, &occupying_run);
+    assert!(alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph_review"));
+}
+
+#[test]
+fn conductor_blocker_release_reconciles_stale_squad_task() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let squad_id = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CreateSquad {
+                workspace_id: h.workspace_id.clone(),
+                name: "team".into(),
+                leader_agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let blocker = issue_title(&h, "blocker");
+    let producer = issue_title(&h, "producer");
+    let consumer = issue_title(&h, "squad consumer");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: consumer.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignIssue {
+                task_id: consumer.clone(),
+                agent_id: None,
+                principal_id: None,
+                squad_id: Some(squad_id),
+                project_id: None,
+                parent_id: None,
+                stage: None,
+            },
+        ))
+        .unwrap();
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "change".into(),
+            },
+        ))
+        .unwrap();
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph_review"));
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::SetTaskStatus {
+                task_id: blocker,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    assert!(alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph_review"));
+}
+
+#[test]
+fn conductor_reconcile_respects_action_conflict_and_compaction_drift_blocks() {
+    let action = setup();
+    let action_task = issue_title(&action, "action blocked");
+    assign_a1(&action, &action_task);
+    action
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&action),
+            Command::UpsertCommitment {
+                workspace_id: action.workspace_id.clone(),
+                task_id: Some(action_task.clone()),
+                commitment_type: "CONSTRAINT".into(),
+                claim: "never-deploy".into(),
+                polarity: "MUST_NOT".into(),
+                authority: "USER".into(),
+                scope: action_task.clone(),
+            },
+        ))
+        .unwrap();
+    let blocked = action
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&action),
+            Command::ApplyPatch {
+                task_id: action_task.clone(),
+                patch: "never-deploy".into(),
+            },
+        ))
+        .unwrap();
+    assert!(blocked.blocked);
+    set_conductor(&action, &action.a2);
+    assert!(!alice_runs(&action)
+        .iter()
+        .any(|run| run.task_id == action_task && run.trigger == "graph"));
+
+    let drift = setup();
+    let drift_task = issue_title(&drift, "drift blocked");
+    assign_a1(&drift, &drift_task);
+    drift
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&drift),
+            Command::UpsertCommitment {
+                workspace_id: drift.workspace_id.clone(),
+                task_id: Some(drift_task.clone()),
+                commitment_type: "CONSTRAINT".into(),
+                claim: "never-deploy-without-approval".into(),
+                polarity: "MUST_NOT".into(),
+                authority: "USER".into(),
+                scope: drift_task.clone(),
+            },
+        ))
+        .unwrap();
+    start_fixture(
+        &drift,
+        &drift_task,
+        vec![
+            HarnessEvent::Message {
+                role: "user".into(),
+                content: "GOAL: preserve-release-gate\nCONSTRAINT: never-deploy-without-approval"
+                    .into(),
+            },
+            HarnessEvent::Compaction {
+                summary: "lost state".into(),
+            },
+            HarnessEvent::Message {
+                role: "assistant".into(),
+                content: "PLAN: ship directly to production".into(),
+            },
+        ],
+    );
+    let producer = issue_title(&drift, "producer");
+    bind_demo_repo(&drift);
+    create_worktree(&drift, &producer);
+    declare_dep(&drift, &drift_task, &producer, "repo");
+    drift
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&drift),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "change".into(),
+            },
+        ))
+        .unwrap();
+    set_conductor(&drift, &drift.a2);
+    assert!(!alice_runs(&drift).iter().any(|run| {
+        run.task_id == drift_task && matches!(run.trigger.as_str(), "graph" | "graph_review")
+    }));
+}
+
+#[test]
+fn conductor_reconcile_does_not_restart_completed_manual_or_squad_work() {
+    let h = setup();
+    let manual_task = issue_title(&h, "manual completed");
+    assign_a1(&h, &manual_task);
+    start_fixture(
+        &h,
+        &manual_task,
+        vec![HarnessEvent::Message {
+            role: "assistant".into(),
+            content: "done".into(),
+        }],
+    );
+    set_conductor(&h, &h.a2);
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == manual_task)
+            .count(),
+        1
+    );
+
+    let squad_id = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CreateSquad {
+                workspace_id: h.workspace_id.clone(),
+                name: "completion team".into(),
+                leader_agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let squad_task = issue_title(&h, "squad completed");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignIssue {
+                task_id: squad_task.clone(),
+                agent_id: None,
+                principal_id: None,
+                squad_id: Some(squad_id),
+                project_id: None,
+                parent_id: None,
+                stage: None,
+            },
+        ))
+        .unwrap();
+    let squad_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == squad_task && run.trigger == "squad")
+        .expect("squad run");
+    ingest_session_ok(&h, &squad_run.id);
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == squad_task && run.trigger == "squad")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn completed_review_reconciles_waiting_reviews_and_reaffirmed_execution() {
+    let h = setup();
+    update_agent_cli_and_limit(&h.kernel, &h.alice, &h.a2, None, Some(1));
+    set_conductor(&h, &h.a2);
+
+    let producer_a = issue_title(&h, "producer a");
+    let consumer_a = issue_title(&h, "consumer a");
+    let producer_b = issue_title(&h, "producer b");
+    let consumer_b = issue_title(&h, "consumer b");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer_a);
+    create_worktree(&h, &producer_b);
+    declare_dep(&h, &consumer_a, &producer_a, "repo");
+    declare_dep(&h, &consumer_b, &producer_b, "repo");
+    for (task_id, patch) in [(&producer_a, "change a"), (&producer_b, "change b")] {
+        h.kernel
+            .submit_sync(cmd(
+                alice_actor(&h),
+                Command::ApplyPatch {
+                    task_id: task_id.clone(),
+                    patch: patch.into(),
+                },
+            ))
+            .unwrap();
+    }
+    let first_review = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer_a && run.trigger == "graph_review")
+        .expect("first review");
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer_b && run.trigger == "graph_review"));
+    ingest_session_ok(&h, &first_review.id);
+    assert!(alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer_b && run.trigger == "graph_review"));
+
+    let same_agent = setup();
+    update_agent_cli_and_limit(
+        &same_agent.kernel,
+        &same_agent.alice,
+        &same_agent.a1,
+        None,
+        Some(1),
+    );
+    let producer = issue_title(&same_agent, "producer same agent");
+    let consumer = issue_title(&same_agent, "consumer same agent");
+    bind_demo_repo(&same_agent);
+    create_worktree(&same_agent, &producer);
+    let dep_id = declare_dep(&same_agent, &consumer, &producer, "repo");
+    assign_a1(&same_agent, &consumer);
+    same_agent
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&same_agent),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "change".into(),
+            },
+        ))
+        .unwrap();
+    set_conductor(&same_agent, &same_agent.a1);
+    let review = alice_runs(&same_agent)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph_review")
+        .expect("same-agent review");
+    ingest_assistant(&same_agent, &review.id, &format!("REAFFIRM: {dep_id}"));
+    assert!(!alice_runs(&same_agent)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph"));
+    ingest_session_ok(&same_agent, &review.id);
+    assert!(alice_runs(&same_agent)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph"));
+}
 fn pr_item(
     number: u32,
     branch: &str,

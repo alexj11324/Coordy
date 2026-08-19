@@ -40,3 +40,22 @@ export function declareDependencyCommand(
     entity: entity.trim() || "repo",
   };
 }
+
+export function updateWorkspaceConductorCommand(
+  workspaceId: string,
+  agentId: string | null,
+): Command {
+  return {
+    type: "UpdateWorkspace",
+    workspace_id: workspaceId,
+    conductor_agent_id: agentId && agentId !== "none" ? agentId : "",
+  };
+}
+
+export function staleDependencyHoldLabel(hasConductor: boolean): string {
+  return hasConductor ? "等待总管批准" : "已失效";
+}
+
+export function graphConductorStatusLabel(hasConductor: boolean): string | null {
+  return hasConductor ? "总管托管中" : null;
+}

@@ -39,6 +39,7 @@ export type Command =
       context?: string | null;
       slug?: string | null;
       issue_prefix?: string | null;
+      conductor_agent_id?: string | null;
     }
   | { type: "DeleteWorkspace"; workspace_id: string }
   | { type: "LeaveWorkspace"; workspace_id: string }
@@ -285,6 +286,7 @@ export type WorkspaceView = {
   slug?: string;
   issue_prefix?: string;
   next_issue_number?: number;
+  conductor_agent_id?: string | null;
 };
 export type AttachmentView = { id: string; name: string; path: string };
 export type PullRequestView = {
