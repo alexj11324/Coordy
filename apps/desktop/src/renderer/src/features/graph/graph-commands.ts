@@ -1,4 +1,8 @@
-import type { Command, GraphTimelineEventView, NodeKind } from "@coordy/protocol";
+import type {
+  Command,
+  GraphTimelineEventView,
+  NodeKind,
+} from "@coordy/protocol";
 
 export function dependencyIdFromGraphEdgeId(edgeId: string): string | null {
   if (!edgeId.startsWith("dep:")) return null;
@@ -26,7 +30,10 @@ export function reaffirmCommandForStaleEdge(input: {
   };
 }
 
-export function removeCommandForDependencyEdge(edgeId: string, generation?: number): Command | null {
+export function removeCommandForDependencyEdge(
+  edgeId: string,
+  generation?: number,
+): Command | null {
   const dependency_id = dependencyIdFromGraphEdgeId(edgeId);
   if (!dependency_id) return null;
   if (generation == null) return null;
@@ -67,7 +74,9 @@ export type GraphTimelineEntry = {
   node_id?: string | null;
 };
 
-export function timelineEntries(events: GraphTimelineEventView[] | undefined): GraphTimelineEntry[] {
+export function timelineEntries(
+  events: GraphTimelineEventView[] | undefined,
+): GraphTimelineEntry[] {
   return (events ?? []).map((event) => ({
     id: event.id,
     kind: event.kind,
@@ -76,4 +85,25 @@ export function timelineEntries(events: GraphTimelineEventView[] | undefined): G
     edge_id: event.edge_id,
     node_id: event.node_id,
   }));
+}
+
+export function updateWorkspaceConductorCommand(
+  workspaceId: string,
+  agentId: string | null,
+): Command {
+  return {
+    type: "UpdateWorkspace",
+    workspace_id: workspaceId,
+    conductor_agent_id: agentId && agentId !== "none" ? agentId : "",
+  };
+}
+
+export function staleDependencyHoldLabel(hasConductor: boolean): string {
+  return hasConductor ? "等待总管批准" : "已失效";
+}
+
+export function graphConductorStatusLabel(
+  hasConductor: boolean,
+): string | null {
+  return hasConductor ? "总管托管中" : null;
 }

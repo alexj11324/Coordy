@@ -24,7 +24,8 @@ export function App() {
   }, []);
   useEffect(() => {
     if (!ready) return;
-    return window.coordy.subscribe(() => {
+    return window.coordy.subscribe((effect) => {
+      if (effect.type === "StreamHealth") return;
       void queryClient.invalidateQueries();
     });
   }, [ready]);

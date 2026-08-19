@@ -19,10 +19,14 @@ export type DirEntry = {
   isDirectory: boolean;
 };
 
+export type CoordyDesktopEvent =
+  | Effect
+  | { type: "StreamHealth"; healthy: boolean };
+
 export interface CoordyDesktopBridge {
   submit(command: AuthenticatedCommand): Promise<Outcome>;
   view(query: AuthorizedQuery): Promise<View>;
-  subscribe(listener: (effect: Effect) => void): () => void;
+  subscribe(listener: (effect: CoordyDesktopEvent) => void): () => void;
   chooseRepository(): Promise<string | null>;
   revealFile(path: string): Promise<void>;
   openTerminal(path: string): Promise<void>;

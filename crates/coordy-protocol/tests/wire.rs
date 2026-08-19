@@ -17,6 +17,25 @@ fn command_wire_keeps_pascal_variant() {
 }
 
 #[test]
+fn github_sync_command_flattens_boxed_payload() {
+    let value = serde_json::to_value(coordy_protocol::Command::SyncGithubPullRequests(Box::new(
+        coordy_protocol::GithubSync {
+            workspace_id: "ws".into(),
+            cli_available: true,
+            authenticated: true,
+            account: "dev".into(),
+            error: String::new(),
+            fetched_at: String::new(),
+            items: Vec::new(),
+        },
+    )))
+    .unwrap();
+    assert_eq!(value["type"], "SyncGithubPullRequests");
+    assert_eq!(value["workspace_id"], "ws");
+    assert_eq!(value["cli_available"], true);
+}
+
+#[test]
 fn settings_view_includes_advisor_flag() {
     let view = coordy_protocol::View::Settings {
         daemon: coordy_protocol::HealthView {
@@ -29,6 +48,7 @@ fn settings_view_includes_advisor_flag() {
         repo_path: None,
         llm_advisor_enabled: false,
         notification_kinds: Vec::new(),
+        github: coordy_protocol::GithubView::default(),
     };
     let value = serde_json::to_value(view).unwrap();
     assert_eq!(value["type"], "Settings");
@@ -72,6 +92,26 @@ fn update_agent_fields_default_when_omitted() {
             assert!(harness.is_none());
         }
         other => panic!("expected UpdateAgent, got {other:?}"),
+    }
+}
+
+#[test]
+fn update_workspace_conductor_defaults_when_omitted() {
+    let cmd: coordy_protocol::Command = serde_json::from_value(json!({
+        "type": "UpdateWorkspace",
+        "workspace_id": "ws"
+    }))
+    .unwrap();
+    match cmd {
+        coordy_protocol::Command::UpdateWorkspace {
+            conductor_agent_id,
+            name,
+            ..
+        } => {
+            assert!(conductor_agent_id.is_none());
+            assert!(name.is_none());
+        }
+        other => panic!("expected UpdateWorkspace, got {other:?}"),
     }
 }
 

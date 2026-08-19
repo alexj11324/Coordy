@@ -40,6 +40,7 @@ impl Ports for LivePorts {
         self.git.read_jsonl(path)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_harness(
         &self,
         kind: &str,
@@ -50,6 +51,7 @@ impl Ports for LivePorts {
         thinking: &str,
         speed: &str,
         cli_args: &str,
+        tool_access: &str,
     ) -> Result<(), CoordyError> {
         let tx = self.events.clone();
         let run_id = run_id.to_string();
@@ -60,6 +62,7 @@ impl Ports for LivePorts {
         let thinking = thinking.to_string();
         let speed = speed.to_string();
         let cli_args = cli_args.to_string();
+        let tool_access = tool_access.to_string();
         let secrets = SecretStore::open(&self.data_dir).env();
         let registry = std::fs::read_to_string(self.data_dir.join("cache/acp-registry.json")).ok();
         thread::spawn(move || {
@@ -74,6 +77,7 @@ impl Ports for LivePorts {
                 &thinking,
                 &speed,
                 &cli_args,
+                &tool_access,
                 &run_id,
                 &secrets,
                 registry.as_deref(),
@@ -119,6 +123,7 @@ fn run_kind(
     thinking: &str,
     speed: &str,
     cli_args: &str,
+    tool_access: &str,
     run_id: &str,
     secrets: &SecretEnv,
     registry_json: Option<&str>,
@@ -133,6 +138,7 @@ fn run_kind(
             prompt,
             model,
             secrets,
+            tool_access,
             Some(run_id),
             emit,
         );
@@ -145,6 +151,7 @@ fn run_kind(
         thinking,
         speed,
         cli_args,
+        tool_access,
         secrets,
         Some(run_id),
         emit,

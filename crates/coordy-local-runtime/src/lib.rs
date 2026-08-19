@@ -3,6 +3,7 @@
 mod discovery;
 mod draft;
 mod git;
+mod github;
 mod ipc;
 mod live;
 mod secrets;
@@ -10,6 +11,7 @@ mod sqlite;
 
 pub use discovery::{import_agents, list_agents};
 pub use git::GitPorts;
+pub use github::{collect, parse_github_remote, parse_pr_list};
 pub use ipc::{connect, serve, RpcClient};
 pub use secrets::{advisor_key_from_env, resolve_secret, write_secret_ref, SecretStore};
 pub use sqlite::SqliteStore;
@@ -20,7 +22,10 @@ use std::thread;
 
 use coordy_advisor::{Advisor, DeterministicAdvisor, LlmAdvisor};
 use coordy_kernel::{Kernel, Ports};
-use coordy_protocol::{Actor, AuthenticatedCommand, Command, CoordyError, HarnessEvent, Outcome};
+use coordy_protocol::{
+    Actor, AuthenticatedCommand, AuthorizedQuery, Command, CoordyError, HarnessEvent, Outcome,
+    Query, View,
+};
 
 use crate::live::LivePorts;
 
@@ -38,7 +43,10 @@ impl Runtime {
             .map_err(|e| CoordyError::unavailable(format!("data dir: {e}")))?;
         let db_path = data_dir.join("coordy.sqlite");
         let store = SqliteStore::open(&db_path)?;
-        let world = store.load()?;
+        let mut world = store.load()?;
+        if interrupt_orphaned_executions(&mut world) {
+            store.save(&world)?;
+        }
         let secrets = SecretStore::open(data_dir);
         let env = secrets.env();
         let advisor: Arc<dyn Advisor> = Arc::new(LlmAdvisor::from_key(env.api_key, env.base_url));
@@ -77,6 +85,8 @@ impl Runtime {
                     let _ = store.save(&sweep_kernel.export_world());
                 }
             }
+            drop(_gate);
+            refresh_github_workspaces(&sweep_kernel, &sweep_persist, sweep_gate.as_ref());
         });
         let _ = crate::write_secret_ref(data_dir, "COORDY_ADVISOR_API_KEY");
         Ok(Self {
@@ -103,6 +113,7 @@ impl Runtime {
         &self,
         command: AuthenticatedCommand,
     ) -> Result<Outcome, CoordyError> {
+        let command = self.expand_github_refresh(command)?;
         let _gate = self.persist_gate.lock().expect("persist gate");
         let snapshot = self.kernel.export_world();
         match self.kernel.submit_sync(command) {
@@ -115,6 +126,130 @@ impl Runtime {
             }
             Err(err) => Err(err),
         }
+    }
+
+    fn expand_github_refresh(
+        &self,
+        command: AuthenticatedCommand,
+    ) -> Result<AuthenticatedCommand, CoordyError> {
+        let Command::RefreshGithub { workspace_id } = &command.command else {
+            return Ok(command);
+        };
+        if command.actor.is_agent() {
+            return Err(CoordyError::denied("agent cannot do this"));
+        }
+        let workspace_id = workspace_id.clone();
+        let settings = self.kernel.view_sync(AuthorizedQuery {
+            actor: command.actor,
+            query: Query::Settings {
+                workspace_id: workspace_id.clone(),
+            },
+        })?;
+        let View::Settings {
+            repo_path: repo, ..
+        } = settings
+        else {
+            return Err(CoordyError::unavailable("unexpected settings view"));
+        };
+        Ok(AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: crate::github::collect(repo.as_deref()).into_command(workspace_id),
+        })
+    }
+}
+
+fn interrupt_orphaned_executions(world: &mut coordy_kernel::World) -> bool {
+    let mut changed = false;
+    for run in &mut world.runs {
+        if run.status == "running" {
+            run.status = "interrupted".into();
+            run.queue_status = "interrupted".into();
+            changed = true;
+        }
+    }
+    for attempt in &mut world.node_attempts {
+        if matches!(attempt.lease_status.as_str(), "claimed" | "running") {
+            attempt.lease_status = "interrupted".into();
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use coordy_kernel::World;
+    use serde_json::json;
+
+    #[test]
+    fn open_interrupts_and_persists_orphaned_execution_state() {
+        let dir = std::env::temp_dir().join(format!(
+            "coordy-interrupted-recovery-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("coordy.sqlite");
+        let store = SqliteStore::open(&db_path).unwrap();
+        let mut encoded = serde_json::to_value(World::default()).unwrap();
+        encoded["runs"] = json!([{
+            "id": "run-orphan",
+            "workspace_id": "ws-1",
+            "task_id": "task-1",
+            "agent_id": "agent-1",
+            "status": "running",
+            "harness": "claude",
+            "compaction_count": 0,
+            "after_compaction": false,
+            "queue_status": "dispatched",
+            "retry_count": 0,
+            "chat_id": null,
+            "trigger": "graph_execute",
+            "prompt": "continue",
+            "role": "executor"
+        }]);
+        encoded["node_attempts"] = json!([
+            {
+                "id": "attempt-bound",
+                "graph_run_id": "graph-run-1",
+                "workspace_id": "ws-1",
+                "node_id": "task-1",
+                "role": "executor",
+                "input_fingerprint": "fp-bound",
+                "lease_status": "running",
+                "run_id": "run-orphan"
+            },
+            {
+                "id": "attempt-unbound",
+                "graph_run_id": "graph-run-1",
+                "workspace_id": "ws-1",
+                "node_id": "task-2",
+                "role": "executor",
+                "input_fingerprint": "fp-unbound",
+                "lease_status": "claimed",
+                "run_id": null
+            }
+        ]);
+        let world: World = serde_json::from_value(encoded).unwrap();
+        store.save(&world).unwrap();
+        drop(store);
+
+        let runtime = Runtime::open(&dir, &dir.join("unused.sock"), "tok".into()).unwrap();
+        let recovered = runtime.kernel.export_world();
+        assert_eq!(recovered.runs[0].status, "interrupted");
+        assert_eq!(recovered.runs[0].queue_status, "interrupted");
+        assert!(recovered
+            .node_attempts
+            .iter()
+            .all(|attempt| attempt.lease_status == "interrupted"));
+
+        let persisted = SqliteStore::open(&db_path).unwrap().load().unwrap();
+        assert_eq!(persisted.runs[0].status, "interrupted");
+        assert!(persisted
+            .node_attempts
+            .iter()
+            .all(|attempt| attempt.lease_status == "interrupted"));
     }
 }
 
@@ -130,6 +265,42 @@ fn automation_sweep_mutated(outcome: &Outcome) -> bool {
         .and_then(|value| value.as_array())
         .is_some_and(|rows| !rows.is_empty());
     armed > 0 || triggered
+}
+
+fn github_enabled(world: &coordy_kernel::World, workspace_id: &str) -> bool {
+    world
+        .integrations
+        .iter()
+        .find(|row| row.workspace_id == workspace_id && row.kind == "github")
+        .map(|row| row.enabled)
+        .unwrap_or(true)
+}
+
+fn refresh_github_workspaces(kernel: &Kernel, persist_path: &Path, gate: &Mutex<()>) {
+    let world = kernel.export_world();
+    let jobs: Vec<(String, Option<String>)> = world
+        .workspaces
+        .iter()
+        .filter(|ws| {
+            !ws.archived
+                && github_enabled(&world, &ws.id)
+                && ws.repo_path.as_deref().is_some_and(|path| !path.is_empty())
+        })
+        .map(|ws| (ws.id.clone(), ws.repo_path.clone()))
+        .collect();
+    for (workspace_id, repo) in jobs {
+        let fetched = crate::github::collect(repo.as_deref());
+        let _gate = gate.lock().expect("persist gate");
+        let outcome = kernel.submit_sync(AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: fetched.into_command(workspace_id),
+        });
+        if outcome.is_ok() {
+            if let Ok(store) = SqliteStore::open(persist_path) {
+                let _ = store.save(&kernel.export_world());
+            }
+        }
+    }
 }
 
 pub fn default_paths() -> Result<(PathBuf, PathBuf), CoordyError> {

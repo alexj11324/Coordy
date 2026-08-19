@@ -39,6 +39,7 @@ fn drive_session_against_fake_acp_agent() {
         "ship it",
         "",
         std::path::Path::new("."),
+        "auto",
         &mut |event| {
             events.push(event);
         },
