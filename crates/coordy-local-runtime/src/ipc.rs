@@ -134,11 +134,8 @@ async fn dispatch(runtime: &Runtime, req: RpcRequest) -> RpcResponse {
             Ok(_) => err(id, CoordyError::unavailable("unexpected health view")),
             Err(e) => err(id, e),
         },
-        RpcRequest::Submit { id, command } => match runtime.kernel.submit(command).await {
-            Ok(outcome) => {
-                let _ = runtime.persist();
-                ok(id, serde_json::to_value(outcome).unwrap())
-            }
+        RpcRequest::Submit { id, command } => match runtime.submit_and_persist(command) {
+            Ok(outcome) => ok(id, serde_json::to_value(outcome).unwrap()),
             Err(e) => err(id, e),
         },
         RpcRequest::View { id, query } => match runtime.kernel.view(query).await {

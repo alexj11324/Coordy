@@ -142,6 +142,6 @@ pub async fn import_agents(
         })?;
         imported.push(agent.id.clone());
     }
-    let _ = runtime.persist();
+    runtime.persist()?;
     Ok(ImportAgentsResult { imported, skipped })
 }

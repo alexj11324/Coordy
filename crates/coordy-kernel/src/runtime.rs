@@ -10,7 +10,8 @@ use coordy_protocol::{
 use serde_json::json;
 
 use crate::authority::{
-    actor_in_workspace, can_command_agent, grantor_holds, matching_held_grant, would_escalate,
+    actor_controls_agent, actor_in_workspace, can_command_agent, grantor_holds,
+    matching_held_grant, would_escalate,
 };
 use crate::ports::Ports;
 use crate::product;
@@ -621,19 +622,10 @@ impl Kernel {
                 action,
             } => {
                 let grantor_id = actor.id().to_string();
-                if !grantor_holds(&world, &grantor_id, &resource, &action)
-                    && !matches!(actor, Actor::Daemon | Actor::Principal { .. })
+                if !matches!(actor, Actor::Daemon)
+                    && !grantor_holds(&world, &grantor_id, &resource, &action)
                 {
-                    return Err(CoordyError::denied("grantor does not hold this permission"));
-                }
-                if let Actor::Principal { id } = &actor {
-                    if !grantor_holds(&world, id, &resource, &action)
-                        && resource != format!("principal:{id}")
-                        && !resource.starts_with("workspace:")
-                        && !resource.starts_with("agent:")
-                    {
-                        return Err(CoordyError::denied("cannot grant an unheld permission"));
-                    }
+                    return Err(CoordyError::denied("cannot grant an unheld permission"));
                 }
                 if world.principal(&grantee_id).is_none() && world.agent(&grantee_id).is_none() {
                     return Err(CoordyError::not_found("grantee"));
@@ -738,7 +730,8 @@ impl Kernel {
                 {
                     return Err(CoordyError::denied("not in workspace"));
                 }
-                let (number, identifier) = product::allocate_issue_number(&mut world, &workspace_id)?;
+                let (number, identifier) =
+                    product::allocate_issue_number(&mut world, &workspace_id)?;
                 let id = ids::new("task");
                 let sort_key = world.tasks.len() as i64;
                 world.tasks.push(Task {
@@ -870,7 +863,11 @@ impl Kernel {
                         };
                     }
                     if let Some(due_date) = due_date.clone() {
-                        task.due_date = if due_date.is_empty() { None } else { Some(due_date) };
+                        task.due_date = if due_date.is_empty() {
+                            None
+                        } else {
+                            Some(due_date)
+                        };
                     }
                     if let Some(labels) = labels {
                         task.labels = labels;
@@ -1337,7 +1334,11 @@ impl Kernel {
                     queue_status: "dispatched".into(),
                     retry_count: 0,
                     chat_id: chat_id.clone(),
-                    trigger: if trigger.is_empty() { "issue".into() } else { trigger },
+                    trigger: if trigger.is_empty() {
+                        "issue".into()
+                    } else {
+                        trigger
+                    },
                     prompt: prompt_event.clone().unwrap_or_default(),
                 });
                 if let Some(prompt) = prompt_event {
@@ -1556,21 +1557,15 @@ impl Kernel {
                 agent_id,
                 prompt,
             } => self.start_prompt_on_task(
-                &mut world,
-                &actor,
-                &task_id,
-                &agent_id,
-                prompt,
-                None,
-                "mention",
-                true,
+                &mut world, &actor, &task_id, &agent_id, prompt, None, "mention", true,
             ),
             Command::RetryRun { run_id } => {
                 let old = world
                     .run(&run_id)
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("run"))?;
-                if !can_command_agent(&world, &actor, &old.agent_id) && !matches!(actor, Actor::Daemon)
+                if !can_command_agent(&world, &actor, &old.agent_id)
+                    && !matches!(actor, Actor::Daemon)
                 {
                     return Err(CoordyError::denied("cannot retry this run"));
                 }
@@ -1689,13 +1684,15 @@ impl Kernel {
                     .workspace(&workspace_id)
                     .ok_or_else(|| CoordyError::not_found("workspace"))?;
                 Ok(View::Workspace(product::workspace_view(ws)))
-            },
+            }
             Query::Board { workspace_id } => {
                 require_member(&world, &actor, &workspace_id)?;
                 let pending: Vec<String> = world
                     .tasks
                     .iter()
-                    .filter(|t| t.workspace_id == workspace_id && (t.number == 0 || t.identifier.is_empty()))
+                    .filter(|t| {
+                        t.workspace_id == workspace_id && (t.number == 0 || t.identifier.is_empty())
+                    })
                     .map(|t| t.id.clone())
                     .collect();
                 for task_id in pending {
@@ -1745,7 +1742,11 @@ impl Kernel {
                             id: p.id.clone(),
                             workspace_id: p.workspace_id.clone(),
                             name: p.name.clone(),
-                            role: if p.role.is_empty() { "member".into() } else { p.role.clone() },
+                            role: if p.role.is_empty() {
+                                "member".into()
+                            } else {
+                                p.role.clone()
+                            },
                         })
                         .collect(),
                 })
@@ -1769,9 +1770,17 @@ impl Kernel {
                             model: a.model.clone(),
                             thinking: a.thinking.clone(),
                             speed: a.speed.clone(),
-                            access: if a.access.is_empty() { "owner".into() } else { a.access.clone() },
+                            access: if a.access.is_empty() {
+                                "owner".into()
+                            } else {
+                                a.access.clone()
+                            },
                             access_member_ids: a.access_member_ids.clone(),
-                            concurrency_limit: if a.concurrency_limit == 0 { 6 } else { a.concurrency_limit },
+                            concurrency_limit: if a.concurrency_limit == 0 {
+                                6
+                            } else {
+                                a.concurrency_limit
+                            },
                             cli_args: a.cli_args.clone(),
                             mcp_servers: a.mcp_servers.clone(),
                             skill_ids: a.skill_ids.clone(),
@@ -1926,6 +1935,11 @@ impl Kernel {
                     .agent(&agent_id)
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("agent"))?;
+                if !actor_controls_agent(&world, &actor, &agent) {
+                    return Err(CoordyError::denied(
+                        "not authorized to read this agent context",
+                    ));
+                }
                 let ctx_actor = Actor::Agent {
                     id: agent.id.clone(),
                     principal_id: agent.principal_id.clone(),
@@ -2016,7 +2030,9 @@ impl Kernel {
                     items: world
                         .chats
                         .iter()
-                        .filter(|c| c.workspace_id == workspace_id && product::can_see_chat(&actor, c))
+                        .filter(|c| {
+                            c.workspace_id == workspace_id && product::can_see_chat(&actor, c)
+                        })
                         .map(product::chat_view)
                         .collect(),
                 })
@@ -2149,7 +2165,7 @@ fn push_inbox(
     body: &str,
     related_id: Option<String>,
 ) {
-                let item = InboxItem {
+    let item = InboxItem {
         id: ids::new("inb"),
         workspace_id: workspace_id.into(),
         kind: kind.into(),
@@ -2294,7 +2310,7 @@ fn ingest_event(
             exit_code,
             ..
         } => {
-                if name == coordy_protocol::HARNESS_SESSION_TOOL {
+            if name == coordy_protocol::HARNESS_SESSION_TOOL {
                 if let Some(active) = world.run_mut(run_id) {
                     if active.status == "running" {
                         active.status = if exit_code.unwrap_or(0) == 0 {
@@ -2545,4 +2561,34 @@ pub fn sync_batch(world: &World) -> serde_json::Value {
         "tasks": world.tasks,
         "conflicts": world.conflicts,
     })
+}
+
+#[derive(serde::Deserialize)]
+struct SyncProjection {
+    #[serde(default)]
+    contracts: serde_json::Value,
+    published_memory: Vec<serde_json::Value>,
+    #[serde(default)]
+    tasks: serde_json::Value,
+    #[serde(default)]
+    conflicts: serde_json::Value,
+}
+
+/// Accept only the canonical shared projection. Private or principal memory is rejected.
+pub fn parse_sync_projection(batch: &serde_json::Value) -> Result<serde_json::Value, CoordyError> {
+    let parsed: SyncProjection = serde_json::from_value(batch.clone())
+        .map_err(|_| CoordyError::invalid("sync batch is not a shared projection"))?;
+    for item in &parsed.published_memory {
+        let visibility = item.get("visibility").and_then(|v| v.as_str());
+        let status = item.get("status").and_then(|v| v.as_str());
+        if visibility != Some("shared") || status != Some("shared") {
+            return Err(CoordyError::denied("sync batch contained private memory"));
+        }
+    }
+    Ok(json!({
+        "contracts": parsed.contracts,
+        "published_memory": parsed.published_memory,
+        "tasks": parsed.tasks,
+        "conflicts": parsed.conflicts,
+    }))
 }

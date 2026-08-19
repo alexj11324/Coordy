@@ -1,5 +1,7 @@
 use coordy_advisor::DeterministicAdvisor;
-use coordy_kernel::{sync_batch, sync_omits_private_memory, Kernel, RecordingPorts};
+use coordy_kernel::{
+    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
+};
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, HarnessEvent, Query, RunSource, View,
 };
@@ -192,6 +194,92 @@ fn unauthorized_memory_never_reaches_context() {
     match ctx {
         View::AgentContext { context } => {
             assert!(!context.memory.iter().any(|m| m.body.contains("classified")));
+        }
+        _ => panic!("expected context"),
+    }
+}
+
+#[test]
+fn sibling_cannot_materialize_other_agent_context() {
+    let h = setup();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a1.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::AppendMemory {
+                workspace_id: h.workspace_id.clone(),
+                visibility: "agent_private".into(),
+                body: "classified".into(),
+                owner_actor_id: Some(h.a1.clone()),
+            },
+        ))
+        .unwrap();
+    let err = h
+        .kernel
+        .view_sync(q(
+            Actor::Agent {
+                id: h.a2.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Query::AgentContext {
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+#[test]
+fn foreign_principal_cannot_materialize_agent_context() {
+    let h = setup();
+    let err = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.bob.clone() },
+            Query::AgentContext {
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+#[test]
+fn owner_can_materialize_owned_agent_context() {
+    let h = setup();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a1.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::AppendMemory {
+                workspace_id: h.workspace_id.clone(),
+                visibility: "agent_private".into(),
+                body: "owned secret".into(),
+                owner_actor_id: Some(h.a1.clone()),
+            },
+        ))
+        .unwrap();
+    let ctx = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::AgentContext {
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+    match ctx {
+        View::AgentContext { context } => {
+            assert!(context
+                .memory
+                .iter()
+                .any(|m| m.body.contains("owned secret")));
         }
         _ => panic!("expected context"),
     }
@@ -411,6 +499,65 @@ fn revoked_grant_is_denied() {
 }
 
 #[test]
+fn cannot_grant_command_on_foreign_agent() {
+    let h = setup();
+    let bob_agent = h
+        .kernel
+        .export_world()
+        .agents
+        .iter()
+        .find(|agent| agent.principal_id == h.bob)
+        .expect("bob agent")
+        .id
+        .clone();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::Grant {
+                workspace_id: h.workspace_id.clone(),
+                grantee_id: h.a1.clone(),
+                resource: format!("agent:{bob_agent}"),
+                action: "command".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+#[test]
+fn cannot_grant_in_foreign_workspace() {
+    let h = setup();
+    let other = h
+        .kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace {
+                name: "other".into(),
+            },
+        ))
+        .unwrap();
+    let other_ws = other.ids["workspace_id"].as_str().unwrap().to_string();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::Grant {
+                workspace_id: other_ws.clone(),
+                grantee_id: h.a1.clone(),
+                resource: format!("workspace:{other_ws}"),
+                action: "write".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+#[test]
 fn shared_resource_needs_joint_approval() {
     let h = setup();
     let proposed = h
@@ -593,6 +740,35 @@ fn private_memory_not_synced() {
     let encoded = serde_json::to_string(&batch).unwrap();
     assert!(!encoded.contains("do-not-upload"));
     assert!(sync_omits_private_memory(&world));
+}
+
+#[test]
+fn projection_rejects_principal_memory() {
+    let err = parse_sync_projection(&serde_json::json!({
+        "published_memory": [{
+            "visibility": "principal",
+            "status": "shared",
+            "body": "secret"
+        }]
+    }))
+    .unwrap_err();
+    assert_eq!(err.code, "denied");
+}
+
+#[test]
+fn projection_accepts_shared_memory() {
+    let batch = parse_sync_projection(&serde_json::json!({
+        "contracts": [],
+        "published_memory": [{
+            "visibility": "shared",
+            "status": "shared",
+            "body": "ok"
+        }],
+        "tasks": [],
+        "conflicts": []
+    }))
+    .unwrap();
+    assert_eq!(batch["published_memory"][0]["body"], "ok");
 }
 
 #[test]

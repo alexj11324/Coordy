@@ -72,3 +72,54 @@ fn sqlite_crash_replay() {
     let world = rt2.kernel.export_world();
     assert_eq!(world.workspaces.len(), 1);
 }
+
+#[test]
+fn persist_failure_does_not_ack_and_rolls_back() {
+    let dir = std::env::temp_dir().join(format!("coordy-persist-fail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("unused.sock");
+    let rt = Runtime::open(&dir, &sock, "tok".into()).unwrap();
+    rt.submit_and_persist(coordy_protocol::AuthenticatedCommand {
+        actor: Actor::Daemon,
+        command: coordy_protocol::Command::CreateWorkspace {
+            name: "kept".into(),
+        },
+    })
+    .unwrap();
+    assert_eq!(rt.kernel.export_world().workspaces.len(), 1);
+
+    let db = dir.join("coordy.sqlite");
+    std::fs::remove_file(&db).unwrap();
+    std::fs::create_dir(&db).unwrap();
+
+    let err = rt
+        .submit_and_persist(coordy_protocol::AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: coordy_protocol::Command::CreateWorkspace {
+                name: "lost".into(),
+            },
+        })
+        .unwrap_err();
+    assert_eq!(err.code, "unavailable");
+    let world = rt.kernel.export_world();
+    assert_eq!(world.workspaces.len(), 1);
+    assert_eq!(world.workspaces[0].name, "kept");
+}
+
+#[test]
+fn cli_resolves_desktop_socket_pointer() {
+    let dir = std::env::temp_dir().join(format!("coordy-sock-ptr-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let desktop_sock = dir.join("userData").join("run").join("coordyd.sock");
+    coordy_local_runtime::write_active_socket(&dir, &desktop_sock).unwrap();
+    let resolved = coordy_local_runtime::resolve_cli_socket(None, &dir, dir.join("default.sock"));
+    assert_eq!(resolved, desktop_sock);
+    let explicit = coordy_local_runtime::resolve_cli_socket(
+        Some(dir.join("explicit.sock")),
+        &dir,
+        dir.join("default.sock"),
+    );
+    assert_eq!(explicit, dir.join("explicit.sock"));
+}

@@ -53,6 +53,14 @@ impl SqliteStore {
     pub fn save(&self, world: &World) -> Result<(), CoordyError> {
         let json = serde_json::to_string(world)
             .map_err(|e| CoordyError::unavailable(format!("world encode: {e}")))?;
+        let existing: Result<String, rusqlite::Error> =
+            self.conn
+                .query_row("SELECT json FROM world_snapshot WHERE id = 1", [], |row| {
+                    row.get(0)
+                });
+        if matches!(&existing, Ok(prev) if prev == &json) {
+            return Ok(());
+        }
         self.conn
             .execute(
                 "INSERT INTO world_snapshot(id, json) VALUES(1, ?1)
@@ -82,4 +90,33 @@ impl SqliteStore {
 
 fn chrono_now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use coordy_kernel::World;
+
+    fn event_log_len(store: &SqliteStore) -> i64 {
+        store
+            .conn
+            .query_row("SELECT COUNT(*) FROM event_log", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn save_skips_identical_world_snapshots() {
+        let dir = std::env::temp_dir().join(format!("coordy-sqlite-skip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SqliteStore::open(&dir.join("coordy.sqlite")).unwrap();
+        let world = World::default();
+        store.save(&world).unwrap();
+        store.save(&world).unwrap();
+        assert_eq!(event_log_len(&store), 1);
+        let mut changed = World::default();
+        changed.llm_advisor_enabled = true;
+        store.save(&changed).unwrap();
+        assert_eq!(event_log_len(&store), 2);
+    }
 }

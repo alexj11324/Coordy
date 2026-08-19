@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use coordy_harness::{serve_fake_acp, ACP_STUB_REPLY};
-use coordy_local_runtime::{connect, default_paths};
+use coordy_local_runtime::{connect, default_paths, resolve_cli_socket};
 use coordy_protocol::{Actor, AuthenticatedCommand, AuthorizedQuery, Command, Query};
 
 #[derive(Parser)]
@@ -40,8 +40,8 @@ async fn main() -> anyhow::Result<()> {
         serve_fake_acp(stdin().lock(), stdout().lock(), &text).map_err(|e| anyhow::anyhow!(e))?;
         return Ok(());
     }
-    let (_data, default_sock) = default_paths().map_err(|e| anyhow::anyhow!(e))?;
-    let socket = args.socket.unwrap_or(default_sock);
+    let (data, default_sock) = default_paths().map_err(|e| anyhow::anyhow!(e))?;
+    let socket = resolve_cli_socket(args.socket, &data, default_sock);
     let token = match args.token {
         Some(t) => t,
         None => {

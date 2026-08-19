@@ -2,7 +2,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::Parser;
-use coordy_local_runtime::{default_paths, generate_token, write_token_file, Runtime};
+use coordy_local_runtime::{
+    default_paths, generate_token, write_active_socket, write_token_file, Runtime,
+};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -23,9 +25,10 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
     let (default_data, default_sock) = default_paths().map_err(|e| anyhow::anyhow!(e))?;
-    let data_dir = args.data_dir.unwrap_or(default_data);
+    let data_dir = args.data_dir.unwrap_or_else(|| default_data.clone());
     let socket = args.socket.unwrap_or(default_sock);
     let token = args.token.unwrap_or_else(generate_token);
+    write_active_socket(&default_data, &socket).map_err(|e| anyhow::anyhow!(e))?;
     if let Some(parent) = socket.parent() {
         write_token_file(parent, &token).map_err(|e| anyhow::anyhow!(e))?;
     }

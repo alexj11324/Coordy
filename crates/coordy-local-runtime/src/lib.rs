@@ -15,12 +15,12 @@ pub use secrets::{advisor_key_from_env, resolve_secret, write_secret_ref, Secret
 pub use sqlite::SqliteStore;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use coordy_advisor::{Advisor, DeterministicAdvisor, LlmAdvisor};
 use coordy_kernel::{Kernel, Ports};
-use coordy_protocol::{Actor, AuthenticatedCommand, Command, CoordyError, HarnessEvent};
+use coordy_protocol::{Actor, AuthenticatedCommand, Command, CoordyError, HarnessEvent, Outcome};
 
 use crate::live::LivePorts;
 
@@ -29,6 +29,7 @@ pub struct Runtime {
     pub data_dir: PathBuf,
     pub socket_path: PathBuf,
     pub token: String,
+    persist_gate: Arc<Mutex<()>>,
 }
 
 impl Runtime {
@@ -44,10 +45,13 @@ impl Runtime {
         let (tx, rx) = std::sync::mpsc::channel::<(String, HarnessEvent)>();
         let ports: Arc<dyn Ports> = Arc::new(LivePorts::new(data_dir, tx));
         let kernel = Arc::new(Kernel::with_world(world, ports, advisor));
+        let persist_gate = Arc::new(Mutex::new(()));
         let ingest_kernel = Arc::clone(&kernel);
         let persist_path = db_path.clone();
+        let ingest_gate = Arc::clone(&persist_gate);
         thread::spawn(move || {
             while let Ok((run_id, event)) = rx.recv() {
+                let _gate = ingest_gate.lock().expect("persist gate");
                 let _ = ingest_kernel.submit_sync(AuthenticatedCommand {
                     actor: Actor::Daemon,
                     command: Command::IngestHarnessEvent { run_id, event },
@@ -59,15 +63,19 @@ impl Runtime {
         });
         let sweep_kernel = Arc::clone(&kernel);
         let sweep_persist = db_path.clone();
+        let sweep_gate = Arc::clone(&persist_gate);
         thread::spawn(move || loop {
             thread::sleep(std::time::Duration::from_secs(30));
             let now_ms = chrono::Utc::now().timestamp_millis();
-            let _ = sweep_kernel.submit_sync(AuthenticatedCommand {
+            let _gate = sweep_gate.lock().expect("persist gate");
+            let outcome = sweep_kernel.submit_sync(AuthenticatedCommand {
                 actor: Actor::Daemon,
                 command: Command::SweepAutomations { now_ms },
             });
-            if let Ok(store) = SqliteStore::open(&sweep_persist) {
-                let _ = store.save(&sweep_kernel.export_world());
+            if outcome.as_ref().is_ok_and(automation_sweep_mutated) {
+                if let Ok(store) = SqliteStore::open(&sweep_persist) {
+                    let _ = store.save(&sweep_kernel.export_world());
+                }
             }
         });
         let _ = crate::write_secret_ref(data_dir, "COORDY_ADVISOR_API_KEY");
@@ -76,14 +84,52 @@ impl Runtime {
             data_dir: data_dir.to_path_buf(),
             socket_path: socket_path.to_path_buf(),
             token,
+            persist_gate,
         })
     }
 
     pub fn persist(&self) -> Result<(), CoordyError> {
+        let _gate = self.persist_gate.lock().expect("persist gate");
+        self.persist_unlocked()
+    }
+
+    fn persist_unlocked(&self) -> Result<(), CoordyError> {
         let db_path = self.data_dir.join("coordy.sqlite");
         let store = SqliteStore::open(&db_path)?;
         store.save(&self.kernel.export_world())
     }
+
+    pub fn submit_and_persist(
+        &self,
+        command: AuthenticatedCommand,
+    ) -> Result<Outcome, CoordyError> {
+        let _gate = self.persist_gate.lock().expect("persist gate");
+        let snapshot = self.kernel.export_world();
+        match self.kernel.submit_sync(command) {
+            Ok(outcome) => {
+                if let Err(err) = self.persist_unlocked() {
+                    self.kernel.replace_world(snapshot);
+                    return Err(err);
+                }
+                Ok(outcome)
+            }
+            Err(err) => Err(err),
+        }
+    }
+}
+
+fn automation_sweep_mutated(outcome: &Outcome) -> bool {
+    let armed = outcome
+        .ids
+        .get("armed")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let triggered = outcome
+        .ids
+        .get("triggered")
+        .and_then(|value| value.as_array())
+        .is_some_and(|rows| !rows.is_empty());
+    armed > 0 || triggered
 }
 
 pub fn default_paths() -> Result<(PathBuf, PathBuf), CoordyError> {
@@ -106,6 +152,37 @@ pub fn default_paths() -> Result<(PathBuf, PathBuf), CoordyError> {
         let sock = runtime_dir.join("coordy").join("coordyd.sock");
         Ok((data, sock))
     }
+}
+
+pub const ACTIVE_SOCKET_FILE: &str = "daemon.socket";
+
+pub fn write_active_socket(data_dir: &Path, socket: &Path) -> Result<PathBuf, CoordyError> {
+    std::fs::create_dir_all(data_dir).map_err(|e| CoordyError::unavailable(e.to_string()))?;
+    let path = data_dir.join(ACTIVE_SOCKET_FILE);
+    std::fs::write(&path, socket.to_string_lossy().as_bytes())
+        .map_err(|e| CoordyError::unavailable(format!("active socket: {e}")))?;
+    Ok(path)
+}
+
+pub fn read_active_socket(data_dir: &Path) -> Option<PathBuf> {
+    let raw = std::fs::read_to_string(data_dir.join(ACTIVE_SOCKET_FILE)).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+pub fn resolve_cli_socket(
+    explicit: Option<PathBuf>,
+    data_dir: &Path,
+    default_sock: PathBuf,
+) -> PathBuf {
+    if let Some(socket) = explicit {
+        return socket;
+    }
+    read_active_socket(data_dir).unwrap_or(default_sock)
 }
 
 pub fn write_token_file(dir: &Path, token: &str) -> Result<PathBuf, CoordyError> {

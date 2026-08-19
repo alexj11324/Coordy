@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use axum::extract::State;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use coordy_kernel::{sync_batch, sync_omits_private_memory, World};
+use coordy_kernel::{parse_sync_projection, sync_batch, sync_omits_private_memory, World};
 use coordy_protocol::{CoordyError, HandshakeAck, PRODUCT_VERSION, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,6 +94,29 @@ impl SharedState {
         self.inner.lock().expect("shared lock").audit.clone()
     }
 
+    pub fn push_sync(&self, body: SyncPush) -> Result<PushOutcome, CoordyError> {
+        match serde_json::from_value::<World>(body.batch.clone()) {
+            Ok(parsed) => {
+                let batch = self.admit(&parsed, &body.workspace_id, &body.principal_id)?;
+                Ok(PushOutcome::World { batch })
+            }
+            Err(_) => {
+                let projection = parse_sync_projection(&body.batch)?;
+                let mut inner = self.inner.lock().expect("shared lock");
+                inner
+                    .snapshots
+                    .insert(body.workspace_id.clone(), projection);
+                inner.audit.push(serde_json::json!({
+                    "action": "sync_push",
+                    "workspace_id": body.workspace_id,
+                    "principal_id": body.principal_id,
+                    "mode": "projection",
+                }));
+                Ok(PushOutcome::Projection)
+            }
+        }
+    }
+
     pub fn invalidate(&self, req: InvalidateReq) {
         let mut inner = self.inner.lock().expect("shared lock");
         inner.audit.push(serde_json::json!({
@@ -116,6 +139,12 @@ impl SharedState {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum PushOutcome {
+    World { batch: Value },
+    Projection,
+}
+
 pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -136,29 +165,11 @@ async fn health() -> Json<HandshakeAck> {
 }
 
 async fn push(State(state): State<SharedState>, Json(body): Json<SyncPush>) -> Json<Value> {
-    let world = match serde_json::from_value::<World>(body.batch.clone()) {
-        Ok(parsed) => parsed,
-        Err(_) => {
-            if body.batch.get("published_memory").is_some() {
-                let encoded = body.batch.to_string();
-                if encoded.contains("agent_private") {
-                    return Json(serde_json::json!({
-                        "ok": false,
-                        "error": { "code": "denied", "message": "private memory leaked into sync batch" }
-                    }));
-                }
-            }
-            state
-                .inner
-                .lock()
-                .expect("lock")
-                .snapshots
-                .insert(body.workspace_id.clone(), body.batch.clone());
-            return Json(serde_json::json!({ "ok": true, "mode": "projection" }));
+    match state.push_sync(body) {
+        Ok(PushOutcome::World { batch }) => Json(serde_json::json!({ "ok": true, "batch": batch })),
+        Ok(PushOutcome::Projection) => {
+            Json(serde_json::json!({ "ok": true, "mode": "projection" }))
         }
-    };
-    match state.admit(&world, &body.workspace_id, &body.principal_id) {
-        Ok(batch) => Json(serde_json::json!({ "ok": true, "batch": batch })),
         Err(err) => Json(serde_json::json!({ "ok": false, "error": err })),
     }
 }

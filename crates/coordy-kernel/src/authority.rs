@@ -88,7 +88,7 @@ pub fn can(world: &World, actor: &Actor, resource: &str, action: &str) -> bool {
 }
 
 pub fn grantor_holds(world: &World, grantor_id: &str, resource: &str, action: &str) -> bool {
-    if world.principal(grantor_id).is_some() {
+    if let Some(principal) = world.principal(grantor_id) {
         if resource == format!("principal:{grantor_id}") {
             return true;
         }
@@ -97,8 +97,10 @@ pub fn grantor_holds(world: &World, grantor_id: &str, resource: &str, action: &s
                 return true;
             }
         }
-        if resource.starts_with("workspace:") {
-            return true;
+        if let Some(workspace_id) = resource.strip_prefix("workspace:") {
+            if principal.workspace_id == workspace_id {
+                return true;
+            }
         }
     }
     has_grant(world, grantor_id, resource, action)

@@ -15,7 +15,7 @@ pub mod ids {
 
 pub use jsonl::read_jsonl;
 pub use ports::{NoopPorts, Ports, RecordingPorts};
-pub use runtime::{sync_batch, Kernel};
+pub use runtime::{parse_sync_projection, sync_batch, Kernel};
 pub use world::World;
 
 use coordy_protocol::{AuthenticatedCommand, AuthorizedQuery, CoordyError, Effect, Outcome, View};
