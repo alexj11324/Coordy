@@ -75,7 +75,7 @@ export function RuntimesPage() {
             </EmptyMedia>
             <EmptyTitle>未检测到 harness</EmptyTitle>
             <EmptyDescription>
-              请安装 Claude Code、Codex 或 Gemini
+              请安装 Claude Code、Codex 或 Antigravity
               CLI，确认可在终端中运行后刷新检测。
             </EmptyDescription>
           </EmptyHeader>

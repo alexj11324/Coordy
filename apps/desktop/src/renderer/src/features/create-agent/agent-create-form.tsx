@@ -232,7 +232,7 @@ export function HarnessDropdown({
         <p className="text-sm text-muted-foreground">
           {loading
             ? "正在读取 harness…"
-            : "暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。"}
+            : "暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Antigravity CLI。"}
         </p>
       ) : (
         <Select

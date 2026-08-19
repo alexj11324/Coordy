@@ -120,7 +120,7 @@ export function harnessLabel(harness: string): string {
     case "kiro":
       return "Kiro CLI";
     case "antigravity":
-      return "Antigravity";
+      return "Antigravity CLI";
     case "grok":
       return "Grok Build";
     case "qoder":

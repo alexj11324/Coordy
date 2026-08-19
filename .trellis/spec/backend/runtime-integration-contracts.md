@@ -79,6 +79,69 @@ match launch.protocol_family.as_str() {
 }
 ```
 
+## Scenario: Publish a first-class provider identity
+
+### 1. Scope / Trigger
+
+- Trigger: adding, renaming, replacing, or removing a provider row or its icon in the desktop/README catalog.
+- Consumer first-class advertising is separate from backward-compatible runtime support. A retired consumer CLI may remain launchable for enterprise/API-key users without appearing in the public first-class set.
+
+### 2. Signatures
+
+- `FIRST_CLASS_PROVIDER_IDS`: exact public consumer identity set.
+- `FIRST_CLASS_ICON_FILES: Record<FirstClassProviderId, string>`: shared local asset for desktop and both READMEs.
+- `FIRST_CLASS_ICON_SOURCES: Record<FirstClassProviderId, { sourceKind, sourceRef, status }>`: provenance and verification status for every public row.
+- `resolveFirstClassIconAssets(assets)`: resolves every mapped Vite asset or throws before the provider UI can render.
+
+### 3. Contracts
+
+- The ID, file, and source maps have exactly the same keys.
+- Only `provider-controlled` and `exact-registry` rows may claim those verification classes. `shared-family`, `third-party-brand`, and `legacy-unverified` remain explicit.
+- Provider and regional aliases may share one verified mark when the executable/distribution differs but the product identity does not.
+- Markdown-facing SVGs are valid XML with explicit colors; they do not rely on inherited `currentColor`.
+- A missing or misspelled local asset is a build/module-initialization error, not a silent Registry fallback.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| ID missing from file or source map | test/type failure; do not publish |
+| Local Vite asset is missing or empty | throw with provider ID and exact asset path |
+| Source is not independently verified | record `legacy-unverified` or `third-party-brand`; do not claim official provenance |
+| Consumer CLI is retired but enterprise path remains | remove from public first-class set; retain compatible runtime implementation |
+| Shared product-family mark | record `shared-family` and reference the owning provider ID |
+
+### 5. Good / Base / Bad Cases
+
+- Good: `grok` maps to the exact `grok-build` Registry glyph, is labeled `Grok Build`, and has matching file/source records.
+- Base: `qoderclicn` intentionally shares Qoder's provider-controlled mark and records `sourceRef: "qoder"`.
+- Bad: GitHub Copilot displays the GitHub company mark or a homemade approximation.
+- Bad: a file name exists in `FIRST_CLASS_ICON_FILES`, but Vite resolves `undefined` and the UI silently loads a Registry icon.
+
+### 6. Tests Required
+
+- Assert exact, unique key coverage across the ID, file, and source maps.
+- Lock corrected high-risk mappings to their exact source kind/reference/status.
+- Resolve all mapped Vite paths in a focused test and prove one missing path throws the provider/path-specific error.
+- Parse and render every public asset at 32 px on a white background; inspect the contact sheet.
+- Keep English and Chinese README names/counts aligned with the public identity set.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const icons = Object.fromEntries(entries) as Record<ProviderId, string>
+// An undefined glob result is hidden by the cast and falls back later.
+```
+
+#### Correct
+
+```ts
+const icons = resolveFirstClassIconAssets(import.meta.glob("../assets/provider-icons/*"))
+// Every provider path is checked before the typed Record is returned.
+```
+
 ## Scenario: Suggest child tasks with the assigned agent's Harness
 
 ### 1. Scope / Trigger

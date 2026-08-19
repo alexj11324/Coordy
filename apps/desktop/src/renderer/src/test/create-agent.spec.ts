@@ -42,8 +42,10 @@ import {
 import {
   FIRST_CLASS_PROVIDER_IDS,
   FIRST_CLASS_ICON_FILES,
+  FIRST_CLASS_ICON_SOURCES,
   firstClassIconSignature,
   registryIconUrl,
+  resolveFirstClassIconAssets,
 } from "../features/provider-logo";
 import { RuntimePicker } from "../features/runtime-picker";
 import {
@@ -224,7 +226,6 @@ describe("agent creation studio helpers", () => {
       "cursor",
       "deveco",
       "dsh",
-      "gemini",
       "grok",
       "hermes",
       "kimi",
@@ -241,18 +242,76 @@ describe("agent creation studio helpers", () => {
       "reasonix",
       "traecli",
     ];
-    expect(FIRST_CLASS_PROVIDER_IDS).toHaveLength(24);
-    expect(new Set(FIRST_CLASS_PROVIDER_IDS).size).toBe(24);
+    expect(FIRST_CLASS_PROVIDER_IDS).toHaveLength(23);
+    expect(new Set(FIRST_CLASS_PROVIDER_IDS).size).toBe(23);
     expect([...FIRST_CLASS_PROVIDER_IDS].sort()).toEqual(expected);
     expect(Object.keys(FIRST_CLASS_ICON_FILES).sort()).toEqual(expected);
+    expect(Object.keys(FIRST_CLASS_ICON_SOURCES).sort()).toEqual(expected);
     for (const id of FIRST_CLASS_PROVIDER_IDS) {
       expect(FIRST_CLASS_ICON_FILES[id]).toMatch(/\.(svg|png|webp)$/);
+      expect(FIRST_CLASS_ICON_SOURCES[id].sourceRef).not.toHaveLength(0);
       expect(firstClassIconSignature(id)).toBe(
-        `multica-local:${FIRST_CLASS_ICON_FILES[id]}`,
+        `provider-local:${FIRST_CLASS_ICON_FILES[id]}`,
       );
     }
-    expect(firstClassIconSignature("copilot")).toBe(
-      "multica-local:copilot.svg",
+    expect(FIRST_CLASS_ICON_FILES).toMatchObject({
+      copilot: "copilot.svg",
+      grok: "grok.svg",
+      kimi: "kimi.svg",
+      qoder: "qoder.svg",
+      qoderclicn: "qoderclicn.svg",
+    });
+    expect(FIRST_CLASS_ICON_SOURCES).toMatchObject({
+      copilot: {
+        sourceKind: "provider-repository",
+        sourceRef:
+          "https://github.com/primer/octicons/blob/main/icons/copilot-48.svg",
+        status: "provider-controlled",
+      },
+      grok: {
+        sourceKind: "registry",
+        sourceRef:
+          "https://cdn.agentclientprotocol.com/registry/v1/latest/grok-build.svg",
+        status: "exact-registry",
+      },
+      kimi: {
+        sourceKind: "registry",
+        sourceRef:
+          "https://cdn.agentclientprotocol.com/registry/v1/latest/kimi.svg",
+        status: "exact-registry",
+      },
+      qoder: {
+        sourceKind: "provider-site",
+        sourceRef:
+          "https://img.alicdn.com/imgextra/i3/O1CN01KliT1u1jEq947NlKH_!!6000000004517-55-tps-180-180.svg",
+        status: "provider-controlled",
+      },
+      qoderclicn: {
+        sourceKind: "shared-family",
+        sourceRef: "qoder",
+        status: "shared-family",
+      },
+    });
+    expect(firstClassIconSignature("gemini")).toBeNull();
+  });
+
+  it("fails closed when a first-class local icon asset is unresolved", () => {
+    const assets = Object.fromEntries(
+      FIRST_CLASS_PROVIDER_IDS.map((id) => [
+        `../assets/provider-icons/${FIRST_CLASS_ICON_FILES[id]}`,
+        `resolved:${id}`,
+      ]),
+    );
+    const resolved = resolveFirstClassIconAssets(assets);
+    expect(resolved.grok).toBe("resolved:grok");
+    expect(Object.keys(resolved)).toHaveLength(23);
+
+    const missingPath = `../assets/provider-icons/${FIRST_CLASS_ICON_FILES.grok}`;
+    const withoutGrok = Object.fromEntries(
+      Object.entries(assets).filter(([path]) => path !== missingPath),
+    );
+    expect(() => resolveFirstClassIconAssets(withoutGrok)).toThrow(
+      `Missing local icon asset for first-class provider "grok": ${missingPath}`,
     );
   });
 
