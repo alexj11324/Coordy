@@ -5,7 +5,11 @@ use serde_json::{json, Value};
 
 use crate::secrets::SecretStore;
 
-pub async fn complete_draft(store: &SecretStore, kind: &str, prompt: &str) -> Result<DraftCompletion, CoordyError> {
+pub async fn complete_draft(
+    store: &SecretStore,
+    kind: &str,
+    prompt: &str,
+) -> Result<DraftCompletion, CoordyError> {
     let env = store.env();
     let api_key = env.api_key.filter(|key| !key.is_empty()).ok_or_else(|| {
         CoordyError::unavailable("未配置模型密钥。请在设置 → 模型密钥中填写后再使用对话起草。")
@@ -36,7 +40,8 @@ pub async fn complete_draft(store: &SecretStore, kind: &str, prompt: &str) -> Re
 }
 
 fn parse_draft(kind: &str, text: &str) -> Result<DraftCompletion, CoordyError> {
-    let json_text = extract_json(text).ok_or_else(|| CoordyError::unavailable("model did not return JSON"))?;
+    let json_text =
+        extract_json(text).ok_or_else(|| CoordyError::unavailable("model did not return JSON"))?;
     let value: Value = serde_json::from_str(json_text)
         .map_err(|err| CoordyError::unavailable(format!("model JSON: {err}")))?;
     let mut out = DraftCompletion {
@@ -70,7 +75,9 @@ fn parse_draft(kind: &str, text: &str) -> Result<DraftCompletion, CoordyError> {
             .collect();
     }
     if kind == "agent" && out.name.is_empty() && out.instructions.is_empty() {
-        return Err(CoordyError::unavailable("model did not fill an agent draft"));
+        return Err(CoordyError::unavailable(
+            "model did not fill an agent draft",
+        ));
     }
     if kind == "subtasks" && out.titles.is_empty() {
         return Err(CoordyError::unavailable("model did not return titles"));

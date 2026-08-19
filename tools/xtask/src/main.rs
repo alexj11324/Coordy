@@ -56,7 +56,7 @@ fn enum_variants(src: &str, name: &str) -> Vec<String> {
             continue;
         }
         let ident = line
-            .split(|c: char| c == '{' || c == ',' || c.is_whitespace())
+            .split(|c: char| c == '{' || c == '(' || c == ',' || c.is_whitespace())
             .next()
             .unwrap_or("");
         if ident.starts_with(char::is_uppercase) {

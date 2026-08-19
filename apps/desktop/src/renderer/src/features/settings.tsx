@@ -29,6 +29,7 @@ import {
   User,
   Users,
   FlaskConical,
+  Github,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -63,6 +64,7 @@ import { StatusLamp } from "./status-lamp";
 import { updateWorkspaceConductorCommand } from "./graph/graph-commands";
 import { useSession } from "../state/session-store";
 import { applyTheme, FONT_SIZE_OPTIONS, useThemeStore, type ThemePreference } from "../state/theme-store";
+import type { GithubView } from "@coordy/protocol";
 
 const ACCOUNT_TABS = [
   { id: "profile", label: "个人资料", icon: User },
@@ -79,6 +81,7 @@ const ACCOUNT_TABS = [
 const WORKSPACE_TABS = [
   { id: "general", label: "常规", icon: SettingsIcon },
   { id: "repositories", label: "代码仓库", icon: FolderGit2 },
+  { id: "github", label: "GitHub", icon: Github },
   { id: "cloud", label: "云通道", icon: Plug },
   { id: "labs", label: "实验室", icon: FlaskConical },
   { id: "members", label: "成员", icon: Users },
@@ -127,8 +130,8 @@ export function SettingsPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const tab: SettingsTab =
-    raw === "github" || raw === "integrations"
-      ? "cloud"
+    raw === "integrations"
+      ? "github"
       : isSettingsTab(raw)
         ? raw
         : "profile";
@@ -362,11 +365,20 @@ function SettingsPane({
           </Button>
         </Pane>
       );
+    case "github":
+      return (
+        <GithubPane
+          workspaceId={workspaceId}
+          repoPath={repoPath ?? null}
+          github={settings.data?.type === "Settings" ? settings.data.github : undefined}
+          onSaved={invalidate}
+        />
+      );
     case "cloud":
       return (
-        <Pane title="云通道" description="本机桌面不提供云通道，也不假装有 OAuth 或公网入站。">
+        <Pane title="云通道" description="本机桌面不提供公网入站或即时通讯云通道。">
           <p className="text-sm text-muted-foreground">
-            不提供 GitHub App、Pull Request 侧栏、CI，也不提供飞书 / Slack / 钉钉 / 企业微信。仓库绑定入口位于「代码仓库」。模型密钥位于「模型密钥」。
+            不提供飞书 / Slack / 钉钉 / 企业微信。GitHub 已改走本机 GitHub CLI，入口在「GitHub」。仓库绑定入口位于「代码仓库」。模型密钥位于「模型密钥」。
           </p>
         </Pane>
       );
@@ -620,6 +632,88 @@ function ShortcutsPane({ os }: { os?: string }) {
           ))}
         </div>
       ))}
+    </Pane>
+  );
+}
+
+function GithubPane({
+  workspaceId,
+  repoPath,
+  github,
+  onSaved,
+}: {
+  workspaceId: string | null;
+  repoPath: string | null;
+  github?: GithubView;
+  onSaved: () => void;
+}) {
+  const enabled = github?.enabled !== false;
+  const sidebar = github?.pr_sidebar !== false;
+  const autoLink = github?.auto_link !== false;
+  const [busy, setBusy] = useState(false);
+  const lamp = !github?.last_synced_at
+    ? { tone: "gray" as const, label: "尚未探测" }
+    : !github.cli_available
+      ? { tone: "red" as const, label: "未安装 gh" }
+      : github.authenticated
+        ? { tone: "green" as const, label: github.account ? `已登录 · ${github.account}` : "已登录" }
+        : { tone: "yellow" as const, label: "未登录" };
+
+  async function setFlag(kind: string, next: boolean) {
+    if (!workspaceId) return;
+    await submit({ type: "SetIntegration", workspace_id: workspaceId, kind, enabled: next });
+    onSaved();
+  }
+
+  return (
+    <Pane
+      title="GitHub"
+      description="通过本机 GitHub CLI（gh）读取 PR 状态与 CI。不需要在 Coordy 里做 GitHub OAuth 或安装 GitHub App。"
+    >
+      <Row label="GitHub CLI" hint={github?.last_error || (repoPath ? repoPath : "先在「代码仓库」绑定本机目录")}>
+        <span className="inline-flex items-center justify-end gap-2 text-sm">
+          <StatusLamp tone={lamp.tone} label={lamp.label} className="size-2.5" />
+          {lamp.label}
+        </span>
+      </Row>
+      <Row label="上次同步" hint={github?.last_synced_at ? github.last_synced_at.replace("T", " ").slice(0, 19) : "尚未同步"}>
+        <Button
+          variant="secondary"
+          disabled={!workspaceId || busy}
+          onClick={async () => {
+            if (!workspaceId) return;
+            setBusy(true);
+            try {
+              await submit({ type: "RefreshGithub", workspace_id: workspaceId });
+              onSaved();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "同步中…" : "立即同步"}
+        </Button>
+      </Row>
+      <Row label="GitHub 集成" hint="关闭后停止自动关联与 CI 刷新，已关联的 PR 仍保留。">
+        <Switch checked={enabled} disabled={!workspaceId} onCheckedChange={(next) => void setFlag("github", Boolean(next))} />
+      </Row>
+      <Row label="PR 侧栏" hint="在事项详情显示关联的 pull request、CI 与可合并性。">
+        <Switch
+          checked={sidebar}
+          disabled={!workspaceId || !enabled}
+          onCheckedChange={(next) => void setFlag("github_pr_sidebar", Boolean(next))}
+        />
+      </Row>
+      <Row label="自动关联 PR" hint="从分支名、标题识别事项编号；正文需使用 Closes / Fixes / Resolves 紧跟编号。">
+        <Switch
+          checked={autoLink}
+          disabled={!workspaceId || !enabled}
+          onCheckedChange={(next) => void setFlag("github_auto_link", Boolean(next))}
+        />
+      </Row>
+      <p className="pt-2 text-sm text-muted-foreground">
+        未安装时：安装 GitHub CLI 后运行 `gh auth login`。CI 来自 `gh pr list` 的 statusCheckRollup；没有检查不会显示为通过。已合并且带关闭语句的 PR 会在没有其他 Open/Draft 工作 PR 时把事项标为完成。
+      </p>
     </Pane>
   );
 }

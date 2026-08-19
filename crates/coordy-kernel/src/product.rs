@@ -1,9 +1,10 @@
 use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
-    CommentView, ComputerView, CoordyError, DependencyView, Effect, GraphEdgeKind, GraphEdgeState,
-    GraphEdgeView, GraphHealthView, GraphNodeView, InboxView, LabelView, Mention, NodeKind,
-    NodeMaterializationView, NodeRef, Outcome, ProjectView, SkillView, SquadView, StatsView,
-    TaskView, WorkspaceView, ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON,
+    CommentView, ComputerView, CoordyError, DependencyView, Effect, GithubPullRequestItem,
+    GithubView, GraphEdgeKind, GraphEdgeState, GraphEdgeView, GraphHealthView, GraphNodeView,
+    InboxView, LabelView, Mention, NodeKind, NodeMaterializationView, NodeRef, Outcome,
+    ProjectView, PullRequestView, SkillView, SquadView, StatsView, TaskView, WorkspaceView,
+    ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
@@ -235,6 +236,265 @@ pub fn push_notice(
 
 fn emit_changed(world: &mut World, workspace_id: String) {
     crate::runtime::Kernel::emit_effect(world, Effect::StateChanged { workspace_id });
+}
+
+pub fn github_flag(world: &World, workspace_id: &str, kind: &str) -> bool {
+    world
+        .integrations
+        .iter()
+        .find(|row| row.workspace_id == workspace_id && row.kind == kind)
+        .map(|row| row.enabled)
+        .unwrap_or(true)
+}
+
+pub fn github_view(world: &World, workspace_id: &str) -> GithubView {
+    let state = world
+        .github
+        .iter()
+        .find(|row| row.workspace_id == workspace_id);
+    GithubView {
+        enabled: github_flag(world, workspace_id, "github"),
+        pr_sidebar: github_flag(world, workspace_id, "github_pr_sidebar"),
+        auto_link: github_flag(world, workspace_id, "github_auto_link"),
+        cli_available: state.map(|row| row.cli_available).unwrap_or(false),
+        authenticated: state.map(|row| row.authenticated).unwrap_or(false),
+        account: state.map(|row| row.account.clone()).unwrap_or_default(),
+        last_error: state.map(|row| row.last_error.clone()).unwrap_or_default(),
+        last_synced_at: state
+            .map(|row| row.last_synced_at.clone())
+            .unwrap_or_default(),
+    }
+}
+
+fn upsert_github_state(
+    world: &mut World,
+    workspace_id: &str,
+    cli_available: bool,
+    authenticated: bool,
+    account: String,
+    error: String,
+    fetched_at: String,
+) {
+    if let Some(row) = world
+        .github
+        .iter_mut()
+        .find(|row| row.workspace_id == workspace_id)
+    {
+        row.cli_available = cli_available;
+        row.authenticated = authenticated;
+        row.account = account;
+        row.last_error = error;
+        row.last_synced_at = fetched_at;
+        return;
+    }
+    world.github.push(crate::world::GithubState {
+        workspace_id: workspace_id.into(),
+        cli_available,
+        authenticated,
+        account,
+        last_error: error,
+        last_synced_at: fetched_at,
+    });
+}
+
+fn apply_pr_snapshot(
+    existing: Option<&PullRequestView>,
+    item: &GithubPullRequestItem,
+    linked_by: &str,
+    close_intent: bool,
+    fetched_at: &str,
+    stale: bool,
+) -> PullRequestView {
+    PullRequestView {
+        number: item.number,
+        url: if item.url.is_empty() {
+            existing.map(|row| row.url.clone()).unwrap_or_default()
+        } else {
+            item.url.clone()
+        },
+        title: item.title.clone(),
+        state: item.state.clone(),
+        repo: item.repo.clone(),
+        branch: item.branch.clone(),
+        author: item.author.clone(),
+        additions: item.additions,
+        deletions: item.deletions,
+        changed_files: item.changed_files,
+        mergeable: item.mergeable.clone(),
+        merge_state: item.merge_state.clone(),
+        checks_rollup: item.checks_rollup.clone(),
+        checks_total: item.checks_total,
+        checks_passed: item.checks_passed,
+        checks_failed: item.checks_failed,
+        checks_running: item.checks_running,
+        failed_check_names: item.failed_check_names.clone(),
+        snapshot_available: item.snapshot_available,
+        snapshot_stale: stale,
+        snapshot_fetched_at: fetched_at.into(),
+        linked_by: linked_by.into(),
+        close_intent,
+    }
+}
+
+fn sync_github_pull_requests(
+    world: &mut World,
+    workspace_id: &str,
+    items: &[GithubPullRequestItem],
+    fetched_at: &str,
+    stale: bool,
+) -> (u32, Vec<String>, Vec<String>) {
+    let enabled = github_flag(world, workspace_id, "github");
+    let auto_link = enabled && github_flag(world, workspace_id, "github_auto_link");
+    let prefix = world
+        .workspace(workspace_id)
+        .map(|ws| {
+            if ws.issue_prefix.is_empty() {
+                "COOR".into()
+            } else {
+                ws.issue_prefix.clone()
+            }
+        })
+        .unwrap_or_else(|| "COOR".into());
+    let mut linked = 0u32;
+    if enabled && !stale {
+        let by_number: std::collections::BTreeMap<u32, &GithubPullRequestItem> =
+            items.iter().map(|item| (item.number, item)).collect();
+        for task in world
+            .tasks
+            .iter_mut()
+            .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+        {
+            let identifier = task.identifier.clone();
+            for pr in task.pull_requests.iter_mut() {
+                if let Some(item) = by_number.get(&pr.number) {
+                    let linked_by = if pr.linked_by.is_empty() {
+                        "manual".to_string()
+                    } else {
+                        pr.linked_by.clone()
+                    };
+                    let close_intent =
+                        crate::github::issue_links(&prefix, &item.branch, &item.title, &item.body)
+                            .iter()
+                            .any(|link| link.identifier == identifier && link.close_intent);
+                    let current = pr.clone();
+                    *pr = apply_pr_snapshot(
+                        Some(&current),
+                        item,
+                        &linked_by,
+                        close_intent,
+                        fetched_at,
+                        false,
+                    );
+                    linked += 1;
+                }
+            }
+        }
+        if auto_link {
+            let mut additions: Vec<(String, PullRequestView)> = Vec::new();
+            for item in items {
+                let matches =
+                    crate::github::issue_links(&prefix, &item.branch, &item.title, &item.body);
+                for link in matches {
+                    if let Some(task) = world.tasks.iter().find(|task| {
+                        task.workspace_id == workspace_id
+                            && !task.deleted
+                            && task.identifier.eq_ignore_ascii_case(&link.identifier)
+                    }) {
+                        if task.pull_requests.iter().any(|pr| pr.number == item.number) {
+                            continue;
+                        }
+                        additions.push((
+                            task.id.clone(),
+                            apply_pr_snapshot(
+                                None,
+                                item,
+                                "auto",
+                                link.close_intent,
+                                fetched_at,
+                                false,
+                            ),
+                        ));
+                    }
+                }
+            }
+            for (task_id, pr) in additions {
+                if let Some(task) = world.task_mut(&task_id) {
+                    task.pull_requests.retain(|row| row.number != pr.number);
+                    task.pull_requests.push(pr);
+                    linked += 1;
+                }
+            }
+            for task in world
+                .tasks
+                .iter_mut()
+                .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+            {
+                task.pull_requests.retain(|pr| {
+                    pr.linked_by != "auto" || items.iter().any(|item| item.number == pr.number)
+                });
+            }
+        }
+    } else if stale {
+        for task in world
+            .tasks
+            .iter_mut()
+            .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+        {
+            for pr in &mut task.pull_requests {
+                if pr.snapshot_available {
+                    pr.snapshot_stale = true;
+                }
+            }
+        }
+    }
+    let (completed, released) = complete_issues_from_merged_prs(world, workspace_id);
+    (linked, completed, released)
+}
+
+fn complete_issues_from_merged_prs(
+    world: &mut World,
+    workspace_id: &str,
+) -> (Vec<String>, Vec<String>) {
+    let candidates: Vec<(String, String)> = world
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.workspace_id == workspace_id
+                && !task.deleted
+                && !matches!(task.status.as_str(), "done" | "cancelled")
+                && task
+                    .pull_requests
+                    .iter()
+                    .any(|pr| crate::github::is_merged_state(&pr.state) && pr.close_intent)
+                && !task
+                    .pull_requests
+                    .iter()
+                    .any(|pr| crate::github::is_working_state(&pr.state))
+        })
+        .map(|task| (task.id.clone(), task.title.clone()))
+        .collect();
+    let mut completed = Vec::new();
+    let mut released_all = Vec::new();
+    for (task_id, title) in candidates {
+        if reject_if_unresolved_blockers(world, &task_id).is_err() {
+            continue;
+        }
+        if let Some(task) = world.task_mut(&task_id) {
+            task.status = "done".into();
+            task.blocked_reason = None;
+        }
+        released_all.extend(refresh_issue_blocker_dependents(world, &task_id));
+        push_notice(
+            world,
+            workspace_id,
+            "status",
+            "PR 已合并，事项完成",
+            &title,
+            Some(task_id.clone()),
+        );
+        completed.push(task_id);
+    }
+    (completed, released_all)
 }
 
 pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outcome, CoordyError> {
@@ -1432,13 +1692,72 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_member(world, actor, &task.workspace_id)?;
             if let Some(row) = world.task_mut(&task_id) {
                 row.pull_requests.retain(|p| p.number != number);
-                row.pull_requests
-                    .push(coordy_protocol::PullRequestView { number, url });
+                row.pull_requests.push(PullRequestView::manual(number, url));
             }
             emit_changed(world, task.workspace_id);
             Ok(Outcome::ok(
                 "pr linked",
                 json!({ "task_id": task_id, "number": number }),
+            ))
+        }
+        Command::UnlinkPullRequest { task_id, number } => {
+            require_not_agent(actor)?;
+            let task = world
+                .task(&task_id)
+                .cloned()
+                .ok_or_else(|| CoordyError::not_found("task"))?;
+            require_member(world, actor, &task.workspace_id)?;
+            if let Some(row) = world.task_mut(&task_id) {
+                row.pull_requests.retain(|p| p.number != number);
+            }
+            emit_changed(world, task.workspace_id);
+            Ok(Outcome::ok(
+                "pr unlinked",
+                json!({ "task_id": task_id, "number": number }),
+            ))
+        }
+        Command::SyncGithubPullRequests(sync) => {
+            if !matches!(actor, Actor::Daemon) {
+                return Err(CoordyError::denied(
+                    "only the daemon may submit GitHub snapshots",
+                ));
+            }
+            let fetched_at = if sync.fetched_at.is_empty() {
+                ids::now()
+            } else {
+                sync.fetched_at.clone()
+            };
+            let stale = !sync.error.is_empty();
+            upsert_github_state(
+                world,
+                &sync.workspace_id,
+                sync.cli_available,
+                sync.authenticated,
+                sync.account.clone(),
+                sync.error.clone(),
+                fetched_at.clone(),
+            );
+            let (linked, completed, released) = sync_github_pull_requests(
+                world,
+                &sync.workspace_id,
+                &sync.items,
+                &fetched_at,
+                stale,
+            );
+            let message = if sync.error.is_empty() {
+                "github synced"
+            } else {
+                "github sync failed"
+            };
+            emit_changed(world, sync.workspace_id.clone());
+            Ok(Outcome::ok(
+                message,
+                json!({
+                    "linked": linked,
+                    "completed": completed,
+                    "released_task_ids": released,
+                    "changed": linked > 0 || !completed.is_empty() || !sync.error.is_empty(),
+                }),
             ))
         }
         Command::SetIntegration {

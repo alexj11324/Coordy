@@ -10,6 +10,7 @@ export const BUILDER_STARTER_PROMPTS = [
 export const DEFAULT_MODEL_VALUE = "__default__";
 
 export type AgentAccess = "owner" | "workspace";
+export type ToolAccess = "auto" | "full_access";
 
 export type AgentDraft = {
   name: string;
@@ -21,6 +22,7 @@ export type AgentDraft = {
   speed: string;
   avatar: string;
   access: AgentAccess;
+  toolAccess: ToolAccess;
 };
 
 export const EMPTY_AGENT_DRAFT: AgentDraft = {
@@ -33,10 +35,15 @@ export const EMPTY_AGENT_DRAFT: AgentDraft = {
   speed: "",
   avatar: "",
   access: "owner",
+  toolAccess: "auto",
 };
 
 export function emptyAgentDraft(): AgentDraft {
   return { ...EMPTY_AGENT_DRAFT, avatar: newAgentAvatarRef() };
+}
+
+export function parseToolAccess(value: unknown): ToolAccess {
+  return value === "full_access" ? "full_access" : "auto";
 }
 
 export type BuilderMessage = {
