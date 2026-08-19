@@ -85,6 +85,7 @@ export function projectGraph(input: GraphProjectionInput): { nodes: GraphNode[];
 
   const nodes: GraphNode[] = [];
   for (const node of snapshot.nodes) {
+    if (node.kind === "contract") continue;
     if (node.kind === "agent") {
       if (!layers.agents) continue;
       if (isPlaceholderHarness(node.harness ?? node.subtitle ?? "")) continue;

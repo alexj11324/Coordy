@@ -100,6 +100,25 @@ function snapshot(partial: Partial<GraphSnapshotView> = {}): GraphSnapshotView {
 }
 
 describe("projectGraph", () => {
+  it("keeps contract nodes out of the task layer until the contract layer exists", () => {
+    const result = projectGraph({
+      snapshot: snapshot({
+        nodes: [
+          {
+            id: "contract_1",
+            kind: "contract",
+            title: "Approval contract",
+            status: "active",
+            workspace_id: "ws_1",
+          },
+        ],
+        edges: [],
+      }),
+    });
+
+    expect(result).toEqual({ nodes: [], edges: [] });
+  });
+
   it("projects assigned and depends_on edges source→target, marking invalid consumes stale", () => {
     const { nodes, edges } = projectGraph({ snapshot: snapshot() });
     expect(nodes.map((node) => node.id).sort()).toEqual([
