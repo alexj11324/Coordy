@@ -85,7 +85,7 @@ export function CommandPalette({ os }: { os?: string }) {
         label: "新建聊天",
         keywords: ["new", "chat", "聊天", "对话", "创建"],
         run: () => {
-          useLayoutStore.getState().openChatDock();
+          useLayoutStore.getState().startNewChat();
           setOpen(false);
         },
       },

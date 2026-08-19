@@ -109,6 +109,12 @@ export function FloatingChat() {
   useEffect(() => {
     if (chatDetail?.taskPlan) setPlanResult(null);
   }, [chatDetail?.taskPlan?.id]);
+  useEffect(() => {
+    if (activeChatId === null) {
+      setDraft("");
+      setError(null);
+    }
+  }, [activeChatId]);
 
   const timeline = useMemo(
     () => chatTimeline(chatDetail?.messages ?? [], displayedRunEvents, latestRun?.id),

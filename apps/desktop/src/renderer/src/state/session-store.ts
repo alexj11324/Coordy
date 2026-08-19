@@ -16,7 +16,17 @@ export const useSession = create<SessionState>((set) => ({
   principalId: null,
   agentId: null,
   actor: { type: "daemon" },
-  setWorkspace: (workspaceId) => set({ workspaceId }),
+  setWorkspace: (workspaceId) =>
+    set((state) =>
+      state.workspaceId === workspaceId
+        ? state
+        : {
+            workspaceId,
+            principalId: null,
+            agentId: null,
+            actor: { type: "daemon" },
+          },
+    ),
   setPrincipal: (principalId) =>
     set({
       principalId,

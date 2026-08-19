@@ -2684,7 +2684,12 @@ pub fn stats_view(world: &World, workspace_id: &str) -> StatsView {
     let issues = world
         .tasks
         .iter()
-        .filter(|t| t.workspace_id == workspace_id && !t.deleted)
+        .filter(|t| {
+            t.workspace_id == workspace_id
+                && !t.deleted
+                && t.stage != "chat"
+                && !t.labels.iter().any(|label| label == "chat")
+        })
         .collect::<Vec<_>>();
     StatsView {
         issue_count: issues.len(),

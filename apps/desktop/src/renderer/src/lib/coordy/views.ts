@@ -81,6 +81,11 @@ export function asRuns(view: View | undefined): RunView[] {
   return view?.type === "Runs" ? view.items : [];
 }
 
+export function activeHomeRun(runs: RunView[], pinnedRunId: string | null): RunView | undefined {
+  if (pinnedRunId) return runs.find((run) => run.id === pinnedRunId);
+  return runs.at(-1);
+}
+
 export function asRunDetail(
   view: View | undefined,
 ): { run: RunView; events: RunEventView[] } | null {
