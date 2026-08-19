@@ -18,6 +18,7 @@ export async function createNamedAgent(input: {
   thinking?: string;
   speed?: string;
   access?: string;
+  toolAccess?: string;
   avatar?: string;
 }): Promise<string> {
   const created = await submit({
@@ -34,6 +35,7 @@ export async function createNamedAgent(input: {
   const thinking = input.thinking?.trim() ?? "";
   const speed = input.speed?.trim() ?? "";
   const access = input.access?.trim() ?? "";
+  const toolAccess = input.toolAccess?.trim() ?? "";
   const avatar = storedAgentAvatar(input.avatar, agentId);
   await submit({
     type: "UpdateAgent",
@@ -44,6 +46,7 @@ export async function createNamedAgent(input: {
     thinking: thinking || null,
     speed: speed || null,
     access: access || null,
+    tool_access: toolAccess || null,
     avatar,
   });
   return agentId;

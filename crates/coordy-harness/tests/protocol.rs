@@ -2,6 +2,20 @@ use coordy_harness::{
     canonical_harness_id, display_args, native_launch_args, protocol_family, ProtocolFamily,
 };
 
+fn launch(
+    family: ProtocolFamily,
+    prompt: &str,
+    model: &str,
+    thinking: &str,
+    speed: &str,
+) -> Vec<String> {
+    native_launch_args(family, prompt, model, thinking, speed, "auto")
+}
+
+fn launch_full(family: ProtocolFamily, prompt: &str) -> Vec<String> {
+    native_launch_args(family, prompt, "", "", "", "full_access")
+}
+
 #[test]
 fn leftover_acp_ids_collapse_onto_native_catalog() {
     assert_eq!(canonical_harness_id("claude-acp"), "claude");
@@ -31,7 +45,7 @@ fn known_clis_use_native_families_not_acp() {
 
 #[test]
 fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
-    let claude = native_launch_args(ProtocolFamily::Claude, "review this", "opus", "", "");
+    let claude = launch(ProtocolFamily::Claude, "review this", "opus", "", "");
     assert_eq!(claude[0], "-p");
     assert_eq!(claude[1], "review this");
     assert!(claude
@@ -41,14 +55,14 @@ fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
     assert!(!claude.iter().any(|a| a == "acp" || a == "--acp"));
     assert!(!claude.iter().any(|a| a == "--effort"));
 
-    let cursor = native_launch_args(ProtocolFamily::Cursor, "review this", "", "", "");
+    let cursor = launch(ProtocolFamily::Cursor, "review this", "", "", "");
     assert_eq!(cursor[0], "-p");
     assert_eq!(cursor.last().map(String::as_str), Some("review this"));
     assert!(cursor
         .windows(2)
         .any(|w| w == ["--output-format", "stream-json"]));
 
-    let codex = native_launch_args(ProtocolFamily::Codex, "review this", "gpt-5.4", "", "");
+    let codex = launch(ProtocolFamily::Codex, "review this", "gpt-5.4", "", "");
     assert_eq!(codex[0], "exec");
     assert!(codex.iter().any(|a| a == "--json"));
     assert_eq!(codex.last().map(String::as_str), Some("review this"));
@@ -57,7 +71,7 @@ fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
         .any(|a| a.starts_with("model_reasoning_effort=")));
     assert!(!codex.iter().any(|a| a.starts_with("service_tier=")));
 
-    let gemini = native_launch_args(
+    let gemini = launch(
         ProtocolFamily::Gemini,
         "review this",
         "gemini-2.5-pro",
@@ -70,39 +84,71 @@ fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
 }
 
 #[test]
-fn native_launch_args_inject_unattended_auto_approve() {
-    let claude = native_launch_args(ProtocolFamily::Claude, "review this", "", "", "");
-    assert!(claude
+fn auto_keeps_safety_checks_full_access_skips_them() {
+    let claude_auto = launch(ProtocolFamily::Claude, "review this", "", "", "");
+    assert!(claude_auto
+        .windows(2)
+        .any(|w| w == ["--permission-mode", "auto"]));
+    assert!(!claude_auto
+        .iter()
+        .any(|a| a == "bypassPermissions" || a == "--dangerously-skip-permissions"));
+
+    let claude_full = launch_full(ProtocolFamily::Claude, "review this");
+    assert!(claude_full
         .windows(2)
         .any(|w| w == ["--permission-mode", "bypassPermissions"]));
-    assert!(!claude.iter().any(|a| a == "--dangerously-skip-permissions"));
+    assert!(!claude_full
+        .windows(2)
+        .any(|w| w == ["--permission-mode", "auto"]));
 
-    let codex = native_launch_args(ProtocolFamily::Codex, "review this", "", "", "");
-    assert!(codex
+    let codex_auto = launch(ProtocolFamily::Codex, "review this", "", "", "");
+    assert!(codex_auto
+        .windows(2)
+        .any(|w| w == ["--sandbox", "workspace-write"]));
+    assert!(codex_auto.iter().any(|a| a.contains("network_access=true")));
+    assert!(!codex_auto.iter().any(|a| a == "danger-full-access"));
+
+    let codex_full = launch_full(ProtocolFamily::Codex, "review this");
+    assert!(codex_full
         .windows(2)
         .any(|w| w == ["--sandbox", "danger-full-access"]));
-    assert!(codex
+    assert_eq!(codex_full.last().map(String::as_str), Some("review this"));
+
+    let gemini_auto = launch(ProtocolFamily::Gemini, "review this", "", "", "");
+    assert!(gemini_auto
         .windows(2)
-        .any(|w| w == ["--ask-for-approval", "never"]));
-    assert_eq!(codex.last().map(String::as_str), Some("review this"));
+        .any(|w| w == ["--approval-mode", "auto_edit"]));
+    assert!(!gemini_auto.iter().any(|a| a == "--yolo"));
 
-    let gemini = native_launch_args(ProtocolFamily::Gemini, "review this", "", "", "");
-    assert!(gemini.iter().any(|a| a == "--yolo"));
+    let gemini_full = launch_full(ProtocolFamily::Gemini, "review this");
+    assert!(gemini_full.iter().any(|a| a == "--yolo"));
 
-    let opencode = native_launch_args(ProtocolFamily::OpenCode, "review this", "", "", "");
-    assert!(opencode
+    let opencode_auto = launch(ProtocolFamily::OpenCode, "review this", "", "", "");
+    assert!(!opencode_auto
+        .iter()
+        .any(|a| a == "--dangerously-skip-permissions"));
+    let opencode_full = launch_full(ProtocolFamily::OpenCode, "review this");
+    assert!(opencode_full
         .iter()
         .any(|a| a == "--dangerously-skip-permissions"));
 
-    let copilot = native_launch_args(ProtocolFamily::Copilot, "review this", "", "", "");
-    assert!(copilot.iter().any(|a| a == "--allow-all"));
+    assert!(!launch(ProtocolFamily::Copilot, "review this", "", "", "")
+        .iter()
+        .any(|a| a == "--allow-all"));
+    assert!(launch_full(ProtocolFamily::Copilot, "review this")
+        .iter()
+        .any(|a| a == "--allow-all"));
 
-    let cursor = native_launch_args(ProtocolFamily::Cursor, "review this", "", "", "");
-    assert!(cursor.iter().any(|a| a == "--trust"));
+    assert!(!launch(ProtocolFamily::Cursor, "review this", "", "", "")
+        .iter()
+        .any(|a| a == "--trust"));
+    assert!(launch_full(ProtocolFamily::Cursor, "review this")
+        .iter()
+        .any(|a| a == "--trust"));
 }
 
 #[test]
-fn catalog_display_args_include_spawn_auto_approve_flags() {
+fn catalog_display_args_are_present_on_spawn() {
     for family in [
         ProtocolFamily::Claude,
         ProtocolFamily::Codex,
@@ -111,11 +157,11 @@ fn catalog_display_args_include_spawn_auto_approve_flags() {
         ProtocolFamily::Cursor,
         ProtocolFamily::Gemini,
     ] {
-        let launch = native_launch_args(family, "review this", "", "", "");
+        let launched = launch(family, "review this", "", "", "");
         for flag in display_args(family) {
             assert!(
-                launch.iter().any(|a| a == flag),
-                "{family:?} spawn missing catalog flag {flag}: {launch:?}"
+                launched.iter().any(|a| a == flag),
+                "{family:?} spawn missing catalog flag {flag}: {launched:?}"
             );
         }
     }
@@ -124,7 +170,7 @@ fn catalog_display_args_include_spawn_auto_approve_flags() {
 
 #[test]
 fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
-    let claude = native_launch_args(
+    let claude = launch(
         ProtocolFamily::Claude,
         "review this",
         "claude-opus-4-8",
@@ -137,7 +183,7 @@ fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
     assert!(claude.windows(2).any(|w| w == ["--effort", "xhigh"]));
     assert!(!claude.iter().any(|a| a.contains("service_tier")));
 
-    let codex = native_launch_args(
+    let codex = launch(
         ProtocolFamily::Codex,
         "review this",
         "gpt-5.6-sol",
@@ -151,7 +197,7 @@ fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
     assert!(codex.windows(2).any(|w| w == ["-c", "service_tier=fast"]));
     assert_eq!(codex.last().map(String::as_str), Some("review this"));
 
-    let opencode = native_launch_args(
+    let opencode = launch(
         ProtocolFamily::OpenCode,
         "review this",
         "anthropic/claude-sonnet-4-6",
@@ -167,11 +213,11 @@ fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
 
 #[test]
 fn native_launch_args_append_cli_args_except_acp() {
-    let mut claude = native_launch_args(ProtocolFamily::Claude, "review this", "", "", "");
+    let mut claude = launch(ProtocolFamily::Claude, "review this", "", "", "");
     coordy_harness::append_cli_args(ProtocolFamily::Claude, &mut claude, "--foo bar");
     assert!(claude.windows(2).any(|w| w == ["--foo", "bar"]));
 
-    let mut acp = native_launch_args(ProtocolFamily::Acp, "review this", "", "", "");
+    let mut acp = launch(ProtocolFamily::Acp, "review this", "", "", "");
     coordy_harness::append_cli_args(ProtocolFamily::Acp, &mut acp, "--foo bar");
     assert!(acp.is_empty());
 }

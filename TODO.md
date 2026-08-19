@@ -74,6 +74,7 @@
 - [x] 名称、描述、指令、harness、模型、思考强度、Codex Fast
 - [x] DiceBear 头像；编辑；归档；名称工作区唯一
 - [x] Access：仅自己 / 整个工作区 / 指定成员
+- [x] 工具权限：Auto / Full Access（按 harness 下发不同启动参数）
 - [x] 绑定 Skills（`SetAgentSkills`，下一次 `StartRun` 注入正文）
 - [x] 并发上限（running 超额则拒绝 `StartRun`）
 - [x] `cli_args` 追加到原生启动参数（ACP 忽略）
@@ -89,6 +90,7 @@
 - [x] 设置 Daemon 页展示已登记电脑
 - [x] 智能体并发上限
 - [x] 无人值守 auto-approve：按 harness 注入 skip/yolo/sandbox，ACP 自动放行权限请求
+- [x] 智能体工具权限 Auto / Full Access：Auto 仍拦危险步骤，Full Access 才跳过审批
 - [ ] 执行队列状态机的完整产品页
 - [ ] 云端 / 远程运行时
 - [ ] 应用商店更新通道

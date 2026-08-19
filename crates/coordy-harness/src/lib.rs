@@ -17,7 +17,7 @@ pub use discovery::{
 pub use native::{parse_native_line, spawn_native_session};
 pub use protocol::{
     append_cli_args, builtin, canonical_harness_id, display_args, native_launch_args,
-    protocol_family, BuiltinHarness, ProtocolFamily, BUILTINS,
+    parse_tool_access, protocol_family, BuiltinHarness, ProtocolFamily, ToolAccess, BUILTINS,
 };
 
 use coordy_protocol::{CoordyError, HarnessEvent, RunSource};
@@ -70,6 +70,7 @@ pub fn detect_on_path() -> Vec<DetectedHarness> {
     found
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_command(
     kind: &str,
     worktree: &str,
@@ -78,6 +79,7 @@ pub fn spawn_command(
     thinking: &str,
     speed: &str,
     cli_args: &str,
+    tool_access: &str,
 ) -> Result<std::process::Command, CoordyError> {
     let family = protocol_family(kind);
     if family.uses_acp() {
@@ -90,7 +92,7 @@ pub fn spawn_command(
     })?;
     let mut cmd = std::process::Command::new(bin);
     cmd.current_dir(worktree);
-    let mut args = native_launch_args(family, prompt, model, thinking, speed);
+    let mut args = native_launch_args(family, prompt, model, thinking, speed, tool_access);
     crate::protocol::append_cli_args(family, &mut args, cli_args);
     cmd.args(args);
     Ok(cmd)

@@ -121,39 +121,75 @@ pub fn is_builtin_id(id: &str) -> bool {
     BUILTINS.iter().any(|item| item.id == id)
 }
 
-/// Unattended auto-approve flags, injected on every native daemon spawn.
-/// Same idea as Multica's per-adapter bypass / yolo / trust / sandbox flags:
-/// a headless run cannot answer interactive permission prompts.
-fn unattended_auto_approve_args(family: ProtocolFamily) -> &'static [&'static str] {
-    match family {
-        ProtocolFamily::Claude => &["--permission-mode", "bypassPermissions"],
-        ProtocolFamily::Codex => &[
+/// Auto: keep a safety net (Claude classifier, Codex workspace sandbox).
+/// Full Access: skip tool approval (and Codex sandbox).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolAccess {
+    Auto,
+    FullAccess,
+}
+
+pub fn parse_tool_access(value: &str) -> ToolAccess {
+    match value.trim() {
+        "full_access" | "full-access" | "bypass" => ToolAccess::FullAccess,
+        _ => ToolAccess::Auto,
+    }
+}
+
+/// Flags that keep a headless run from stopping on permission prompts.
+/// Auto and Full Access are different: Auto still checks; Full Access does not.
+fn unattended_auto_approve_args(
+    family: ProtocolFamily,
+    access: ToolAccess,
+) -> &'static [&'static str] {
+    match (family, access) {
+        (ProtocolFamily::Claude, ToolAccess::Auto) => &["--permission-mode", "auto"],
+        (ProtocolFamily::Claude, ToolAccess::FullAccess) => {
+            &["--permission-mode", "bypassPermissions"]
+        }
+        (ProtocolFamily::Codex, ToolAccess::Auto) => &[
+            "--sandbox",
+            "workspace-write",
+            "--ask-for-approval",
+            "never",
+            "-c",
+            "sandbox_workspace_write.network_access=true",
+        ],
+        (ProtocolFamily::Codex, ToolAccess::FullAccess) => &[
             "--sandbox",
             "danger-full-access",
             "--ask-for-approval",
             "never",
         ],
-        ProtocolFamily::Copilot => &["--allow-all"],
-        ProtocolFamily::OpenCode => &["--dangerously-skip-permissions"],
-        ProtocolFamily::Cursor => &["--trust"],
-        ProtocolFamily::Gemini => &["--yolo"],
-        ProtocolFamily::Acp | ProtocolFamily::Stub => &[],
+        (ProtocolFamily::Copilot, ToolAccess::FullAccess) => &["--allow-all"],
+        (ProtocolFamily::OpenCode, ToolAccess::FullAccess) => &["--dangerously-skip-permissions"],
+        (ProtocolFamily::Cursor, ToolAccess::FullAccess) => &["--trust"],
+        (ProtocolFamily::Gemini, ToolAccess::Auto) => &["--approval-mode", "auto_edit"],
+        (ProtocolFamily::Gemini, ToolAccess::FullAccess) => &["--yolo"],
+        (
+            ProtocolFamily::Copilot
+            | ProtocolFamily::OpenCode
+            | ProtocolFamily::Cursor
+            | ProtocolFamily::Acp
+            | ProtocolFamily::Stub,
+            ToolAccess::Auto,
+        ) => &[],
+        (ProtocolFamily::Acp | ProtocolFamily::Stub, ToolAccess::FullAccess) => &[],
     }
 }
 
-fn push_auto_approve(family: ProtocolFamily, args: &mut Vec<String>) {
+fn push_auto_approve(family: ProtocolFamily, access: ToolAccess, args: &mut Vec<String>) {
     args.extend(
-        unattended_auto_approve_args(family)
+        unattended_auto_approve_args(family, access)
             .iter()
             .map(|flag| (*flag).to_string()),
     );
 }
 
-/// Flags shown in the catalog (no prompt). The prompt is appended at spawn.
-/// Empty model/thinking/speed omit the corresponding flags so the CLI uses
-/// its own default. Includes the unattended auto-approve flags that spawn uses.
+/// Flags shown in the catalog (no prompt). Permission Auto/Full Access is
+/// per-agent, so the catalog only shows the protocol flags.
 pub fn display_args(family: ProtocolFamily) -> Vec<&'static str> {
-    let mut args = match family {
+    match family {
         ProtocolFamily::Claude => vec!["-p", "--output-format", "stream-json", "--verbose"],
         ProtocolFamily::Codex => vec!["exec", "--json"],
         ProtocolFamily::Copilot => vec!["-p", "--output-format", "json"],
@@ -161,21 +197,22 @@ pub fn display_args(family: ProtocolFamily) -> Vec<&'static str> {
         ProtocolFamily::Cursor => vec!["-p", "--output-format", "stream-json"],
         ProtocolFamily::Gemini => vec!["-p"],
         ProtocolFamily::Acp | ProtocolFamily::Stub => Vec::new(),
-    };
-    args.extend_from_slice(unattended_auto_approve_args(family));
-    args
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn native_launch_args(
     family: ProtocolFamily,
     prompt: &str,
     model: &str,
     thinking: &str,
     speed: &str,
+    tool_access: &str,
 ) -> Vec<String> {
     let model = model.trim();
     let thinking = thinking.trim();
     let speed = speed.trim();
+    let access = parse_tool_access(tool_access);
     match family {
         ProtocolFamily::Claude => {
             let mut args = vec![
@@ -185,7 +222,7 @@ pub fn native_launch_args(
                 "stream-json".into(),
                 "--verbose".into(),
             ];
-            push_auto_approve(family, &mut args);
+            push_auto_approve(family, access, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -196,7 +233,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::Codex => {
             let mut args = vec!["exec".into(), "--json".into()];
-            push_auto_approve(family, &mut args);
+            push_auto_approve(family, access, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -216,7 +253,7 @@ pub fn native_launch_args(
                 "--output-format".into(),
                 "json".into(),
             ];
-            push_auto_approve(family, &mut args);
+            push_auto_approve(family, access, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -224,7 +261,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::OpenCode => {
             let mut args = vec!["run".into()];
-            push_auto_approve(family, &mut args);
+            push_auto_approve(family, access, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -236,7 +273,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::Cursor => {
             let mut args = vec!["-p".into(), "--output-format".into(), "stream-json".into()];
-            push_auto_approve(family, &mut args);
+            push_auto_approve(family, access, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -245,7 +282,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::Gemini => {
             let mut args = vec!["-p".into(), prompt.to_string()];
-            push_auto_approve(family, &mut args);
+            push_auto_approve(family, access, &mut args);
             if !model.is_empty() {
                 args.extend(["-m".into(), model.to_string()]);
             }

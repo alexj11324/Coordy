@@ -130,6 +130,8 @@ pub enum Command {
         #[serde(default)]
         cli_args: Option<String>,
         #[serde(default)]
+        tool_access: Option<String>,
+        #[serde(default)]
         mcp_servers: Option<Vec<String>>,
     },
     ArchiveAgent {
@@ -830,6 +832,8 @@ pub struct AgentView {
     pub concurrency_limit: u32,
     #[serde(default)]
     pub cli_args: String,
+    #[serde(default)]
+    pub tool_access: String,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]

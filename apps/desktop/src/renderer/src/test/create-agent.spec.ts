@@ -195,6 +195,13 @@ describe("agent creation studio helpers", () => {
     expect(applyDraftFastChange(on, false).speed).toBe("");
   });
 
+  it("defaults tool access to Auto and keeps Full Access on a saved draft", () => {
+    expect(EMPTY_AGENT_DRAFT.toolAccess).toBe("auto");
+    const store = memoryStore();
+    writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "助手", toolAccess: "full_access" }, store);
+    expect(readManualDraft("ws", store)?.toolAccess).toBe("full_access");
+  });
+
   it("matches leftover ACP-era harness ids onto the native catalog", () => {
     const catalog = [
       {

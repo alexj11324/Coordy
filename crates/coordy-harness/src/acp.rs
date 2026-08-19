@@ -10,6 +10,7 @@ use std::thread;
 use coordy_protocol::{CoordyError, HarnessEvent};
 use serde_json::{json, Value};
 
+use crate::protocol::{parse_tool_access, ToolAccess};
 use crate::SecretEnv;
 
 pub const ACP_STUB_REPLY: &str = "内置演示智能体已就绪。这不是云端模型：在「新建智能体」中选择本机 harness，并配置模型密钥后即可使用真实智能体。";
@@ -18,6 +19,7 @@ pub fn resolve_acp_command(configured: Option<&str>) -> Result<(String, Vec<Stri
     crate::discovery::resolve_launch("acp", configured, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_acp_session(
     bin: &str,
     args: &[String],
@@ -25,6 +27,7 @@ pub fn spawn_acp_session(
     prompt: &str,
     model: &str,
     secrets: &SecretEnv,
+    tool_access: &str,
     run_id: Option<&str>,
     mut on_event: impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
@@ -58,7 +61,15 @@ pub fn spawn_acp_session(
         });
     }
     let cwd = PathBuf::from(if worktree.is_empty() { "." } else { worktree });
-    let result = drive_session(stdout, stdin, prompt, model, &cwd, &mut on_event);
+    let result = drive_session(
+        stdout,
+        stdin,
+        prompt,
+        model,
+        &cwd,
+        tool_access,
+        &mut on_event,
+    );
     if let Some(run_id) = run_id {
         crate::children::unregister_child(run_id);
     }
@@ -67,14 +78,17 @@ pub fn spawn_acp_session(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn drive_session<R: Read, W: Write>(
     reader: R,
     mut writer: W,
     prompt: &str,
     model: &str,
     cwd: &Path,
+    tool_access: &str,
     on_event: &mut impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
+    let access = parse_tool_access(tool_access);
     let mut lines = BufReader::new(reader);
     let mut next_id = 1u64;
     write_rpc(
@@ -90,7 +104,7 @@ pub fn drive_session<R: Read, W: Write>(
             "clientInfo": { "name": "coordy", "title": "Coordy", "version": env!("CARGO_PKG_VERSION") }
         }),
     )?;
-    let _init = wait_response(&mut lines, &mut writer, next_id, cwd, on_event)?;
+    let _init = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
     next_id += 1;
     write_rpc(
         &mut writer,
@@ -98,7 +112,7 @@ pub fn drive_session<R: Read, W: Write>(
         "session/new",
         json!({ "cwd": cwd.display().to_string(), "mcpServers": [] }),
     )?;
-    let new_session = wait_response(&mut lines, &mut writer, next_id, cwd, on_event)?;
+    let new_session = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
     let session_id = new_session
         .get("result")
         .and_then(|r| r.get("sessionId"))
@@ -113,7 +127,7 @@ pub fn drive_session<R: Read, W: Write>(
             "session/set_model",
             json!({ "sessionId": session_id, "modelId": model.trim() }),
         )?;
-        let _set_model = wait_response(&mut lines, &mut writer, next_id, cwd, on_event)?;
+        let _set_model = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
         next_id += 1;
     }
     write_rpc(
@@ -125,7 +139,7 @@ pub fn drive_session<R: Read, W: Write>(
             "prompt": [{ "type": "text", "text": prompt }]
         }),
     )?;
-    let _done = wait_response(&mut lines, &mut writer, next_id, cwd, on_event)?;
+    let _done = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
     Ok(())
 }
 
@@ -180,6 +194,7 @@ fn wait_response<R: BufRead, W: Write>(
     writer: &mut W,
     expect_id: u64,
     cwd: &Path,
+    access: ToolAccess,
     on_event: &mut impl FnMut(HarnessEvent),
 ) -> Result<Value, CoordyError> {
     let mut buf = String::new();
@@ -213,7 +228,7 @@ fn wait_response<R: BufRead, W: Write>(
                 continue;
             }
             if msg.get("id").is_some() {
-                handle_agent_request(writer, &msg, cwd, on_event)?;
+                handle_agent_request(writer, &msg, cwd, access, on_event)?;
             }
         }
     }
@@ -291,6 +306,7 @@ fn handle_agent_request<W: Write>(
     writer: &mut W,
     msg: &Value,
     cwd: &Path,
+    access: ToolAccess,
     on_event: &mut impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
     let id = msg.get("id").cloned().unwrap_or(Value::Null);
@@ -323,7 +339,7 @@ fn handle_agent_request<W: Write>(
             write_result(writer, &id, json!({}))
         }
         "session/request_permission" => {
-            let option_id = acp_auto_approve_option_id(&params);
+            let option_id = acp_auto_approve_option_id(&params, access);
             write_result(
                 writer,
                 &id,
@@ -335,8 +351,8 @@ fn handle_agent_request<W: Write>(
 }
 
 /// Pick an offered allow option so ACP agents do not stall waiting for a human.
-/// Prefers session/always grants when the agent lists them.
-fn acp_auto_approve_option_id(params: &Value) -> String {
+/// Auto prefers a one-shot grant. Full Access prefers a lasting grant.
+fn acp_auto_approve_option_id(params: &Value, access: ToolAccess) -> String {
     let ids: Vec<String> = params
         .get("options")
         .and_then(|v| v.as_array())
@@ -349,15 +365,18 @@ fn acp_auto_approve_option_id(params: &Value) -> String {
                 .map(str::to_string)
         })
         .collect();
-    const PREFERRED: &[&str] = &[
-        "allow-always",
-        "allow_always",
-        "allow-session",
-        "allow_session",
-        "allow-once",
-        "allow_once",
-    ];
-    for want in PREFERRED {
+    let preferred: &[&str] = match access {
+        ToolAccess::FullAccess => &[
+            "allow-always",
+            "allow_always",
+            "allow-session",
+            "allow_session",
+            "allow-once",
+            "allow_once",
+        ],
+        ToolAccess::Auto => &["allow-once", "allow_once", "allow-session", "allow_session"],
+    };
+    for want in preferred {
         if let Some(id) = ids.iter().find(|id| id.eq_ignore_ascii_case(want)) {
             return id.clone();
         }
@@ -452,10 +471,11 @@ pub fn serve_fake_acp<R: Read, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::acp_auto_approve_option_id;
+    use crate::protocol::ToolAccess;
     use serde_json::json;
 
     #[test]
-    fn prefers_allow_always_over_first_option() {
+    fn full_access_prefers_allow_always_auto_keeps_once() {
         let params = json!({
             "options": [
                 { "optionId": "reject" },
@@ -463,16 +483,32 @@ mod tests {
                 { "optionId": "allow-always" }
             ]
         });
-        assert_eq!(acp_auto_approve_option_id(&params), "allow-always");
+        assert_eq!(
+            acp_auto_approve_option_id(&params, ToolAccess::FullAccess),
+            "allow-always"
+        );
+        assert_eq!(
+            acp_auto_approve_option_id(&params, ToolAccess::Auto),
+            "allow-once"
+        );
     }
 
     #[test]
     fn falls_back_to_allow_once_then_first_id() {
         let once = json!({ "options": [{ "optionId": "allow-once" }, { "optionId": "reject" }] });
-        assert_eq!(acp_auto_approve_option_id(&once), "allow-once");
+        assert_eq!(
+            acp_auto_approve_option_id(&once, ToolAccess::Auto),
+            "allow-once"
+        );
         let only_reject = json!({ "options": [{ "optionId": "reject" }] });
-        assert_eq!(acp_auto_approve_option_id(&only_reject), "reject");
+        assert_eq!(
+            acp_auto_approve_option_id(&only_reject, ToolAccess::Auto),
+            "reject"
+        );
         let empty = json!({});
-        assert_eq!(acp_auto_approve_option_id(&empty), "allow-once");
+        assert_eq!(
+            acp_auto_approve_option_id(&empty, ToolAccess::Auto),
+            "allow-once"
+        );
     }
 }

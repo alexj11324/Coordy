@@ -165,6 +165,7 @@ impl Kernel {
             &agent.thinking,
             &agent.speed,
             &agent.cli_args,
+            &agent.tool_access,
         )?;
         Ok(Outcome::ok("harness started", json!({ "run_id": run_id })))
     }
@@ -520,6 +521,7 @@ impl Kernel {
                     access_member_ids: Vec::new(),
                     concurrency_limit: 6,
                     cli_args: String::new(),
+                    tool_access: "auto".into(),
                     mcp_servers: Vec::new(),
                     skill_ids: Vec::new(),
                 });
@@ -541,6 +543,7 @@ impl Kernel {
                 access_member_ids,
                 concurrency_limit,
                 cli_args,
+                tool_access,
                 mcp_servers,
             } => {
                 let agent = world
@@ -630,6 +633,12 @@ impl Kernel {
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.workspace_id = row.workspace_id.clone();
                         row.cli_args = cli_args;
+                    }
+                }
+                if let Some(tool_access) = tool_access {
+                    let tool_access = normalize_tool_access(&tool_access)?;
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.tool_access = tool_access;
                     }
                 }
                 if let Some(mcp_servers) = mcp_servers {
@@ -1447,6 +1456,7 @@ impl Kernel {
                             &agent.thinking,
                             &agent.speed,
                             &agent.cli_args,
+                            &agent.tool_access,
                         )?;
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }
@@ -1849,6 +1859,11 @@ impl Kernel {
                                 a.concurrency_limit
                             },
                             cli_args: a.cli_args.clone(),
+                            tool_access: if a.tool_access.is_empty() {
+                                "auto".into()
+                            } else {
+                                a.tool_access.clone()
+                            },
                             mcp_servers: a.mcp_servers.clone(),
                             skill_ids: a.skill_ids.clone(),
                         })
@@ -2555,6 +2570,16 @@ fn normalize_agent_name(name: &str) -> Result<String, CoordyError> {
         return Err(CoordyError::invalid("agent name is required"));
     }
     Ok(name.to_string())
+}
+
+fn normalize_tool_access(value: &str) -> Result<String, CoordyError> {
+    match value.trim() {
+        "" | "auto" => Ok("auto".into()),
+        "full_access" => Ok("full_access".into()),
+        _ => Err(CoordyError::invalid(
+            "tool_access must be auto or full_access",
+        )),
+    }
 }
 
 fn agent_name_taken(
