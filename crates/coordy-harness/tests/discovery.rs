@@ -125,6 +125,7 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"from-cli"
         "",
         "",
         "",
+        "",
         &SecretEnv::default(),
         None,
         |event| events.push(event),

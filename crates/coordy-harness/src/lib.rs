@@ -16,8 +16,8 @@ pub use discovery::{
 };
 pub use native::{parse_native_line, spawn_native_session};
 pub use protocol::{
-    builtin, canonical_harness_id, display_args, native_launch_args, protocol_family,
-    BuiltinHarness, ProtocolFamily, BUILTINS,
+    append_cli_args, builtin, canonical_harness_id, display_args, native_launch_args,
+    protocol_family, BuiltinHarness, ProtocolFamily, BUILTINS,
 };
 
 use coordy_protocol::{CoordyError, HarnessEvent, RunSource};
@@ -77,6 +77,7 @@ pub fn spawn_command(
     model: &str,
     thinking: &str,
     speed: &str,
+    cli_args: &str,
 ) -> Result<std::process::Command, CoordyError> {
     let family = protocol_family(kind);
     if family.uses_acp() {
@@ -89,7 +90,9 @@ pub fn spawn_command(
     })?;
     let mut cmd = std::process::Command::new(bin);
     cmd.current_dir(worktree);
-    cmd.args(native_launch_args(family, prompt, model, thinking, speed));
+    let mut args = native_launch_args(family, prompt, model, thinking, speed);
+    crate::protocol::append_cli_args(family, &mut args, cli_args);
+    cmd.args(args);
     Ok(cmd)
 }
 

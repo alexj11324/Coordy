@@ -166,6 +166,7 @@ export type Command =
       create_issue?: boolean | null;
     }
   | { type: "TriggerAutomation"; automation_id: string }
+  | { type: "SweepAutomations"; now_ms: number }
   | { type: "DeleteAutomation"; automation_id: string }
   | { type: "AddComment"; task_id: string; body: string; parent_id?: string | null; mentions?: Mention[] }
   | { type: "ResolveComment"; comment_id: string; resolved: boolean }
@@ -391,6 +392,7 @@ export type AutomationView = {
   create_issue?: boolean;
   last_run_id?: string | null;
   run_count?: number;
+  last_triggered_at?: string | null;
 };
 export type CommentView = {
   id: string;
@@ -498,6 +500,13 @@ export type DiscoveredAgentView = {
   protocol_family?: string | null;
 };
 export type ImportAgentsResult = { imported: string[]; skipped: string[] };
+export type DraftCompletion = {
+  kind: string;
+  name?: string;
+  description?: string;
+  instructions?: string;
+  titles?: string[];
+};
 export type DetectedHarnessView = { kind: string; binary: string };
 export type SecretStatus = {
   provider: string;

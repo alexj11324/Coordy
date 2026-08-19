@@ -771,6 +771,7 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 create_issue,
                 last_run_id: None,
                 run_count: 0,
+                last_triggered_at: None,
             });
             emit_changed(world, workspace_id);
             Ok(Outcome::ok("automation created", json!({ "automation_id": id })))
@@ -820,53 +821,14 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 .cloned()
                 .ok_or_else(|| CoordyError::not_found("automation"))?;
             require_member(world, actor, &auto.workspace_id)?;
-            let mut created_task = None;
-            if auto.create_issue {
-                let (number, identifier) = allocate_issue_number(world, &auto.workspace_id)?;
-                let task_id = ids::new("task");
-                world.tasks.push(Task {
-                    id: task_id.clone(),
-                    workspace_id: auto.workspace_id.clone(),
-                    title: auto.name.clone(),
-                    description: auto.runbook.clone(),
-                    status: "open".into(),
-                    assignee_agent_id: auto.assignee_agent_id.clone(),
-                    worktree_path: None,
-                    blocked_reason: None,
-                    identifier,
-                    number,
-                    priority: "none".into(),
-                    start_date: None,
-                    due_date: None,
-                    labels: Vec::new(),
-                    custom_fields: Vec::new(),
-                    assignee_principal_id: None,
-                    assignee_squad_id: None,
-                    project_id: None,
-                    parent_id: None,
-                    stage: String::new(),
-                    sort_key: world.tasks.len() as i64,
-                    deleted: false,
-                    pull_requests: Vec::new(),
-                });
-                created_task = Some(task_id);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            trigger_automation(world, &automation_id, now_ms)
+        }
+        Command::SweepAutomations { now_ms } => {
+            if !matches!(actor, Actor::Daemon) {
+                return Err(CoordyError::denied("only the daemon may sweep automations"));
             }
-            if let Some(row) = world.automations.iter_mut().find(|a| a.id == automation_id) {
-                row.run_count += 1;
-            }
-            push_notice(
-                world,
-                &auto.workspace_id,
-                "automation",
-                "自动化已运行",
-                &auto.name,
-                created_task.clone(),
-            );
-            emit_changed(world, auto.workspace_id);
-            Ok(Outcome::ok(
-                "automation triggered",
-                json!({ "automation_id": automation_id, "task_id": created_task }),
-            ))
+            sweep_automations(world, now_ms)
         }
         Command::DeleteAutomation { automation_id } => {
             require_not_agent(actor)?;
@@ -1379,6 +1341,7 @@ pub fn automation_view(auto: &Automation) -> AutomationView {
         create_issue: auto.create_issue,
         last_run_id: auto.last_run_id.clone(),
         run_count: auto.run_count,
+        last_triggered_at: auto.last_triggered_at.clone(),
     }
 }
 
@@ -1494,6 +1457,158 @@ pub fn mentions_from_body(body: &str) -> Vec<Mention> {
         }
     }
     out
+}
+
+pub fn parse_schedule_interval_ms(schedule: &str) -> Option<i64> {
+    let raw = schedule.trim().to_ascii_lowercase();
+    let rest = raw.strip_prefix("every:")?.trim();
+    if let Some(digits) = rest.strip_suffix('m') {
+        return digits
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| n.saturating_mul(60_000));
+    }
+    if let Some(digits) = rest.strip_suffix('h') {
+        return digits
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| n.saturating_mul(3_600_000));
+    }
+    if let Some(digits) = rest.strip_suffix('d') {
+        return digits
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .map(|n| n.saturating_mul(86_400_000));
+    }
+    None
+}
+
+fn rfc3339_to_ms(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
+fn rfc3339_from_ms(now_ms: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_ms)
+        .unwrap_or_else(|| chrono::Utc::now())
+        .to_rfc3339()
+}
+
+fn trigger_automation(
+    world: &mut World,
+    automation_id: &str,
+    now_ms: i64,
+) -> Result<Outcome, CoordyError> {
+    let auto = world
+        .automation(automation_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("automation"))?;
+    let mut created_task = None;
+    if auto.create_issue {
+        let (number, identifier) = allocate_issue_number(world, &auto.workspace_id)?;
+        let task_id = ids::new("task");
+        world.tasks.push(Task {
+            id: task_id.clone(),
+            workspace_id: auto.workspace_id.clone(),
+            title: auto.name.clone(),
+            description: auto.runbook.clone(),
+            status: "open".into(),
+            assignee_agent_id: auto.assignee_agent_id.clone(),
+            worktree_path: None,
+            blocked_reason: None,
+            identifier,
+            number,
+            priority: "none".into(),
+            start_date: None,
+            due_date: None,
+            labels: Vec::new(),
+            custom_fields: Vec::new(),
+            assignee_principal_id: None,
+            assignee_squad_id: None,
+            project_id: None,
+            parent_id: None,
+            stage: String::new(),
+            sort_key: world.tasks.len() as i64,
+            deleted: false,
+            pull_requests: Vec::new(),
+        });
+        created_task = Some(task_id);
+    }
+    let stamped = rfc3339_from_ms(now_ms);
+    if let Some(row) = world.automations.iter_mut().find(|a| a.id == automation_id) {
+        row.run_count += 1;
+        row.last_triggered_at = Some(stamped);
+    }
+    push_notice(
+        world,
+        &auto.workspace_id,
+        "automation",
+        "自动化已运行",
+        &auto.name,
+        created_task.clone(),
+    );
+    emit_changed(world, auto.workspace_id.clone());
+    let dispatch = created_task.as_ref().and_then(|task_id| {
+        auto.assignee_agent_id.as_ref().map(|agent_id| {
+            json!({
+                "automation_id": automation_id,
+                "task_id": task_id,
+                "agent_id": agent_id,
+                "prompt": auto.runbook,
+            })
+        })
+    });
+    Ok(Outcome::ok(
+        "automation triggered",
+        json!({
+            "automation_id": automation_id,
+            "task_id": created_task,
+            "dispatches": dispatch.as_ref().map(|d| vec![d.clone()]).unwrap_or_default(),
+        }),
+    ))
+}
+
+fn sweep_automations(world: &mut World, now_ms: i64) -> Result<Outcome, CoordyError> {
+    let autos = world.automations.clone();
+    let mut triggered = Vec::new();
+    let mut armed = 0u32;
+    let mut dispatches = Vec::new();
+    for auto in autos {
+        let Some(interval) = parse_schedule_interval_ms(&auto.schedule) else {
+            continue;
+        };
+        match auto.last_triggered_at.as_deref().and_then(rfc3339_to_ms) {
+            None => {
+                if let Some(row) = world.automations.iter_mut().find(|a| a.id == auto.id) {
+                    row.last_triggered_at = Some(rfc3339_from_ms(now_ms));
+                }
+                armed += 1;
+            }
+            Some(last_ms) if now_ms.saturating_sub(last_ms) >= interval => {
+                let outcome = trigger_automation(world, &auto.id, now_ms)?;
+                triggered.push(auto.id.clone());
+                if let Some(items) = outcome.ids.get("dispatches").and_then(|v| v.as_array()) {
+                    dispatches.extend(items.iter().cloned());
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(Outcome::ok(
+        "automations swept",
+        json!({
+            "armed": armed,
+            "triggered": triggered,
+            "dispatches": dispatches,
+        }),
+    ))
 }
 
 pub fn default_new_workspace(name: &str) -> (String, String) {

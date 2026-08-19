@@ -62,6 +62,197 @@ impl Kernel {
         *self.world.lock().expect("world lock") = world;
     }
 
+    fn start_prompt_on_task(
+        &self,
+        world: &mut World,
+        actor: &Actor,
+        task_id: &str,
+        agent_id: &str,
+        prompt: String,
+        chat_id: Option<String>,
+        trigger: &str,
+        decorate: bool,
+    ) -> Result<Outcome, CoordyError> {
+        let task = world
+            .task(task_id)
+            .cloned()
+            .ok_or_else(|| CoordyError::not_found("task"))?;
+        if task.status == "backlog" {
+            return Err(CoordyError::invalid("backlog issues are not queued"));
+        }
+        if !can_command_agent(world, actor, agent_id) {
+            return Err(CoordyError::denied("cannot command this agent"));
+        }
+        let agent = world
+            .agent(agent_id)
+            .cloned()
+            .ok_or_else(|| CoordyError::not_found("agent"))?;
+        enforce_concurrency(world, &agent)?;
+        let prompt = if decorate {
+            let mut instructions = agent.instructions.clone();
+            if let Some(ws) = world.workspace(&task.workspace_id) {
+                if !ws.context.is_empty() {
+                    instructions = format!("# Workspace\n{}\n\n{}", ws.context, instructions);
+                }
+            }
+            for skill_id in &agent.skill_ids {
+                if let Some(skill) = world.skill(skill_id) {
+                    instructions.push_str("\n\n# Skill: ");
+                    instructions.push_str(&skill.name);
+                    instructions.push('\n');
+                    instructions.push_str(&skill.body);
+                }
+            }
+            match apply_agent_instructions(RunSource::Acp { prompt }, &instructions) {
+                RunSource::Acp { prompt } => prompt,
+                _ => unreachable!("apply_agent_instructions preserves Acp"),
+            }
+        } else {
+            prompt
+        };
+        let harness = {
+            let h = agent.harness.trim();
+            if h.is_empty() || h == "jsonl" {
+                "acp".into()
+            } else {
+                h.to_string()
+            }
+        };
+        let run_id = ids::new("run");
+        world.runs.push(Run {
+            id: run_id.clone(),
+            workspace_id: task.workspace_id.clone(),
+            task_id: task.id.clone(),
+            agent_id: agent.id.clone(),
+            status: "running".into(),
+            harness: harness.clone(),
+            compaction_count: 0,
+            after_compaction: false,
+            queue_status: "dispatched".into(),
+            retry_count: 0,
+            chat_id,
+            trigger: trigger.into(),
+            prompt: prompt.clone(),
+        });
+        ingest_event(
+            world,
+            &self.advisor,
+            &run_id,
+            HarnessEvent::Message {
+                role: "user".into(),
+                content: prompt.clone(),
+            },
+        )?;
+        let worktree = task
+            .worktree_path
+            .clone()
+            .filter(|path| !path.is_empty())
+            .or_else(|| {
+                world
+                    .workspace(&task.workspace_id)
+                    .and_then(|ws| ws.repo_path.clone())
+                    .filter(|path| !path.is_empty())
+            })
+            .unwrap_or_else(|| ".".into());
+        self.ports.spawn_harness(
+            &harness,
+            &worktree,
+            &prompt,
+            &run_id,
+            &agent.model,
+            &agent.thinking,
+            &agent.speed,
+            &agent.cli_args,
+        )?;
+        Ok(Outcome::ok("harness started", json!({ "run_id": run_id })))
+    }
+
+    fn spawn_dispatches(
+        &self,
+        world: &mut World,
+        actor: &Actor,
+        outcome: &Outcome,
+        trigger: &str,
+    ) -> Result<(), CoordyError> {
+        let Some(items) = outcome.ids.get("dispatches").and_then(|v| v.as_array()) else {
+            return Ok(());
+        };
+        let jobs: Vec<(String, String, String, Option<String>)> = items
+            .iter()
+            .filter_map(|row| {
+                Some((
+                    row.get("task_id")?.as_str()?.to_string(),
+                    row.get("agent_id")?.as_str()?.to_string(),
+                    row.get("prompt")?.as_str().unwrap_or_default().to_string(),
+                    row.get("automation_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                ))
+            })
+            .collect();
+        for (task_id, agent_id, prompt, automation_id) in jobs {
+            let started = self.start_prompt_on_task(
+                world, actor, &task_id, &agent_id, prompt, None, trigger, true,
+            )?;
+            if let (Some(auto_id), Some(run_id)) = (
+                automation_id,
+                started.ids.get("run_id").and_then(|v| v.as_str()),
+            ) {
+                if let Some(auto) = world.automations.iter_mut().find(|a| a.id == auto_id) {
+                    auto.last_run_id = Some(run_id.to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn dispatch_squad_leader(
+        &self,
+        world: &mut World,
+        actor: &Actor,
+        task_id: &str,
+        squad_id: &str,
+    ) -> Result<(), CoordyError> {
+        let task = world
+            .task(task_id)
+            .cloned()
+            .ok_or_else(|| CoordyError::not_found("task"))?;
+        if task.status == "backlog" {
+            return Ok(());
+        }
+        let squad = world
+            .squad(squad_id)
+            .cloned()
+            .ok_or_else(|| CoordyError::not_found("squad"))?;
+        let mut members = Vec::new();
+        if let Some(leader) = world.agent(&squad.leader_agent_id) {
+            members.push(format!("{} (领队)", leader.name));
+        }
+        for id in &squad.member_agent_ids {
+            if let Some(agent) = world.agent(id) {
+                members.push(agent.name.clone());
+            }
+        }
+        let prompt = format!(
+            "你是小队「{}」的领队。请根据事项推进工作，并在需要时向成员派发子任务。\n成员：{}\n\n# {}\n{}",
+            squad.name,
+            members.join("、"),
+            task.title,
+            task.description
+        );
+        self.start_prompt_on_task(
+            world,
+            actor,
+            task_id,
+            &squad.leader_agent_id,
+            prompt,
+            None,
+            "squad",
+            true,
+        )?;
+        Ok(())
+    }
+
     pub fn watch(&self, cursor: Option<u64>) -> Vec<Effect> {
         let world = self.world.lock().expect("world lock");
         let from = cursor.unwrap_or(0);
@@ -1087,6 +1278,7 @@ impl Kernel {
                     .agent(&agent_id)
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("agent"))?;
+                enforce_concurrency(&world, &agent)?;
                 let mut instructions = agent.instructions.clone();
                 if let Some(ws) = world.workspace(&task.workspace_id) {
                     if !ws.context.is_empty() {
@@ -1182,6 +1374,7 @@ impl Kernel {
                             &agent.model,
                             &agent.thinking,
                             &agent.speed,
+                            &agent.cli_args,
                         )?;
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }
@@ -1345,6 +1538,121 @@ impl Kernel {
                 item.dismissed = true;
                 item.read = true;
                 Ok(Outcome::ok("dismissed", json!({ "item_id": item_id })))
+            }
+            Command::StartMentionRun {
+                task_id,
+                agent_id,
+                prompt,
+            } => self.start_prompt_on_task(
+                &mut world,
+                &actor,
+                &task_id,
+                &agent_id,
+                prompt,
+                None,
+                "mention",
+                true,
+            ),
+            Command::RetryRun { run_id } => {
+                let old = world
+                    .run(&run_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("run"))?;
+                if !can_command_agent(&world, &actor, &old.agent_id) && !matches!(actor, Actor::Daemon)
+                {
+                    return Err(CoordyError::denied("cannot retry this run"));
+                }
+                if let Some(row) = world.run_mut(&run_id) {
+                    row.retry_count += 1;
+                }
+                let prompt = if old.prompt.trim().is_empty() {
+                    world
+                        .task(&old.task_id)
+                        .map(|task| {
+                            if task.description.trim().is_empty() {
+                                task.title.clone()
+                            } else {
+                                task.description.clone()
+                            }
+                        })
+                        .unwrap_or_default()
+                } else {
+                    old.prompt.clone()
+                };
+                self.start_prompt_on_task(
+                    &mut world,
+                    &actor,
+                    &old.task_id,
+                    &old.agent_id,
+                    prompt,
+                    old.chat_id,
+                    "retry",
+                    false,
+                )
+            }
+            Command::AssignIssue {
+                task_id,
+                agent_id,
+                principal_id,
+                squad_id,
+                project_id,
+                parent_id,
+                stage,
+            } => {
+                let squad_for_run = squad_id.clone().filter(|id| !id.is_empty());
+                let issue_id = task_id.clone();
+                let outcome = crate::product::submit(
+                    &mut world,
+                    &actor,
+                    Command::AssignIssue {
+                        task_id,
+                        agent_id,
+                        principal_id,
+                        squad_id,
+                        project_id,
+                        parent_id,
+                        stage,
+                    },
+                )?;
+                if let Some(squad_id) = squad_for_run {
+                    self.dispatch_squad_leader(&mut world, &actor, &issue_id, &squad_id)?;
+                }
+                Ok(outcome)
+            }
+            Command::TriggerAutomation { automation_id } => {
+                let outcome = crate::product::submit(
+                    &mut world,
+                    &actor,
+                    Command::TriggerAutomation { automation_id },
+                )?;
+                self.spawn_dispatches(&mut world, &actor, &outcome, "automation")?;
+                Ok(outcome)
+            }
+            Command::SweepAutomations { now_ms } => {
+                let outcome = crate::product::submit(
+                    &mut world,
+                    &actor,
+                    Command::SweepAutomations { now_ms },
+                )?;
+                self.spawn_dispatches(&mut world, &actor, &outcome, "automation")?;
+                Ok(outcome)
+            }
+            Command::StopChat { chat_id } => {
+                let run_ids: Vec<String> = world
+                    .runs
+                    .iter()
+                    .filter(|run| {
+                        run.chat_id.as_deref() == Some(chat_id.as_str()) && run.status == "running"
+                    })
+                    .map(|run| run.id.clone())
+                    .collect();
+                let outcome =
+                    crate::product::submit(&mut world, &actor, Command::StopChat { chat_id })?;
+                drop(world);
+                for run_id in run_ids {
+                    self.ports.cancel_harness(&run_id)?;
+                }
+                return Ok(outcome);
             }
             other => product::submit(&mut world, &actor, other),
         }
@@ -2153,6 +2461,25 @@ fn agent_name_taken(
             && except_id.map(|id| agent.id != id).unwrap_or(true)
             && agent.name.trim() == name
     })
+}
+
+fn enforce_concurrency(world: &World, agent: &crate::world::Agent) -> Result<(), CoordyError> {
+    let limit = if agent.concurrency_limit == 0 {
+        6
+    } else {
+        agent.concurrency_limit
+    };
+    let running = world
+        .runs
+        .iter()
+        .filter(|run| run.agent_id == agent.id && run.status == "running")
+        .count() as u32;
+    if running >= limit {
+        return Err(CoordyError::invalid(format!(
+            "agent concurrency limit ({limit}) reached"
+        )));
+    }
+    Ok(())
 }
 
 fn apply_agent_instructions(source: RunSource, instructions: &str) -> RunSource {

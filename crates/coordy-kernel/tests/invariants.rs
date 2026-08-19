@@ -1828,3 +1828,558 @@ fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
     assert_eq!(spawns[0].5, "high");
     assert_eq!(spawns[0].6, "fast");
 }
+
+fn live_fixture() -> (
+    Kernel,
+    std::sync::Arc<RecordingPorts>,
+    String,
+    String,
+    String,
+) {
+    let ports = std::sync::Arc::new(RecordingPorts::default());
+    let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));
+    let workspace_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace {
+                name: "live".into(),
+            },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::BindRepository {
+                workspace_id: workspace_id.clone(),
+                path: "/tmp/coordy-live-repo".into(),
+            },
+        ))
+        .unwrap();
+    let principal_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "执行者".into(),
+                harness: "claude".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    (kernel, ports, workspace_id, principal_id, agent_id)
+}
+
+fn create_open_task(kernel: &Kernel, principal_id: &str, workspace_id: &str, title: &str) -> String {
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.to_string(),
+            },
+            Command::CreateTask {
+                workspace_id: workspace_id.into(),
+                title: title.into(),
+                description: "事项正文".into(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn update_agent_cli_and_limit(
+    kernel: &Kernel,
+    principal_id: &str,
+    agent_id: &str,
+    cli_args: Option<String>,
+    concurrency_limit: Option<u32>,
+) {
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.to_string(),
+            },
+            Command::UpdateAgent {
+                agent_id: agent_id.into(),
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit,
+                cli_args,
+                mcp_servers: None,
+            },
+        ))
+        .unwrap();
+}
+
+#[test]
+fn mention_run_spawns_without_changing_assignee() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let other = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "被提及".into(),
+                harness: "claude".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "提及");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartMentionRun {
+                task_id: task_id.clone(),
+                agent_id: other.clone(),
+                prompt: "@智能体 看这里".into(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Board { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|item| item.id == task_id).unwrap();
+    assert_eq!(task.assignee_agent_id.as_deref(), Some(agent_id.as_str()));
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 1);
+    assert!(spawns[0].2.contains("@智能体 看这里"));
+}
+
+#[test]
+fn retry_run_spawns_again_with_original_prompt() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "重试");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    let started = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "original prompt".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    let run_id = started.ids["run_id"].as_str().unwrap().to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::RetryRun { run_id },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 2);
+    assert_eq!(spawns[0].2, spawns[1].2);
+    assert!(spawns[0].2.contains("original prompt"));
+}
+
+#[test]
+fn squad_assignment_spawns_leader() {
+    let (kernel, ports, workspace_id, principal_id, leader_id) = live_fixture();
+    let member_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "队员".into(),
+                harness: "claude".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let squad_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateSquad {
+                workspace_id: workspace_id.clone(),
+                name: "前端组".into(),
+                leader_agent_id: leader_id,
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::SetSquadMembers {
+                squad_id: squad_id.clone(),
+                agent_ids: vec![member_id],
+            },
+        ))
+        .unwrap();
+    let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "小队事项");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::AssignIssue {
+                task_id,
+                agent_id: None,
+                principal_id: None,
+                squad_id: Some(squad_id),
+                project_id: None,
+                parent_id: None,
+                stage: None,
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 1);
+    assert!(spawns[0].2.contains("前端组"));
+    assert!(spawns[0].2.contains("队员"));
+    assert!(spawns[0].2.contains("事项正文"));
+}
+
+#[test]
+fn trigger_automation_creates_task_and_spawns_assignee() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let automation_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAutomation {
+                workspace_id: workspace_id.clone(),
+                name: "每日检查".into(),
+                runbook: "检查未完成事项".into(),
+                assignee_agent_id: Some(agent_id),
+                schedule: "every:30m".into(),
+                create_issue: true,
+            },
+        ))
+        .unwrap()
+        .ids["automation_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let outcome = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::TriggerAutomation { automation_id },
+        ))
+        .unwrap();
+    let task_id = outcome.ids["task_id"].as_str().unwrap();
+    let View::Board { tasks } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Board { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    assert!(tasks.iter().any(|task| task.id == task_id && task.title == "每日检查"));
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 1);
+    assert!(spawns[0].2.contains("检查未完成事项"));
+}
+
+#[test]
+fn bound_skill_is_injected_into_later_start_run() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let skill_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateSkill {
+                workspace_id: workspace_id.clone(),
+                name: "审查规范".into(),
+                body: "只看 TypeScript".into(),
+            },
+        ))
+        .unwrap()
+        .ids["skill_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::SetAgentSkills {
+                agent_id: agent_id.clone(),
+                skill_ids: vec![skill_id],
+            },
+        ))
+        .unwrap();
+    let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "skill");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "开始".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert!(spawns[0].2.contains("审查规范"));
+    assert!(spawns[0].2.contains("只看 TypeScript"));
+    assert!(spawns[0].2.contains("开始"));
+}
+
+#[test]
+fn start_run_rejects_when_concurrency_limit_reached() {
+    let (kernel, _ports, workspace_id, principal_id, agent_id) = live_fixture();
+    update_agent_cli_and_limit(&kernel, &principal_id, &agent_id, None, Some(1));
+    let first = create_open_task(&kernel, &principal_id, &workspace_id, "one");
+    let second = create_open_task(&kernel, &principal_id, &workspace_id, "two");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: first.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: second.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: first,
+                source: RunSource::Acp {
+                    prompt: "first".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    let err = kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::StartRun {
+                task_id: second,
+                source: RunSource::Acp {
+                    prompt: "second".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("concurrency"));
+}
+
+#[test]
+fn start_run_passes_cli_args_to_spawn() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    update_agent_cli_and_limit(
+        &kernel,
+        &principal_id,
+        &agent_id,
+        Some("--foo bar".into()),
+        None,
+    );
+    let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "cli");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "go".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns[0].7, "--foo bar");
+}
+
+#[test]
+fn sweep_automations_arms_then_fires_after_interval() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAutomation {
+                workspace_id: workspace_id.clone(),
+                name: "间隔任务".into(),
+                runbook: "sweep body".into(),
+                assignee_agent_id: Some(agent_id),
+                schedule: "every:1m".into(),
+                create_issue: true,
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::SweepAutomations { now_ms: 1_000 },
+        ))
+        .unwrap();
+    let View::Board { tasks } = kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Query::Board {
+                workspace_id: workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    assert!(!tasks.iter().any(|task| task.title == "间隔任务"));
+    assert!(ports.spawns.lock().unwrap().is_empty());
+    kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::SweepAutomations { now_ms: 61_000 },
+        ))
+        .unwrap();
+    let View::Board { tasks } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Board { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("board");
+    };
+    assert!(tasks.iter().any(|task| task.title == "间隔任务"));
+    assert_eq!(ports.spawns.lock().unwrap().len(), 1);
+}

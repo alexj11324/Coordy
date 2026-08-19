@@ -7,7 +7,9 @@ use std::process::{Command, Stdio};
 use coordy_protocol::{CoordyError, HarnessEvent};
 use serde_json::Value;
 
-use crate::protocol::{native_launch_args, protocol_family, resolve_builtin_bin, ProtocolFamily};
+use crate::protocol::{
+    append_cli_args, native_launch_args, protocol_family, resolve_builtin_bin, ProtocolFamily,
+};
 use crate::{parse_codex_jsonl_line, SecretEnv};
 
 pub fn spawn_native_session(
@@ -17,6 +19,7 @@ pub fn spawn_native_session(
     model: &str,
     thinking: &str,
     speed: &str,
+    cli_args: &str,
     secrets: &SecretEnv,
     run_id: Option<&str>,
     mut on_event: impl FnMut(HarnessEvent),
@@ -29,8 +32,10 @@ pub fn spawn_native_session(
     }
     let bin = resolve_builtin_bin(kind)
         .ok_or_else(|| CoordyError::unavailable(format!("{kind} is not installed")))?;
+    let mut args = native_launch_args(family, prompt, model, thinking, speed);
+    append_cli_args(family, &mut args, cli_args);
     let mut cmd = Command::new(&bin);
-    cmd.args(native_launch_args(family, prompt, model, thinking, speed))
+    cmd.args(args)
         .current_dir(if worktree.is_empty() { "." } else { worktree })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

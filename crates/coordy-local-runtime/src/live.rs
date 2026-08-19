@@ -49,6 +49,7 @@ impl Ports for LivePorts {
         model: &str,
         thinking: &str,
         speed: &str,
+        cli_args: &str,
     ) -> Result<(), CoordyError> {
         let tx = self.events.clone();
         let run_id = run_id.to_string();
@@ -58,6 +59,7 @@ impl Ports for LivePorts {
         let model = model.to_string();
         let thinking = thinking.to_string();
         let speed = speed.to_string();
+        let cli_args = cli_args.to_string();
         let secrets = SecretStore::open(&self.data_dir).env();
         let registry = std::fs::read_to_string(self.data_dir.join("cache/acp-registry.json")).ok();
         thread::spawn(move || {
@@ -71,6 +73,7 @@ impl Ports for LivePorts {
                 &model,
                 &thinking,
                 &speed,
+                &cli_args,
                 &run_id,
                 &secrets,
                 registry.as_deref(),
@@ -115,6 +118,7 @@ fn run_kind(
     model: &str,
     thinking: &str,
     speed: &str,
+    cli_args: &str,
     run_id: &str,
     secrets: &SecretEnv,
     registry_json: Option<&str>,
@@ -140,6 +144,7 @@ fn run_kind(
         model,
         thinking,
         speed,
+        cli_args,
         secrets,
         Some(run_id),
         emit,

@@ -405,6 +405,9 @@ pub enum Command {
     TriggerAutomation {
         automation_id: String,
     },
+    SweepAutomations {
+        now_ms: i64,
+    },
     DeleteAutomation {
         automation_id: String,
     },
@@ -957,6 +960,8 @@ pub struct AutomationView {
     pub last_run_id: Option<String>,
     #[serde(default)]
     pub run_count: u32,
+    #[serde(default)]
+    pub last_triggered_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1156,6 +1161,11 @@ pub enum RpcRequest {
         principal_id: String,
         ids: Option<Vec<String>>,
     },
+    CompleteDraft {
+        id: String,
+        kind: String,
+        prompt: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1191,6 +1201,19 @@ pub struct DiscoveredAgentView {
 pub struct ImportAgentsResult {
     pub imported: Vec<String>,
     pub skipped: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DraftCompletion {
+    pub kind: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub instructions: String,
+    #[serde(default)]
+    pub titles: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

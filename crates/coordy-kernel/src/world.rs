@@ -381,6 +381,8 @@ pub struct Automation {
     pub last_run_id: Option<String>,
     #[serde(default)]
     pub run_count: u32,
+    #[serde(default)]
+    pub last_triggered_at: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

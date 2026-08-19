@@ -107,3 +107,14 @@ fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
     assert!(opencode.windows(2).any(|w| w == ["--variant", "max"]));
     assert_eq!(opencode.last().map(String::as_str), Some("review this"));
 }
+
+#[test]
+fn native_launch_args_append_cli_args_except_acp() {
+    let mut claude = native_launch_args(ProtocolFamily::Claude, "review this", "", "", "");
+    coordy_harness::append_cli_args(ProtocolFamily::Claude, &mut claude, "--foo bar");
+    assert!(claude.windows(2).any(|w| w == ["--foo", "bar"]));
+
+    let mut acp = native_launch_args(ProtocolFamily::Acp, "review this", "", "", "");
+    coordy_harness::append_cli_args(ProtocolFamily::Acp, &mut acp, "--foo bar");
+    assert!(acp.is_empty());
+}

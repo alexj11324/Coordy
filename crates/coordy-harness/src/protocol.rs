@@ -232,6 +232,17 @@ pub fn native_launch_args(
     }
 }
 
+pub fn append_cli_args(family: ProtocolFamily, args: &mut Vec<String>, extra_cli: &str) {
+    if family.uses_acp() {
+        return;
+    }
+    for token in extra_cli.split_whitespace() {
+        if !token.is_empty() {
+            args.push(token.to_string());
+        }
+    }
+}
+
 pub fn resolve_builtin_bin(kind: &str) -> Option<std::path::PathBuf> {
     builtin(kind).and_then(|spec| spec.bins.iter().find_map(|name| which_bin(name)))
 }

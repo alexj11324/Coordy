@@ -21,6 +21,7 @@ pub trait Ports: Send + Sync {
         model: &str,
         thinking: &str,
         speed: &str,
+        cli_args: &str,
     ) -> Result<(), CoordyError>;
 
     fn cancel_harness(&self, run_id: &str) -> Result<(), CoordyError>;
@@ -51,6 +52,7 @@ impl Ports for NoopPorts {
         _model: &str,
         _thinking: &str,
         _speed: &str,
+        _cli_args: &str,
     ) -> Result<(), CoordyError> {
         if kind == "codex" || kind == "claude_code" || kind == "opencode" || kind == "acp" {
             return Err(CoordyError::unavailable(format!(
@@ -69,7 +71,18 @@ impl Ports for NoopPorts {
 pub struct RecordingPorts {
     pub worktrees: std::sync::Mutex<Vec<String>>,
     pub patches: std::sync::Mutex<Vec<String>>,
-    pub spawns: std::sync::Mutex<Vec<(String, String, String, String, String, String, String)>>,
+    pub spawns: std::sync::Mutex<
+        Vec<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        )>,
+    >,
     pub cancelled: std::sync::Mutex<Vec<String>>,
 }
 
@@ -98,6 +111,7 @@ impl Ports for RecordingPorts {
         model: &str,
         thinking: &str,
         speed: &str,
+        cli_args: &str,
     ) -> Result<(), CoordyError> {
         self.spawns.lock().unwrap().push((
             kind.to_string(),
@@ -107,6 +121,7 @@ impl Ports for RecordingPorts {
             model.to_string(),
             thinking.to_string(),
             speed.to_string(),
+            cli_args.to_string(),
         ));
         Ok(())
     }

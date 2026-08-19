@@ -190,6 +190,13 @@ async fn dispatch(runtime: &Runtime, req: RpcRequest) -> RpcResponse {
                 Err(e) => err(id, e),
             }
         }
+        RpcRequest::CompleteDraft { id, kind, prompt } => {
+            let store = crate::SecretStore::open(&runtime.data_dir);
+            match crate::draft::complete_draft(&store, &kind, &prompt).await {
+                Ok(result) => ok(id, serde_json::to_value(result).unwrap()),
+                Err(e) => err(id, e),
+            }
+        }
     }
 }
 

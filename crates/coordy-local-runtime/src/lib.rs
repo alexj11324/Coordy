@@ -1,6 +1,7 @@
 //! Local IPC, SQLite persistence, Git worktrees, and harness process control.
 
 mod discovery;
+mod draft;
 mod git;
 mod ipc;
 mod live;
@@ -54,6 +55,19 @@ impl Runtime {
                 if let Ok(store) = SqliteStore::open(&persist_path) {
                     let _ = store.save(&ingest_kernel.export_world());
                 }
+            }
+        });
+        let sweep_kernel = Arc::clone(&kernel);
+        let sweep_persist = db_path.clone();
+        thread::spawn(move || loop {
+            thread::sleep(std::time::Duration::from_secs(30));
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let _ = sweep_kernel.submit_sync(AuthenticatedCommand {
+                actor: Actor::Daemon,
+                command: Command::SweepAutomations { now_ms },
+            });
+            if let Ok(store) = SqliteStore::open(&sweep_persist) {
+                let _ = store.save(&sweep_kernel.export_world());
             }
         });
         let _ = crate::write_secret_ref(data_dir, "COORDY_ADVISOR_API_KEY");
