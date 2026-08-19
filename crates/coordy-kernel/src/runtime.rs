@@ -1180,6 +1180,8 @@ impl Kernel {
                             &prompt,
                             &run_id,
                             &agent.model,
+                            &agent.thinking,
+                            &agent.speed,
                         )?;
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }

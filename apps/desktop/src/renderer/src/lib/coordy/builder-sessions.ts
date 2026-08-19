@@ -140,6 +140,8 @@ function asAgentDraft(value: unknown): AgentDraft | null {
     instructions,
     harness,
     model: typeof row.model === "string" ? row.model : "",
+    thinking: typeof row.thinking === "string" ? row.thinking : "",
+    speed: typeof row.speed === "string" ? row.speed : "",
     avatar: storedAvatar || formatAgentAvatar([name, harness, instructions].filter(Boolean).join("|") || "agent"),
     access: row.access === "workspace" ? "workspace" : "owner",
   };

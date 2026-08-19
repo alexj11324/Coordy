@@ -7,6 +7,8 @@ import {
   applyBuilderTurn,
   applyDraftModelChange,
   applyDraftRuntimeChange,
+  applyDraftSpeedChange,
+  applyDraftThinkingChange,
   BUILDER_STARTER_PROMPTS,
   classifyCreateAgentError,
   emptyAgentDraft,
@@ -26,7 +28,7 @@ import {
 import { pickerRuntimes, runtimeChipLabel, selectableRuntimes, harnessIdsMatch } from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
-import { AgentConfigurationPanel, CreateAgentFooter, HarnessDropdown, ModelDropdown } from "./agent-create-form";
+import { AgentConfigurationPanel, CreateAgentFooter, HarnessDropdown, RuntimeCapabilityFields } from "./agent-create-form";
 import { AgentCreateChip, AgentCreateShell } from "./create-shell";
 
 export function AiCreateAgentPage() {
@@ -100,9 +102,9 @@ export function AiCreateAgentPage() {
             <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <MessageSquare className="size-5" />
             </span>
-            <h2 className="mt-5 text-xl font-semibold">选择新智能体的 harness 和模型</h2>
+            <h2 className="mt-5 text-xl font-semibold">选择新智能体的 harness 与执行参数</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              此对话在本机进行，不会调用 harness。Harness 与模型仅在创建完成后、启动运行时使用。
+              此对话在本机进行，不会调用 harness。Harness、模型、思考强度与速度档仅在创建完成后、启动运行时使用。
             </p>
             <div className="mt-6 space-y-4">
               <HarnessDropdown
@@ -112,11 +114,15 @@ export function AiCreateAgentPage() {
                 os={os}
                 onChange={(harness) => setDraft((current) => applyDraftRuntimeChange(current, harness))}
               />
-              <ModelDropdown
+              <RuntimeCapabilityFields
                 harness={draft.harness}
-                value={draft.model}
+                model={draft.model}
+                thinking={draft.thinking}
+                speed={draft.speed}
                 disabled={!draft.harness}
-                onChange={(model) => setDraft((current) => applyDraftModelChange(current, model))}
+                onModelChange={(model) => setDraft((current) => applyDraftModelChange(current, model))}
+                onThinkingChange={(thinking) => setDraft((current) => applyDraftThinkingChange(current, thinking))}
+                onSpeedChange={(speed) => setDraft((current) => applyDraftSpeedChange(current, speed))}
               />
             </div>
             {error ? (
@@ -216,6 +222,8 @@ export function AiBuilderSessionPage() {
         description: session.draft.description,
         instructions: session.draft.instructions,
         model: session.draft.model,
+        thinking: session.draft.thinking,
+        speed: session.draft.speed,
         avatar: session.draft.avatar,
         access: session.draft.access,
       });

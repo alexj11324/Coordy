@@ -15,6 +15,8 @@ pub fn spawn_native_session(
     worktree: &str,
     prompt: &str,
     model: &str,
+    thinking: &str,
+    speed: &str,
     secrets: &SecretEnv,
     run_id: Option<&str>,
     mut on_event: impl FnMut(HarnessEvent),
@@ -28,7 +30,7 @@ pub fn spawn_native_session(
     let bin = resolve_builtin_bin(kind)
         .ok_or_else(|| CoordyError::unavailable(format!("{kind} is not installed")))?;
     let mut cmd = Command::new(&bin);
-    cmd.args(native_launch_args(family, prompt, model))
+    cmd.args(native_launch_args(family, prompt, model, thinking, speed))
         .current_dir(if worktree.is_empty() { "." } else { worktree })
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

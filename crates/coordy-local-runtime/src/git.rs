@@ -69,7 +69,9 @@ impl Ports for GitPorts {
         worktree: &str,
         prompt: &str,
         _run_id: &str,
-        _model: &str,
+        model: &str,
+        thinking: &str,
+        speed: &str,
     ) -> Result<(), CoordyError> {
         let kind = canonical_harness_id(kind);
         if detect_on_path()
@@ -80,7 +82,7 @@ impl Ports for GitPorts {
                 "{kind} is not installed; use JSONL replay or install the harness"
             )));
         }
-        let mut cmd = spawn_command(kind, worktree, prompt, _model)?;
+        let mut cmd = spawn_command(kind, worktree, prompt, model, thinking, speed)?;
         let _child = cmd
             .spawn()
             .map_err(|e| CoordyError::unavailable(format!("spawn {kind}: {e}")))?;

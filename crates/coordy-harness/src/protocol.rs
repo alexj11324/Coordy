@@ -122,6 +122,8 @@ pub fn is_builtin_id(id: &str) -> bool {
 }
 
 /// Flags shown in the catalog (no prompt). The prompt is appended at spawn.
+/// Empty model/thinking/speed omit the corresponding flags so the CLI uses
+/// its own default.
 pub fn display_args(family: ProtocolFamily) -> Vec<&'static str> {
     match family {
         ProtocolFamily::Claude => vec![
@@ -140,8 +142,16 @@ pub fn display_args(family: ProtocolFamily) -> Vec<&'static str> {
     }
 }
 
-pub fn native_launch_args(family: ProtocolFamily, prompt: &str, model: &str) -> Vec<String> {
+pub fn native_launch_args(
+    family: ProtocolFamily,
+    prompt: &str,
+    model: &str,
+    thinking: &str,
+    speed: &str,
+) -> Vec<String> {
     let model = model.trim();
+    let thinking = thinking.trim();
+    let speed = speed.trim();
     match family {
         ProtocolFamily::Claude => {
             let mut args = vec![
@@ -155,12 +165,21 @@ pub fn native_launch_args(family: ProtocolFamily, prompt: &str, model: &str) -> 
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
+            if !thinking.is_empty() {
+                args.extend(["--effort".into(), thinking.to_string()]);
+            }
             args
         }
         ProtocolFamily::Codex => {
             let mut args = vec!["exec".into(), "--json".into()];
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
+            }
+            if !thinking.is_empty() {
+                args.extend(["-c".into(), format!("model_reasoning_effort={thinking}")]);
+            }
+            if !speed.is_empty() {
+                args.extend(["-c".into(), format!("service_tier={speed}")]);
             }
             args.push(prompt.to_string());
             args
@@ -182,6 +201,9 @@ pub fn native_launch_args(family: ProtocolFamily, prompt: &str, model: &str) -> 
             let mut args = vec!["run".into()];
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
+            }
+            if !thinking.is_empty() {
+                args.extend(["--variant".into(), thinking.to_string()]);
             }
             args.push(prompt.to_string());
             args

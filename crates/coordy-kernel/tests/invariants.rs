@@ -1080,6 +1080,8 @@ fn start_run_acp_spawns_against_bound_repo() {
     assert_eq!(spawns[0].1, "/tmp/coordy-acp-repo");
     assert_eq!(spawns[0].2, "hello acp");
     assert_eq!(spawns[0].4, "");
+    assert_eq!(spawns[0].5, "");
+    assert_eq!(spawns[0].6, "");
 }
 
 #[test]
@@ -1701,4 +1703,128 @@ fn start_run_prepends_agent_instructions() {
         .unwrap();
     let spawns = ports.spawns.lock().unwrap();
     assert_eq!(spawns[0].2, "先读测试。\n\nhello acp");
+}
+
+#[test]
+fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
+    let ports = std::sync::Arc::new(RecordingPorts::default());
+    let kernel = Kernel::new(ports.clone(), std::sync::Arc::new(DeterministicAdvisor));
+    let workspace_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace { name: "acp".into() },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::BindRepository {
+                workspace_id: workspace_id.clone(),
+                path: "/tmp/coordy-acp-repo".into(),
+            },
+        ))
+        .unwrap();
+    let principal_id = kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "审查员".into(),
+                harness: "codex".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::UpdateAgent {
+                agent_id: agent_id.clone(),
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: Some("gpt-5.6-sol".into()),
+                thinking: Some("high".into()),
+                speed: Some("flex".into()),
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                mcp_servers: None,
+            },
+        ))
+        .unwrap();
+    let task_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateTask {
+                workspace_id,
+                title: "talk".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "hello acp".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns[0].0, "codex");
+    assert_eq!(spawns[0].4, "gpt-5.6-sol");
+    assert_eq!(spawns[0].5, "high");
+    assert_eq!(spawns[0].6, "flex");
 }

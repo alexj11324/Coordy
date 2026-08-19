@@ -16,11 +16,16 @@ import type { ReactNode } from "react";
 import {
   applyDraftModelChange,
   applyDraftRuntimeChange,
+  applyDraftSpeedChange,
+  applyDraftThinkingChange,
   DEFAULT_MODEL_VALUE,
   modelSelectValue,
   modelsForHarness,
+  speedForHarness,
+  thinkingForHarness,
   type AgentAccess,
   type AgentDraft,
+  type HarnessModelOption,
 } from "../../lib/coordy/agent-draft";
 import { harnessIdsMatch, runtimeChipLabel, runtimeSubtitle } from "../../lib/coordy/labels";
 import { AgentAvatarField } from "../agent-avatar";
@@ -99,7 +104,7 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择启动运行时使用的 harness 和模型。原生 CLI 通过对应命令行参数下发模型；ACP 家族通过 session/set_model 下发。"
+        description="选择启动运行时使用的 harness、模型，以及该 CLI 支持的思考强度与速度档。留空则使用 CLI 默认值。原生 CLI 通过对应命令行参数下发；ACP 家族仅下发模型。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
           <HarnessDropdown
@@ -109,11 +114,15 @@ export function AgentConfigurationPanel({
             os={os}
             onChange={(harness) => onChange(applyDraftRuntimeChange(draft, harness))}
           />
-          <ModelDropdown
+          <RuntimeCapabilityFields
             harness={draft.harness}
-            value={draft.model}
+            model={draft.model}
+            thinking={draft.thinking}
+            speed={draft.speed}
             disabled={!draft.harness}
-            onChange={(model) => onChange(applyDraftModelChange(draft, model))}
+            onModelChange={(model) => onChange(applyDraftModelChange(draft, model))}
+            onThinkingChange={(thinking) => onChange(applyDraftThinkingChange(draft, thinking))}
+            onSpeedChange={(speed) => onChange(applyDraftSpeedChange(draft, speed))}
           />
         </div>
       </SettingsBlock>
@@ -214,6 +223,54 @@ export function HarnessDropdown({
   );
 }
 
+export function RuntimeCapabilityFields({
+  harness,
+  model,
+  thinking,
+  speed,
+  disabled,
+  onModelChange,
+  onThinkingChange,
+  onSpeedChange,
+}: {
+  harness: string;
+  model: string;
+  thinking: string;
+  speed: string;
+  disabled?: boolean;
+  onModelChange: (model: string) => void;
+  onThinkingChange: (thinking: string) => void;
+  onSpeedChange: (speed: string) => void;
+}) {
+  const thinkingOptions = thinkingForHarness(harness, model);
+  const speedOptions = speedForHarness(harness);
+  return (
+    <>
+      <ModelDropdown harness={harness} value={model} disabled={disabled} onChange={onModelChange} />
+      {thinkingOptions.length > 0 ? (
+        <TokenDropdown
+          label="思考强度"
+          value={thinking}
+          presets={thinkingOptions}
+          emptyLabel="默认（CLI）"
+          disabled={disabled}
+          onChange={onThinkingChange}
+        />
+      ) : null}
+      {speedOptions.length > 0 ? (
+        <TokenDropdown
+          label="速度档"
+          value={speed}
+          presets={speedOptions}
+          emptyLabel="默认（CLI）"
+          disabled={disabled}
+          onChange={onSpeedChange}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function ModelDropdown({
   harness,
   value,
@@ -226,43 +283,77 @@ export function ModelDropdown({
   disabled?: boolean;
 }) {
   const presets = modelsForHarness(harness);
-  const items: Record<string, string> = { [DEFAULT_MODEL_VALUE]: "默认（harness）" };
-  for (const preset of presets) items[preset.id] = preset.label;
-  if (value.trim() && !items[value]) items[value] = value;
-  return (
-    <div className="min-w-0 space-y-1.5">
-      <Label>模型</Label>
-      {presets.length === 0 ? (
+  if (presets.length === 0) {
+    return (
+      <div className="min-w-0 space-y-1.5">
+        <Label>模型</Label>
         <Input
           value={value}
           disabled={disabled}
           autoComplete="off"
-          placeholder={disabled ? "请先选择 harness" : "模型 id，留空则用 harness 默认"}
+          placeholder={disabled ? "请先选择 harness" : "模型 id，留空则用 CLI 默认"}
           onChange={(event) => onChange(event.target.value)}
         />
-      ) : (
-        <Select
-          value={modelSelectValue(value)}
-          items={items}
-          onValueChange={(next) => next && onChange(next === DEFAULT_MODEL_VALUE ? "" : next)}
-          disabled={disabled}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder={disabled ? "请先选择 harness" : "默认（harness）"} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={DEFAULT_MODEL_VALUE}>默认（harness）</SelectItem>
-            {presets.map((preset) => (
-              <SelectItem key={preset.id} value={preset.id}>
-                {preset.label}
-              </SelectItem>
-            ))}
-            {value.trim() && !presets.some((preset) => preset.id === value) ? (
-              <SelectItem value={value}>{value}</SelectItem>
-            ) : null}
-          </SelectContent>
-        </Select>
-      )}
+      </div>
+    );
+  }
+  return (
+    <TokenDropdown
+      label="模型"
+      value={value}
+      presets={presets}
+      emptyLabel="默认（CLI）"
+      disabled={disabled}
+      disabledPlaceholder="请先选择 harness"
+      onChange={onChange}
+    />
+  );
+}
+
+function TokenDropdown({
+  label,
+  value,
+  presets,
+  emptyLabel,
+  disabled,
+  disabledPlaceholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  presets: HarnessModelOption[];
+  emptyLabel: string;
+  disabled?: boolean;
+  disabledPlaceholder?: string;
+  onChange: (value: string) => void;
+}) {
+  const items: Record<string, string> = { [DEFAULT_MODEL_VALUE]: emptyLabel };
+  for (const preset of presets) items[preset.id] = preset.label;
+  if (value.trim() && !items[value]) items[value] = value;
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <Label>{label}</Label>
+      <Select
+        value={modelSelectValue(value)}
+        items={items}
+        onValueChange={(next) => next && onChange(next === DEFAULT_MODEL_VALUE ? "" : next)}
+        disabled={disabled}
+      >
+        <SelectTrigger>
+          <SelectValue placeholder={disabled ? disabledPlaceholder || emptyLabel : emptyLabel} />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={DEFAULT_MODEL_VALUE}>{emptyLabel}</SelectItem>
+          {presets.map((preset) => (
+            <SelectItem key={preset.id} value={preset.id}>
+              {preset.label}
+            </SelectItem>
+          ))}
+          {value.trim() && !presets.some((preset) => preset.id === value) ? (
+            <SelectItem value={value}>{value}</SelectItem>
+          ) : null}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

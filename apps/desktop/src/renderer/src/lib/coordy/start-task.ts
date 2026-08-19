@@ -15,6 +15,8 @@ export async function createNamedAgent(input: {
   description?: string;
   instructions?: string;
   model?: string;
+  thinking?: string;
+  speed?: string;
   access?: string;
   avatar?: string;
 }): Promise<string> {
@@ -29,6 +31,8 @@ export async function createNamedAgent(input: {
   const description = input.description?.trim() ?? "";
   const instructions = input.instructions?.trim() ?? "";
   const model = input.model?.trim() ?? "";
+  const thinking = input.thinking?.trim() ?? "";
+  const speed = input.speed?.trim() ?? "";
   const access = input.access?.trim() ?? "";
   const avatar = storedAgentAvatar(input.avatar, agentId);
   await submit({
@@ -37,6 +41,8 @@ export async function createNamedAgent(input: {
     description: description || null,
     instructions: instructions || null,
     model: model || null,
+    thinking: thinking || null,
+    speed: speed || null,
     access: access || null,
     avatar,
   });

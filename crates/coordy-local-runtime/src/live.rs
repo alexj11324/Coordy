@@ -47,6 +47,8 @@ impl Ports for LivePorts {
         prompt: &str,
         run_id: &str,
         model: &str,
+        thinking: &str,
+        speed: &str,
     ) -> Result<(), CoordyError> {
         let tx = self.events.clone();
         let run_id = run_id.to_string();
@@ -54,6 +56,8 @@ impl Ports for LivePorts {
         let worktree = worktree.to_string();
         let prompt = prompt.to_string();
         let model = model.to_string();
+        let thinking = thinking.to_string();
+        let speed = speed.to_string();
         let secrets = SecretStore::open(&self.data_dir).env();
         let registry = std::fs::read_to_string(self.data_dir.join("cache/acp-registry.json")).ok();
         thread::spawn(move || {
@@ -65,6 +69,8 @@ impl Ports for LivePorts {
                 &worktree,
                 &prompt,
                 &model,
+                &thinking,
+                &speed,
                 &run_id,
                 &secrets,
                 registry.as_deref(),
@@ -107,6 +113,8 @@ fn run_kind(
     worktree: &str,
     prompt: &str,
     model: &str,
+    thinking: &str,
+    speed: &str,
     run_id: &str,
     secrets: &SecretEnv,
     registry_json: Option<&str>,
@@ -125,5 +133,15 @@ fn run_kind(
             emit,
         );
     }
-    spawn_native_session(kind, worktree, prompt, model, secrets, Some(run_id), emit)
+    spawn_native_session(
+        kind,
+        worktree,
+        prompt,
+        model,
+        thinking,
+        speed,
+        secrets,
+        Some(run_id),
+        emit,
+    )
 }

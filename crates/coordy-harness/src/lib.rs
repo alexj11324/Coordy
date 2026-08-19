@@ -75,6 +75,8 @@ pub fn spawn_command(
     worktree: &str,
     prompt: &str,
     model: &str,
+    thinking: &str,
+    speed: &str,
 ) -> Result<std::process::Command, CoordyError> {
     let family = protocol_family(kind);
     if family.uses_acp() {
@@ -87,7 +89,7 @@ pub fn spawn_command(
     })?;
     let mut cmd = std::process::Command::new(bin);
     cmd.current_dir(worktree);
-    cmd.args(native_launch_args(family, prompt, model));
+    cmd.args(native_launch_args(family, prompt, model, thinking, speed));
     Ok(cmd)
 }
 

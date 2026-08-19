@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBuilderTurn,
+  applyDraftModelChange,
   applyDraftRuntimeChange,
   classifyCreateAgentError,
   DEFAULT_MODEL_VALUE,
@@ -9,6 +10,8 @@ import {
   emptyAgentDraft,
   modelsForHarness,
   modelSelectValue,
+  speedForHarness,
+  thinkingForHarness,
 } from "../lib/coordy/agent-draft";
 import {
   listBuilderSessions,
@@ -47,13 +50,24 @@ describe("agent creation studio helpers", () => {
     expect(draft.instructions).toContain("只看 TypeScript");
   });
 
-    it("clears the model when the harness changes", () => {
+    it("clears the model, thinking, and speed when the harness changes", () => {
     const next = applyDraftRuntimeChange(
-      { ...EMPTY_AGENT_DRAFT, harness: "claude-acp", model: "opus" },
+      { ...EMPTY_AGENT_DRAFT, harness: "claude-acp", model: "opus", thinking: "high", speed: "fast" },
       "codex-acp",
     );
     expect(next.harness).toBe("codex-acp");
     expect(next.model).toBe("");
+    expect(next.thinking).toBe("");
+    expect(next.speed).toBe("");
+  });
+
+  it("drops thinking that the next model does not accept", () => {
+    const next = applyDraftModelChange(
+      { ...EMPTY_AGENT_DRAFT, harness: "claude", model: "claude-opus-4-8", thinking: "xhigh" },
+      "claude-haiku-4-5-20251001",
+    );
+    expect(next.model).toBe("claude-haiku-4-5-20251001");
+    expect(next.thinking).toBe("");
   });
 
   it("treats an empty model as the provider default", () => {
@@ -127,12 +141,35 @@ describe("agent creation studio helpers", () => {
     expect(runtimeSubtitle({ command: "npx -y made-up --acp", protocol_family: "acp" })).toBe("本机 · ACP");
   });
 
-  it("offers models for Claude and Codex harnesses", () => {
+  it("offers vendor model ids, thinking tokens, and Codex speed tiers", () => {
     expect(modelsForHarness("claude-acp").map((item) => item.id)).toContain("claude-opus-4-6");
-    expect(modelsForHarness("claude").map((item) => item.id)).toContain("claude-opus-4-6");
-    expect(modelsForHarness("codex-acp").map((item) => item.id)).toContain("gpt-5.4");
+    expect(modelsForHarness("claude").map((item) => item.id)).toEqual(
+      expect.arrayContaining(["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]),
+    );
+    expect(modelsForHarness("codex-acp").map((item) => item.id)).toEqual(
+      expect.arrayContaining(["gpt-5.6-sol", "gpt-5.4", "gpt-5.3-codex"]),
+    );
     expect(modelsForHarness("gemini-cli").map((item) => item.id)).toContain("gemini-2.5-pro");
+    expect(modelsForHarness("copilot").map((item) => item.id)).toContain("claude-sonnet-4.6");
+    expect(modelsForHarness("copilot").map((item) => item.id)).not.toContain("claude-sonnet-4-6");
+    expect(modelsForHarness("cursor").map((item) => item.id)).toContain("auto");
     expect(modelsForHarness("coordy-stub")).toEqual([]);
+
+    expect(thinkingForHarness("claude", "claude-opus-4-8").map((item) => item.id)).toEqual(
+      expect.arrayContaining(["low", "high", "xhigh", "max"]),
+    );
+    expect(thinkingForHarness("claude", "claude-haiku-4-5-20251001").map((item) => item.id)).toEqual([
+      "low",
+      "medium",
+      "high",
+    ]);
+    expect(thinkingForHarness("codex", "gpt-5.6-sol").map((item) => item.id)).toEqual(
+      expect.arrayContaining(["none", "high", "xhigh", "max", "ultra"]),
+    );
+    expect(thinkingForHarness("codex", "gpt-5.3-codex").map((item) => item.id)).not.toContain("ultra");
+    expect(thinkingForHarness("gemini", "gemini-2.5-pro")).toEqual([]);
+    expect(speedForHarness("codex").map((item) => item.id)).toEqual(["fast", "flex"]);
+    expect(speedForHarness("claude")).toEqual([]);
   });
 
   it("matches leftover ACP-era harness ids onto the native catalog", () => {

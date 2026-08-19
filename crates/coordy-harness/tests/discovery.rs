@@ -123,6 +123,8 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"from-cli"
         dir.to_str().unwrap(),
         "hello",
         "",
+        "",
+        "",
         &SecretEnv::default(),
         None,
         |event| events.push(event),

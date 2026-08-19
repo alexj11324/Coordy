@@ -78,6 +78,8 @@ export function ManualCreateAgentPage() {
         description: draft.description,
         instructions: draft.instructions,
         model: draft.model,
+        thinking: draft.thinking,
+        speed: draft.speed,
         avatar: draft.avatar,
         access: draft.access,
       });

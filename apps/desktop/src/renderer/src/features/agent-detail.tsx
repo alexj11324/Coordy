@@ -12,9 +12,10 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { formatAgentAvatar } from "../lib/coordy/agent-avatar";
 import { agentDisplayName, canonicalHarnessId, listableAgents, pickerRuntimes } from "../lib/coordy/labels";
+import { sanitizeThinking } from "../lib/coordy/agent-draft";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
-import { ModelDropdown } from "./create-agent/agent-create-form";
+import { RuntimeCapabilityFields } from "./create-agent/agent-create-form";
 import { RuntimePicker } from "./runtime-picker";
 import { AgentAvatar, AgentAvatarField } from "./agent-avatar";
 import { useTabTitle } from "../shell/use-tab-title";
@@ -39,6 +40,8 @@ export function AgentDetailPage() {
   const [instructions, setInstructions] = useState("");
   const [harness, setHarness] = useState("");
   const [model, setModel] = useState("");
+  const [thinking, setThinking] = useState("");
+  const [speed, setSpeed] = useState("");
   const [avatar, setAvatar] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const runtimes = useMemo(
@@ -55,6 +58,8 @@ export function AgentDetailPage() {
     setInstructions(agent.instructions ?? "");
     setHarness(canonicalHarnessId(agent.harness));
     setModel(agent.model ?? "");
+    setThinking(agent.thinking ?? "");
+    setSpeed(agent.speed ?? "");
     setAvatar(agent.avatar ?? "");
   }, [agent]);
 
@@ -69,6 +74,8 @@ export function AgentDetailPage() {
         instructions,
         harness: harness || agent.harness,
         model,
+        thinking,
+        speed,
         avatar: avatar.trim() || formatAgentAvatar(agent.id),
       });
     },
@@ -150,15 +157,24 @@ export function AgentDetailPage() {
             onChange={(id) => {
               setHarness(id);
               setModel("");
+              setThinking("");
+              setSpeed("");
             }}
           />
         </div>
-        <div className="space-y-1.5">
-          <ModelDropdown
+        <div className="grid gap-4 sm:grid-cols-2">
+          <RuntimeCapabilityFields
             harness={harness || agent.harness}
-            value={model}
+            model={model}
+            thinking={thinking}
+            speed={speed}
             disabled={!(harness || agent.harness)}
-            onChange={setModel}
+            onModelChange={(next) => {
+              setModel(next);
+              setThinking((current) => sanitizeThinking(harness || agent.harness, next, current));
+            }}
+            onThinkingChange={setThinking}
+            onSpeedChange={setSpeed}
           />
         </div>
         <div className="flex flex-wrap gap-2">
