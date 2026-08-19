@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { closeTab, openNewTab, replaceActiveTab, titleFromPath } from "../lib/coordy/tab-path";
 import { formatShortcut, matchShortcut, modifierSymbol, SHORTCUTS } from "../lib/coordy/shortcuts";
-import { filterIssues, issuesInColumn, taskIdentifier } from "../lib/coordy/issues";
+import { filterIssues, issuesInColumn, taskIdentifier, blockerWaitMessage, hasUnresolvedBlockers } from "../lib/coordy/issues";
 import { canGoBack, canGoForward, emptyHistory, historyBack, historyForward, recordVisit } from "../lib/coordy/nav-history";
 import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
 import type { TaskView } from "@coordy/protocol";
@@ -44,6 +44,23 @@ describe("issue identifiers and filters", () => {
     const tasks = [task({ id: "task_x", title: "旧", status: "cancelled" })];
     expect(issuesInColumn(tasks, "done")).toHaveLength(1);
     expect(issuesInColumn(tasks, "cancelled")).toHaveLength(1);
+  });
+
+  it("explains unresolved issue blockers in Chinese", () => {
+    const design = task({ id: "task_a", title: "设计稿", status: "open", identifier: "COOR-1" });
+    const implement = task({
+      id: "task_b",
+      title: "实现",
+      status: "blocked",
+      identifier: "COOR-2",
+      unresolved_blocker_ids: ["task_a"],
+      blocked_reason: "waiting on unfinished blockers",
+    });
+    expect(hasUnresolvedBlockers(implement)).toBe(true);
+    expect(blockerWaitMessage(implement, [design, implement])).toBe("需等待前置事项完成：COOR-1 设计稿");
+    expect(blockerWaitMessage(task({ id: "task_c", title: "手标", status: "blocked", blocked_reason: "marked blocked" }), [])).toBe(
+      "marked blocked",
+    );
   });
 });
 

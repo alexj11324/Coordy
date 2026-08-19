@@ -80,6 +80,7 @@ impl Kernel {
         if task.status == "backlog" {
             return Err(CoordyError::invalid("backlog issues are not queued"));
         }
+        product::reject_if_unresolved_blockers(world, task_id)?;
         if !can_command_agent(world, actor, agent_id) {
             return Err(CoordyError::denied("cannot command this agent"));
         }
@@ -218,6 +219,9 @@ impl Kernel {
             .cloned()
             .ok_or_else(|| CoordyError::not_found("task"))?;
         if task.status == "backlog" {
+            return Ok(());
+        }
+        if product::reject_if_unresolved_blockers(world, task_id).is_err() {
             return Ok(());
         }
         let squad = world
@@ -909,10 +913,16 @@ impl Kernel {
                 if !allowed_task_status(&status) {
                     return Err(CoordyError::invalid("unknown task status"));
                 }
-                let workspace_id = world
-                    .task(&task_id)
-                    .map(|t| t.workspace_id.clone())
-                    .ok_or_else(|| CoordyError::not_found("task"))?;
+                let (workspace_id, previous, title) = {
+                    let task = world
+                        .task(&task_id)
+                        .ok_or_else(|| CoordyError::not_found("task"))?;
+                    (
+                        task.workspace_id.clone(),
+                        task.status.clone(),
+                        task.title.clone(),
+                    )
+                };
                 if actor.is_agent() {
                     return Err(CoordyError::denied("agent cannot set task status"));
                 }
@@ -921,18 +931,16 @@ impl Kernel {
                 {
                     return Err(CoordyError::denied("not in workspace"));
                 }
-                let task = world
-                    .task_mut(&task_id)
-                    .ok_or_else(|| CoordyError::not_found("task"))?;
-                let previous = task.status.clone();
-                let title = task.title.clone();
-                task.status = status.clone();
-                if status != "blocked" {
-                    task.blocked_reason = None;
-                } else if task.blocked_reason.is_none() {
-                    task.blocked_reason = Some("marked blocked".into());
+                if product::status_needs_clear_blockers(&status) {
+                    product::reject_if_unresolved_blockers(&world, &task_id)?;
                 }
-                drop(task);
+                {
+                    let task = world
+                        .task_mut(&task_id)
+                        .ok_or_else(|| CoordyError::not_found("task"))?;
+                    apply_task_status(task, &status);
+                }
+                product::refresh_issue_blocker_dependents(&mut world, &task_id);
                 if previous != status {
                     product::push_notice(
                         &mut world,
@@ -1267,6 +1275,7 @@ impl Kernel {
                 if task.status == "backlog" {
                     return Err(CoordyError::invalid("backlog issues are not queued"));
                 }
+                product::reject_if_unresolved_blockers(&world, &task_id)?;
                 let agent_id = override_agent
                     .filter(|id| !id.is_empty())
                     .or(task.assignee_agent_id.clone())
@@ -1444,6 +1453,9 @@ impl Kernel {
                 }
                 if let Some(reason) = &task.blocked_reason {
                     return Ok(Outcome::blocked(reason.clone()));
+                }
+                if let Err(err) = product::reject_if_unresolved_blockers(&world, &task_id) {
+                    return Ok(Outcome::blocked(err.message));
                 }
                 let active: Vec<Commitment> = world
                     .commitments
@@ -1689,11 +1701,15 @@ impl Kernel {
                 for task_id in pending {
                     product::backfill_task_identity(&mut world, &task_id);
                 }
+                let rows: Vec<_> = world
+                    .tasks
+                    .iter()
+                    .filter(|t| t.workspace_id == workspace_id && !t.deleted && t.stage != "chat")
+                    .cloned()
+                    .collect();
                 Ok(View::Board {
-                    tasks: world
-                        .tasks
+                    tasks: rows
                         .iter()
-                        .filter(|t| t.workspace_id == workspace_id && !t.deleted && t.stage != "chat")
                         .map(|t| product::task_view(&world, t, &actor))
                         .collect(),
                 })
@@ -2065,6 +2081,15 @@ fn allowed_task_status(status: &str) -> bool {
         status,
         "backlog" | "open" | "running" | "review" | "blocked" | "done" | "cancelled"
     )
+}
+
+fn apply_task_status(task: &mut Task, status: &str) {
+    task.status = status.to_string();
+    if status != "blocked" {
+        task.blocked_reason = None;
+    } else if task.blocked_reason.is_none() {
+        task.blocked_reason = Some("marked blocked".into());
+    }
 }
 
 fn health_view(world: &World) -> HealthView {

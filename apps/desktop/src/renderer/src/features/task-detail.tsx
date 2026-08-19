@@ -15,7 +15,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
-import { PRIORITY_ITEMS, taskIdentifier } from "../lib/coordy/issues";
+import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
 import {
   agentDisplayName,
   listableAgents,
@@ -133,6 +133,7 @@ export function TaskDetailPage() {
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [blockerPick, setBlockerPick] = useState("none");
   const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : null;
   const workPath = task?.worktree_path || repoPath;
   useTabTitle(task ? `${taskIdentifier(task)} ${task.title}` : undefined);
@@ -182,6 +183,18 @@ export function TaskDetailPage() {
   const projectItems = Object.fromEntries([["none", "无项目"], ...projectList.map((project) => [project.id, project.name])]);
   const squadItems = Object.fromEntries([["none", "未指派"], ...squadList.map((squad) => [squad.id, squad.name])]);
   const peopleItems = Object.fromEntries([["none", "未指派"], ...people.map((person) => [person.id, person.name])]);
+  const blockers = (task.blocker_ids ?? [])
+    .map((id) => tasks.find((item) => item.id === id))
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const blockerCandidates = tasks.filter(
+    (item) => item.id !== task.id && !(task.blocker_ids ?? []).includes(item.id),
+  );
+  const blockerItems = Object.fromEntries([
+    ["none", "选择前置事项"],
+    ...blockerCandidates.map((item) => [item.id, `${taskIdentifier(item)} ${item.title}`]),
+  ]);
+  const waitingMessage = blockerWaitMessage(task, tasks);
+  const heldByBlockers = hasUnresolvedBlockers(task);
   const persist = () => {
     if (title.trim() !== task.title || description !== (task.description ?? "")) {
       save.mutate();
@@ -289,7 +302,7 @@ export function TaskDetailPage() {
           className="min-h-[8rem] resize-none rounded-none border-0 px-6 shadow-none focus-visible:ring-0"
         />
         {notice ? <p className="px-6 text-sm text-muted-foreground">{notice}</p> : null}
-        {task.blocked_reason ? <p className="px-6 text-sm text-destructive">{task.blocked_reason}</p> : null}
+        {waitingMessage ? <p className="px-6 text-sm text-destructive">{waitingMessage}</p> : null}
         <div className="min-h-0 flex-1 space-y-3 overflow-auto px-6 py-4">
           <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">时间线</h2>
           {comments.length === 0 && activity.length === 0 ? (
@@ -319,10 +332,14 @@ export function TaskDetailPage() {
                   size="sm"
                   variant="ghost"
                   onClick={() => {
-                    void submit({ type: "RetryRun", run_id: run.id }).then(async () => {
-                      setNotice("已按原指令重试。");
-                      await refresh();
-                    });
+                    void submit({ type: "RetryRun", run_id: run.id })
+                      .then(async () => {
+                        setNotice("已按原指令重试。");
+                        await refresh();
+                      })
+                      .catch((error: unknown) => {
+                        setNotice(error instanceof Error ? error.message : String(error));
+                      });
                   }}
                 >
                   重试
@@ -340,6 +357,9 @@ export function TaskDetailPage() {
               让负责人继续执行
             </Button>
           </div>
+          {heldByBlockers && mode === "run" ? (
+            <p className="text-xs text-muted-foreground">前置事项完成前不能开始执行。</p>
+          ) : null}
           <Textarea
             rows={3}
             placeholder={mode === "comment" ? "写评论。输入 @ 可提及智能体，不会改负责人。" : "补充指令，让当前负责人继续执行。"}
@@ -372,7 +392,7 @@ export function TaskDetailPage() {
               ))}
             </div>
           ) : null}
-          <Button type="submit" className="w-fit" disabled={!composer.trim()}>
+          <Button type="submit" className="w-fit" disabled={!composer.trim() || (mode === "run" && heldByBlockers)}>
             {mode === "comment" ? "发表评论" : latest?.status === "running" ? "追加执行" : "开始执行"}
           </Button>
         </form>
@@ -388,7 +408,11 @@ export function TaskDetailPage() {
                 items={TASK_STATUS_ITEMS}
                 onValueChange={(value) => {
                   if (!value) return;
-                  void submit({ type: "SetTaskStatus", task_id: task.id, status: value }).then(refresh);
+                  void submit({ type: "SetTaskStatus", task_id: task.id, status: value })
+                    .then(refresh)
+                    .catch((error: unknown) => {
+                      setNotice(error instanceof Error ? error.message : String(error));
+                    });
                 }}
               >
                 <SelectTrigger>
@@ -602,6 +626,62 @@ export function TaskDetailPage() {
           </div>
         </div>
         <div>
+          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">前置事项</h2>
+          <p className="mb-2 text-xs text-muted-foreground">这些事项完成后，才能开始或完成当前事项。</p>
+          {blockers.length === 0 ? <p className="text-sm text-muted-foreground">尚未设置前置事项。</p> : null}
+          {blockers.map((blocker) => (
+            <div key={blocker.id} className="flex items-center justify-between gap-2 py-1">
+              <Link to={`/board/${blocker.id}`} className="min-w-0 truncate text-sm hover:underline">
+                {taskIdentifier(blocker)} {blocker.title}
+                <span className="ml-2 text-xs text-muted-foreground">{taskStatusLabel(blocker.status)}</span>
+              </Link>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  void submit({ type: "RemoveIssueBlocker", task_id: task.id, blocker_id: blocker.id })
+                    .then(refresh)
+                    .catch((error: unknown) => {
+                      setNotice(error instanceof Error ? error.message : String(error));
+                    });
+                }}
+              >
+                移除
+              </Button>
+            </div>
+          ))}
+          {blockerCandidates.length > 0 ? (
+            <Select
+              value={blockerPick}
+              items={blockerItems}
+              onValueChange={(value) => {
+                if (!value || value === "none") {
+                  setBlockerPick("none");
+                  return;
+                }
+                setBlockerPick("none");
+                void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
+                  .then(refresh)
+                  .catch((error: unknown) => {
+                    setNotice(error instanceof Error ? error.message : String(error));
+                  });
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">选择前置事项</SelectItem>
+                {blockerCandidates.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {taskIdentifier(item)} {item.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+        </div>
+        <div>
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">子事项</h2>
             <Button size="sm" variant="ghost" disabled={suggestBusy} onClick={() => void suggestSplit()}>
@@ -677,7 +757,7 @@ export function TaskDetailPage() {
         </div>
         <div className="flex flex-col gap-2">
           <Button
-            disabled={!assignee}
+            disabled={!assignee || heldByBlockers}
             onClick={() => {
               if (!assignee) return;
               void startAcpOnTask(task.id, composer.trim() || description.trim() || task.title, assignee).then(
@@ -686,7 +766,9 @@ export function TaskDetailPage() {
                   setComposer("");
                   await refresh();
                 },
-              );
+              ).catch((error: unknown) => {
+                setNotice(error instanceof Error ? error.message : String(error));
+              });
             }}
           >
             <Play data-icon="inline-start" />

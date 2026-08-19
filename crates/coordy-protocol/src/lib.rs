@@ -7,6 +7,8 @@ pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Live harnesses emit this tool when an ACP/CLI session ends so the kernel
 /// can mark the run complete and return the task for review.
 pub const HARNESS_SESSION_TOOL: &str = "coordy.session";
+/// `blocked_reason` written when a task is held by unfinished issue blockers.
+pub const ISSUE_BLOCKER_REASON: &str = "waiting on unfinished blockers";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -289,6 +291,14 @@ pub enum Command {
         from_id: String,
         to_id: String,
         entity: String,
+    },
+    AddIssueBlocker {
+        task_id: String,
+        blocker_id: String,
+    },
+    RemoveIssueBlocker {
+        task_id: String,
+        blocker_id: String,
     },
     SetSettings {
         workspace_id: String,
@@ -761,6 +771,15 @@ pub struct TaskView {
     pub attachments: Vec<AttachmentView>,
     #[serde(default)]
     pub pull_requests: Vec<PullRequestView>,
+    /// Issues that must finish before this one can start or complete.
+    #[serde(default)]
+    pub blocker_ids: Vec<String>,
+    /// Issues waiting on this one.
+    #[serde(default)]
+    pub blocking_ids: Vec<String>,
+    /// Declared blockers that are not yet `done` or `cancelled`.
+    #[serde(default)]
+    pub unresolved_blocker_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

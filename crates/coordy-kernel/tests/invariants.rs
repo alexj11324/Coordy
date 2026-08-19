@@ -2383,3 +2383,288 @@ fn sweep_automations_arms_then_fires_after_interval() {
     assert!(tasks.iter().any(|task| task.title == "间隔任务"));
     assert_eq!(ports.spawns.lock().unwrap().len(), 1);
 }
+
+fn issue_title(h: &Harness, title: &str) -> String {
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: title.into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn board_task(tasks: &[coordy_protocol::TaskView], id: &str) -> coordy_protocol::TaskView {
+    tasks.iter().find(|task| task.id == id).expect("task").clone()
+}
+
+fn alice_board(h: &Harness) -> Vec<coordy_protocol::TaskView> {
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Board { tasks } => tasks,
+        other => panic!("expected board, got {other:?}"),
+    }
+}
+
+#[test]
+fn issue_blocker_holds_start_and_releases_when_done() {
+    let h = setup();
+    let blocker = issue_title(&h, "design");
+    let waiting = issue_title(&h, "implement");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AssignTask {
+                task_id: waiting.clone(),
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    let tasks = alice_board(&h);
+    let waiting_view = board_task(&tasks, &waiting);
+    assert_eq!(waiting_view.status, "blocked");
+    assert_eq!(
+        waiting_view.blocked_reason.as_deref(),
+        Some(coordy_protocol::ISSUE_BLOCKER_REASON)
+    );
+    assert_eq!(waiting_view.blocker_ids, vec![blocker.clone()]);
+    assert_eq!(waiting_view.unresolved_blocker_ids, vec![blocker.clone()]);
+    assert_eq!(board_task(&tasks, &blocker).blocking_ids, vec![waiting.clone()]);
+
+    let start_err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::StartRun {
+                task_id: waiting.clone(),
+                source: RunSource::Fixture { events: vec![] },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(start_err.code, "invalid");
+    assert!(start_err.message.contains("前置事项尚未完成"));
+
+    let done_err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: waiting.clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(done_err.code, "invalid");
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: blocker.clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let tasks = alice_board(&h);
+    let waiting_view = board_task(&tasks, &waiting);
+    assert_eq!(waiting_view.status, "open");
+    assert!(waiting_view.blocked_reason.is_none());
+    assert!(waiting_view.unresolved_blocker_ids.is_empty());
+    assert_eq!(waiting_view.blocker_ids, vec![blocker.clone()]);
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.alice.clone() },
+            Command::StartRun {
+                task_id: waiting,
+                source: RunSource::Fixture { events: vec![] },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+}
+
+#[test]
+fn issue_blocker_rejects_cycles_and_keeps_manual_block() {
+    let h = setup();
+    let a = issue_title(&h, "a");
+    let b = issue_title(&h, "b");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: b.clone(),
+                blocker_id: a.clone(),
+            },
+        ))
+        .unwrap();
+    let cycle = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: a.clone(),
+                blocker_id: b,
+            },
+        ))
+        .unwrap_err();
+    assert!(cycle.message.contains("循环"));
+    let self_block = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: a.clone(),
+                blocker_id: a,
+            },
+        ))
+        .unwrap_err();
+    assert!(self_block.message.contains("自己"));
+
+    let waiting = issue_title(&h, "manual");
+    let blocker = issue_title(&h, "still-open");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: waiting.clone(),
+                status: "blocked".into(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    let view = board_task(&alice_board(&h), &waiting);
+    assert_eq!(view.status, "blocked");
+    assert_eq!(view.blocked_reason.as_deref(), Some("marked blocked"));
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: blocker,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let view = board_task(&alice_board(&h), &waiting);
+    assert_eq!(view.status, "blocked");
+    assert_eq!(view.blocked_reason.as_deref(), Some("marked blocked"));
+}
+
+#[test]
+fn cancelling_or_removing_blocker_releases_auto_hold() {
+    let h = setup();
+    let blocker = issue_title(&h, "wait-on");
+    let waiting = issue_title(&h, "held");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: blocker.clone(),
+                status: "cancelled".into(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(board_task(&alice_board(&h), &waiting).status, "open");
+
+    let other = issue_title(&h, "other");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: other.clone(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(board_task(&alice_board(&h), &waiting).status, "blocked");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::RemoveIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: other,
+            },
+        ))
+        .unwrap();
+    assert_eq!(board_task(&alice_board(&h), &waiting).status, "open");
+}

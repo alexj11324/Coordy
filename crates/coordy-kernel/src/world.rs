@@ -59,6 +59,8 @@ pub struct World {
     pub notification_kinds: Vec<String>,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub issue_blockers: Vec<IssueBlockerEdge>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -252,6 +254,15 @@ pub struct DependencyEdge {
     pub to_id: String,
     pub entity: String,
     pub valid: bool,
+}
+
+/// B waits on A: `task_id` is B, `blocker_id` is A.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IssueBlockerEdge {
+    pub id: String,
+    pub workspace_id: String,
+    pub task_id: String,
+    pub blocker_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -2,6 +2,7 @@
 
 export const PROTOCOL_VERSION = "coordy-local-v1";
 export const HARNESS_SESSION_TOOL = "coordy.session";
+export const ISSUE_BLOCKER_REASON = "waiting on unfinished blockers";
 
 export type Actor =
   | { type: "principal"; id: string }
@@ -119,6 +120,8 @@ export type Command =
       to_id: string;
       entity: string;
     }
+  | { type: "AddIssueBlocker"; task_id: string; blocker_id: string }
+  | { type: "RemoveIssueBlocker"; task_id: string; blocker_id: string }
   | { type: "SetSettings"; workspace_id: string; llm_advisor_enabled: boolean }
   | { type: "DismissInbox"; item_id: string }
   | { type: "ArchiveInbox"; item_id: string }
@@ -281,6 +284,9 @@ export type TaskView = {
   subscribed?: boolean;
   attachments?: AttachmentView[];
   pull_requests?: PullRequestView[];
+  blocker_ids?: string[];
+  blocking_ids?: string[];
+  unresolved_blocker_ids?: string[];
 };
 export type CommitmentView = {
   id: string;

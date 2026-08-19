@@ -1,4 +1,4 @@
-import type { TaskView } from "@coordy/protocol";
+import { ISSUE_BLOCKER_REASON, type TaskView } from "@coordy/protocol";
 import { boardColumn } from "./views";
 
 export const ISSUE_BOARD_COLUMNS = [
@@ -170,6 +170,29 @@ export function readIssueViewMode(): IssueViewMode {
 export function writeIssueViewMode(mode: IssueViewMode) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(VIEW_KEY, mode);
+}
+
+export function unresolvedBlockerIds(task: TaskView): string[] {
+  return task.unresolved_blocker_ids ?? [];
+}
+
+export function hasUnresolvedBlockers(task: TaskView): boolean {
+  return unresolvedBlockerIds(task).length > 0;
+}
+
+export function blockerWaitMessage(task: TaskView, tasks: TaskView[]): string | null {
+  const ids = unresolvedBlockerIds(task);
+  if (ids.length > 0) {
+    const labels = ids.map((id) => {
+      const blocker = tasks.find((item) => item.id === id);
+      return blocker ? `${taskIdentifier(blocker)} ${blocker.title}` : id;
+    });
+    return `需等待前置事项完成：${labels.join("、")}`;
+  }
+  if (task.blocked_reason === ISSUE_BLOCKER_REASON) {
+    return "需等待前置事项完成。";
+  }
+  return task.blocked_reason?.trim() ? task.blocked_reason : null;
 }
 
 export const COLUMN_KEYS = ["identifier", "title", "status", "priority", "assignee", "project", "due"] as const;

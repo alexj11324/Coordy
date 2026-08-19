@@ -22,6 +22,7 @@ import { submit, view } from "../lib/coordy/client";
 import {
   boardIssues,
   filterIssues,
+  hasUnresolvedBlockers,
   ISSUE_BOARD_COLUMNS,
   ISSUE_LIST_GROUPS,
   issuesInColumn,
@@ -277,7 +278,9 @@ function BoardColumn({
         setOver(false);
         const taskId = event.dataTransfer.getData("text/coordy-task");
         if (!taskId) return;
-        void submit({ type: "SetTaskStatus", task_id: taskId, status: dropStatus }).then(onMoved);
+        void submit({ type: "SetTaskStatus", task_id: taskId, status: dropStatus })
+          .then(onMoved)
+          .catch(() => onMoved());
       }}
     >
       <div className="flex h-10 shrink-0 items-center justify-between px-2">
@@ -354,6 +357,11 @@ function IssueCard({
           </span>
         ) : null}
         <span className="font-mono">{taskIdentifier(task)}</span>
+        {hasUnresolvedBlockers(task) ? (
+          <span className="rounded-md bg-amber-500/15 px-1 py-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+            等前置
+          </span>
+        ) : null}
         {running ? <span className="size-1.5 rounded-full bg-sky-500" title="进行中" /> : null}
       </div>
       <p className="mt-1 line-clamp-2 text-sm font-medium">{task.title}</p>
@@ -430,6 +438,11 @@ function IssueList({
                     {latest?.status === "running" ? (
                       <Badge variant="outline" className="shrink-0 text-[10px]">
                         执行中
+                      </Badge>
+                    ) : null}
+                    {hasUnresolvedBlockers(task) ? (
+                      <Badge variant="outline" className="shrink-0 text-[10px]">
+                        等前置
                       </Badge>
                     ) : null}
                     {agent ? (

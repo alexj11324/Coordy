@@ -1,7 +1,7 @@
 use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command, CommentView,
     ComputerView, CoordyError, Effect, InboxView, LabelView, Mention, Outcome, ProjectView, SkillView,
-    SquadView, StatsView, TaskView, WorkspaceView,
+    SquadView, StatsView, TaskView, WorkspaceView, ISSUE_BLOCKER_REASON,
 };
 use serde_json::json;
 
@@ -9,8 +9,8 @@ use crate::authority::{actor_in_workspace, can_command_agent};
 use crate::ids;
 use crate::world::{
     Attachment, Automation, Chat, ChatMessage, Comment, Computer, CustomPropertyDef, DirectoryLock,
-    Integration, Principal, Project, Reaction, Skill, Squad, Task, TaskSubscription, Workspace,
-    WorkspaceLabel, World,
+    Integration, IssueBlockerEdge, Principal, Project, Reaction, Skill, Squad, Task, TaskSubscription,
+    Workspace, WorkspaceLabel, World,
 };
 
 pub fn slugify(name: &str) -> String {
@@ -142,6 +142,9 @@ pub fn task_view(world: &World, task: &Task, actor: &Actor) -> TaskView {
         subscribed,
         attachments,
         pull_requests: task.pull_requests.clone(),
+        blocker_ids: issue_blocker_ids(world, &task.id),
+        blocking_ids: issue_blocking_ids(world, &task.id),
+        unresolved_blocker_ids: unresolved_blocker_ids(world, &task.id),
     }
 }
 
@@ -404,6 +407,13 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_member(world, actor, &task.workspace_id)?;
             if let Some(row) = world.task_mut(&task_id) {
                 row.deleted = true;
+            }
+            let dependents = issue_blocking_ids(world, &task_id);
+            world
+                .issue_blockers
+                .retain(|edge| edge.task_id != task_id && edge.blocker_id != task_id);
+            for dep in dependents {
+                sync_issue_blocker_hold(world, &dep);
             }
             emit_changed(world, task.workspace_id);
             Ok(Outcome::ok("task deleted", json!({ "task_id": task_id })))
@@ -1269,6 +1279,14 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             emit_changed(world, workspace_id);
             Ok(Outcome::ok("integration saved", json!({})))
         }
+        Command::AddIssueBlocker { task_id, blocker_id } => {
+            require_not_agent(actor)?;
+            add_issue_blocker(world, actor, &task_id, &blocker_id)
+        }
+        Command::RemoveIssueBlocker { task_id, blocker_id } => {
+            require_not_agent(actor)?;
+            remove_issue_blocker(world, actor, &task_id, &blocker_id)
+        }
         other => Err(CoordyError::invalid(format!(
             "unhandled product command: {}",
             command_name(&other)
@@ -1633,4 +1651,196 @@ pub fn computer_view(computer: &Computer) -> ComputerView {
         online: computer.online,
         concurrency_limit: computer.concurrency_limit,
     }
+}
+
+fn issue_blocker_satisfied(world: &World, blocker_id: &str) -> bool {
+    match world.task(blocker_id) {
+        None => true,
+        Some(task) => task.deleted || task.status == "done" || task.status == "cancelled",
+    }
+}
+
+pub(crate) fn issue_blocker_ids(world: &World, task_id: &str) -> Vec<String> {
+    world
+        .issue_blockers
+        .iter()
+        .filter(|edge| edge.task_id == task_id)
+        .map(|edge| edge.blocker_id.clone())
+        .collect()
+}
+
+pub(crate) fn issue_blocking_ids(world: &World, task_id: &str) -> Vec<String> {
+    world
+        .issue_blockers
+        .iter()
+        .filter(|edge| edge.blocker_id == task_id)
+        .map(|edge| edge.task_id.clone())
+        .collect()
+}
+
+pub(crate) fn unresolved_blocker_ids(world: &World, task_id: &str) -> Vec<String> {
+    issue_blocker_ids(world, task_id)
+        .into_iter()
+        .filter(|id| !issue_blocker_satisfied(world, id))
+        .collect()
+}
+
+fn issue_graph_reaches(world: &World, from: &str, target: &str) -> bool {
+    let mut stack = vec![from.to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node.clone()) {
+            continue;
+        }
+        if node == target {
+            return true;
+        }
+        stack.extend(issue_blocking_ids(world, &node));
+    }
+    false
+}
+
+fn issue_label(world: &World, task_id: &str) -> String {
+    world
+        .task(task_id)
+        .map(|task| {
+            if task.identifier.is_empty() {
+                task.title.clone()
+            } else {
+                format!("{} {}", task.identifier, task.title)
+            }
+        })
+        .unwrap_or_else(|| task_id.to_string())
+}
+
+pub(crate) fn reject_if_unresolved_blockers(world: &World, task_id: &str) -> Result<(), CoordyError> {
+    let unresolved = unresolved_blocker_ids(world, task_id);
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+    let labels: Vec<String> = unresolved
+        .iter()
+        .map(|id| issue_label(world, id))
+        .collect();
+    Err(CoordyError::invalid(format!(
+        "前置事项尚未完成：{}",
+        labels.join("、")
+    )))
+}
+
+pub(crate) fn status_needs_clear_blockers(status: &str) -> bool {
+    matches!(status, "running" | "review" | "done")
+}
+
+pub(crate) fn refresh_issue_blocker_dependents(world: &mut World, blocker_id: &str) {
+    let dependents = issue_blocking_ids(world, blocker_id);
+    for task_id in dependents {
+        sync_issue_blocker_hold(world, &task_id);
+    }
+}
+
+fn sync_issue_blocker_hold(world: &mut World, task_id: &str) {
+    let unresolved = unresolved_blocker_ids(world, task_id);
+    let Some(task) = world.task_mut(task_id) else {
+        return;
+    };
+    if unresolved.is_empty() {
+        if task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON) {
+            if task.status == "blocked" {
+                task.status = "open".into();
+            }
+            task.blocked_reason = None;
+        }
+        return;
+    }
+    if task.status == "done" || task.status == "cancelled" || task.deleted {
+        return;
+    }
+    if task.blocked_reason.is_none()
+        || task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
+    {
+        task.status = "blocked".into();
+        task.blocked_reason = Some(ISSUE_BLOCKER_REASON.into());
+    }
+}
+
+fn add_issue_blocker(
+    world: &mut World,
+    actor: &Actor,
+    task_id: &str,
+    blocker_id: &str,
+) -> Result<Outcome, CoordyError> {
+    let task = world
+        .task(task_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("task"))?;
+    require_member(world, actor, &task.workspace_id)?;
+    if task.deleted {
+        return Err(CoordyError::invalid("task is deleted"));
+    }
+    let blocker = world
+        .task(blocker_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("blocker"))?;
+    if blocker.deleted {
+        return Err(CoordyError::invalid("blocker is deleted"));
+    }
+    if blocker.workspace_id != task.workspace_id {
+        return Err(CoordyError::invalid("blocker must be in the same workspace"));
+    }
+    if task_id == blocker_id {
+        return Err(CoordyError::invalid("事项不能把自己设为前置"));
+    }
+    if issue_graph_reaches(world, task_id, blocker_id) {
+        return Err(CoordyError::invalid("前置事项不能形成循环"));
+    }
+    if world
+        .issue_blockers
+        .iter()
+        .any(|edge| edge.task_id == task_id && edge.blocker_id == blocker_id)
+    {
+        return Ok(Outcome::ok(
+            "blocker already recorded",
+            json!({ "task_id": task_id, "blocker_id": blocker_id }),
+        ));
+    }
+    let id = ids::new("blk");
+    world.issue_blockers.push(IssueBlockerEdge {
+        id: id.clone(),
+        workspace_id: task.workspace_id.clone(),
+        task_id: task_id.to_string(),
+        blocker_id: blocker_id.to_string(),
+    });
+    sync_issue_blocker_hold(world, task_id);
+    emit_changed(world, task.workspace_id);
+    Ok(Outcome::ok(
+        "blocker recorded",
+        json!({ "blocker_edge_id": id, "task_id": task_id, "blocker_id": blocker_id }),
+    ))
+}
+
+fn remove_issue_blocker(
+    world: &mut World,
+    actor: &Actor,
+    task_id: &str,
+    blocker_id: &str,
+) -> Result<Outcome, CoordyError> {
+    let task = world
+        .task(task_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("task"))?;
+    require_member(world, actor, &task.workspace_id)?;
+    let before = world.issue_blockers.len();
+    world
+        .issue_blockers
+        .retain(|edge| !(edge.task_id == task_id && edge.blocker_id == blocker_id));
+    if world.issue_blockers.len() == before {
+        return Err(CoordyError::not_found("blocker"));
+    }
+    sync_issue_blocker_hold(world, task_id);
+    emit_changed(world, task.workspace_id);
+    Ok(Outcome::ok(
+        "blocker removed",
+        json!({ "task_id": task_id, "blocker_id": blocker_id }),
+    ))
 }

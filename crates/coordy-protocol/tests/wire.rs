@@ -109,3 +109,32 @@ fn byok_is_local_rpc_not_a_kernel_command() {
     .unwrap();
     assert_eq!(req["type"], "SetSecret");
 }
+
+#[test]
+fn issue_blocker_command_keeps_pascal_variant() {
+    let value = serde_json::to_value(coordy_protocol::Command::AddIssueBlocker {
+        task_id: "task_b".into(),
+        blocker_id: "task_a".into(),
+    })
+    .unwrap();
+    assert_eq!(value["type"], "AddIssueBlocker");
+    assert_eq!(value["task_id"], "task_b");
+    assert_eq!(value["blocker_id"], "task_a");
+}
+
+#[test]
+fn task_view_blocker_fields_default_when_omitted() {
+    let view: coordy_protocol::TaskView = serde_json::from_value(json!({
+        "id": "task_1",
+        "workspace_id": "ws",
+        "title": "Ship",
+        "status": "open",
+        "assignee_agent_id": null,
+        "worktree_path": null,
+        "blocked_reason": null
+    }))
+    .unwrap();
+    assert!(view.blocker_ids.is_empty());
+    assert!(view.blocking_ids.is_empty());
+    assert!(view.unresolved_blocker_ids.is_empty());
+}
