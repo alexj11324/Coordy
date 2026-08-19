@@ -88,6 +88,7 @@
 - [x] Daemon 绿灯时 `RegisterComputer` 登记当前主机
 - [x] 设置 Daemon 页展示已登记电脑
 - [x] 智能体并发上限
+- [x] 无人值守 auto-approve：按 harness 注入 skip/yolo/sandbox，ACP 自动放行权限请求
 - [ ] 执行队列状态机的完整产品页
 - [ ] 云端 / 远程运行时
 - [ ] 应用商店更新通道

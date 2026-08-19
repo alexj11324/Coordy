@@ -323,10 +323,7 @@ fn handle_agent_request<W: Write>(
             write_result(writer, &id, json!({}))
         }
         "session/request_permission" => {
-            let option_id = params
-                .pointer("/options/0/optionId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("allow-once");
+            let option_id = acp_auto_approve_option_id(&params);
             write_result(
                 writer,
                 &id,
@@ -335,6 +332,45 @@ fn handle_agent_request<W: Write>(
         }
         _ => write_error(writer, &id, &format!("unsupported method {method}")),
     }
+}
+
+/// Pick an offered allow option so ACP agents do not stall waiting for a human.
+/// Prefers session/always grants when the agent lists them.
+fn acp_auto_approve_option_id(params: &Value) -> String {
+    let ids: Vec<String> = params
+        .get("options")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|opt| {
+            opt.get("optionId")
+                .or_else(|| opt.get("option_id"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+    const PREFERRED: &[&str] = &[
+        "allow-always",
+        "allow_always",
+        "allow-session",
+        "allow_session",
+        "allow-once",
+        "allow_once",
+    ];
+    for want in PREFERRED {
+        if let Some(id) = ids.iter().find(|id| id.eq_ignore_ascii_case(want)) {
+            return id.clone();
+        }
+    }
+    if let Some(id) = ids.iter().find(|id| {
+        let lower = id.to_ascii_lowercase();
+        lower.starts_with("allow") || lower.contains("approve") || lower == "accept"
+    }) {
+        return id.clone();
+    }
+    ids.into_iter()
+        .next()
+        .unwrap_or_else(|| "allow-once".into())
 }
 
 fn resolve_under_cwd(cwd: &Path, path: &str) -> PathBuf {
@@ -410,5 +446,33 @@ pub fn serve_fake_acp<R: Read, W: Write>(
             }
             _ => write_error(&mut writer, &id, "unexpected")?,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acp_auto_approve_option_id;
+    use serde_json::json;
+
+    #[test]
+    fn prefers_allow_always_over_first_option() {
+        let params = json!({
+            "options": [
+                { "optionId": "reject" },
+                { "optionId": "allow-once" },
+                { "optionId": "allow-always" }
+            ]
+        });
+        assert_eq!(acp_auto_approve_option_id(&params), "allow-always");
+    }
+
+    #[test]
+    fn falls_back_to_allow_once_then_first_id() {
+        let once = json!({ "options": [{ "optionId": "allow-once" }, { "optionId": "reject" }] });
+        assert_eq!(acp_auto_approve_option_id(&once), "allow-once");
+        let only_reject = json!({ "options": [{ "optionId": "reject" }] });
+        assert_eq!(acp_auto_approve_option_id(&only_reject), "reject");
+        let empty = json!({});
+        assert_eq!(acp_auto_approve_option_id(&empty), "allow-once");
     }
 }

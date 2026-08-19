@@ -39,6 +39,7 @@ fn path_binary_wins_over_registry_npx() {
     assert!(claude.command.contains("claude"));
     assert!(claude.command.contains("stream-json"));
     assert!(claude.command.contains("-p"));
+    assert!(claude.command.contains("bypassPermissions"));
     assert!(!claude.command.contains("npx"));
     assert!(
         !claude
@@ -81,6 +82,7 @@ fn uninstalled_builtins_keep_native_flags() {
     assert_eq!(claude.protocol_family, "claude");
     assert!(claude.command.contains("-p"));
     assert!(claude.command.contains("stream-json"));
+    assert!(claude.command.contains("bypassPermissions"));
     assert!(
         !claude
             .command

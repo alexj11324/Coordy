@@ -121,25 +121,49 @@ pub fn is_builtin_id(id: &str) -> bool {
     BUILTINS.iter().any(|item| item.id == id)
 }
 
+/// Unattended auto-approve flags, injected on every native daemon spawn.
+/// Same idea as Multica's per-adapter bypass / yolo / trust / sandbox flags:
+/// a headless run cannot answer interactive permission prompts.
+fn unattended_auto_approve_args(family: ProtocolFamily) -> &'static [&'static str] {
+    match family {
+        ProtocolFamily::Claude => &["--permission-mode", "bypassPermissions"],
+        ProtocolFamily::Codex => &[
+            "--sandbox",
+            "danger-full-access",
+            "--ask-for-approval",
+            "never",
+        ],
+        ProtocolFamily::Copilot => &["--allow-all"],
+        ProtocolFamily::OpenCode => &["--dangerously-skip-permissions"],
+        ProtocolFamily::Cursor => &["--trust"],
+        ProtocolFamily::Gemini => &["--yolo"],
+        ProtocolFamily::Acp | ProtocolFamily::Stub => &[],
+    }
+}
+
+fn push_auto_approve(family: ProtocolFamily, args: &mut Vec<String>) {
+    args.extend(
+        unattended_auto_approve_args(family)
+            .iter()
+            .map(|flag| (*flag).to_string()),
+    );
+}
+
 /// Flags shown in the catalog (no prompt). The prompt is appended at spawn.
 /// Empty model/thinking/speed omit the corresponding flags so the CLI uses
-/// its own default.
+/// its own default. Includes the unattended auto-approve flags that spawn uses.
 pub fn display_args(family: ProtocolFamily) -> Vec<&'static str> {
-    match family {
-        ProtocolFamily::Claude => vec![
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--dangerously-skip-permissions",
-        ],
+    let mut args = match family {
+        ProtocolFamily::Claude => vec!["-p", "--output-format", "stream-json", "--verbose"],
         ProtocolFamily::Codex => vec!["exec", "--json"],
-        ProtocolFamily::Copilot => vec!["-p", "--output-format", "json", "--allow-all"],
+        ProtocolFamily::Copilot => vec!["-p", "--output-format", "json"],
         ProtocolFamily::OpenCode => vec!["run"],
-        ProtocolFamily::Cursor => vec!["-p", "--trust", "--output-format", "stream-json"],
+        ProtocolFamily::Cursor => vec!["-p", "--output-format", "stream-json"],
         ProtocolFamily::Gemini => vec!["-p"],
         ProtocolFamily::Acp | ProtocolFamily::Stub => Vec::new(),
-    }
+    };
+    args.extend_from_slice(unattended_auto_approve_args(family));
+    args
 }
 
 pub fn native_launch_args(
@@ -160,8 +184,8 @@ pub fn native_launch_args(
                 "--output-format".into(),
                 "stream-json".into(),
                 "--verbose".into(),
-                "--dangerously-skip-permissions".into(),
             ];
+            push_auto_approve(family, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -172,6 +196,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::Codex => {
             let mut args = vec!["exec".into(), "--json".into()];
+            push_auto_approve(family, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -190,8 +215,8 @@ pub fn native_launch_args(
                 prompt.to_string(),
                 "--output-format".into(),
                 "json".into(),
-                "--allow-all".into(),
             ];
+            push_auto_approve(family, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -199,6 +224,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::OpenCode => {
             let mut args = vec!["run".into()];
+            push_auto_approve(family, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -209,12 +235,8 @@ pub fn native_launch_args(
             args
         }
         ProtocolFamily::Cursor => {
-            let mut args = vec![
-                "-p".into(),
-                "--trust".into(),
-                "--output-format".into(),
-                "stream-json".into(),
-            ];
+            let mut args = vec!["-p".into(), "--output-format".into(), "stream-json".into()];
+            push_auto_approve(family, &mut args);
             if !model.is_empty() {
                 args.extend(["--model".into(), model.to_string()]);
             }
@@ -223,6 +245,7 @@ pub fn native_launch_args(
         }
         ProtocolFamily::Gemini => {
             let mut args = vec!["-p".into(), prompt.to_string()];
+            push_auto_approve(family, &mut args);
             if !model.is_empty() {
                 args.extend(["-m".into(), model.to_string()]);
             }

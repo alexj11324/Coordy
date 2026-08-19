@@ -1,4 +1,6 @@
-use coordy_harness::{canonical_harness_id, native_launch_args, protocol_family, ProtocolFamily};
+use coordy_harness::{
+    canonical_harness_id, display_args, native_launch_args, protocol_family, ProtocolFamily,
+};
 
 #[test]
 fn leftover_acp_ids_collapse_onto_native_catalog() {
@@ -50,7 +52,9 @@ fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
     assert_eq!(codex[0], "exec");
     assert!(codex.iter().any(|a| a == "--json"));
     assert_eq!(codex.last().map(String::as_str), Some("review this"));
-    assert!(!codex.iter().any(|a| a.starts_with("model_reasoning_effort=")));
+    assert!(!codex
+        .iter()
+        .any(|a| a.starts_with("model_reasoning_effort=")));
     assert!(!codex.iter().any(|a| a.starts_with("service_tier=")));
 
     let gemini = native_launch_args(
@@ -63,6 +67,59 @@ fn native_launch_args_put_the_prompt_where_each_cli_expects_it() {
     assert_eq!(gemini[0], "-p");
     assert_eq!(gemini[1], "review this");
     assert!(gemini.windows(2).any(|w| w == ["-m", "gemini-2.5-pro"]));
+}
+
+#[test]
+fn native_launch_args_inject_unattended_auto_approve() {
+    let claude = native_launch_args(ProtocolFamily::Claude, "review this", "", "", "");
+    assert!(claude
+        .windows(2)
+        .any(|w| w == ["--permission-mode", "bypassPermissions"]));
+    assert!(!claude.iter().any(|a| a == "--dangerously-skip-permissions"));
+
+    let codex = native_launch_args(ProtocolFamily::Codex, "review this", "", "", "");
+    assert!(codex
+        .windows(2)
+        .any(|w| w == ["--sandbox", "danger-full-access"]));
+    assert!(codex
+        .windows(2)
+        .any(|w| w == ["--ask-for-approval", "never"]));
+    assert_eq!(codex.last().map(String::as_str), Some("review this"));
+
+    let gemini = native_launch_args(ProtocolFamily::Gemini, "review this", "", "", "");
+    assert!(gemini.iter().any(|a| a == "--yolo"));
+
+    let opencode = native_launch_args(ProtocolFamily::OpenCode, "review this", "", "", "");
+    assert!(opencode
+        .iter()
+        .any(|a| a == "--dangerously-skip-permissions"));
+
+    let copilot = native_launch_args(ProtocolFamily::Copilot, "review this", "", "", "");
+    assert!(copilot.iter().any(|a| a == "--allow-all"));
+
+    let cursor = native_launch_args(ProtocolFamily::Cursor, "review this", "", "", "");
+    assert!(cursor.iter().any(|a| a == "--trust"));
+}
+
+#[test]
+fn catalog_display_args_include_spawn_auto_approve_flags() {
+    for family in [
+        ProtocolFamily::Claude,
+        ProtocolFamily::Codex,
+        ProtocolFamily::Copilot,
+        ProtocolFamily::OpenCode,
+        ProtocolFamily::Cursor,
+        ProtocolFamily::Gemini,
+    ] {
+        let launch = native_launch_args(family, "review this", "", "", "");
+        for flag in display_args(family) {
+            assert!(
+                launch.iter().any(|a| a == flag),
+                "{family:?} spawn missing catalog flag {flag}: {launch:?}"
+            );
+        }
+    }
+    assert!(display_args(ProtocolFamily::Acp).is_empty());
 }
 
 #[test]
