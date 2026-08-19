@@ -24,7 +24,7 @@ import {
   SelectValue,
   Switch,
 } from "@coordy/ui";
-import type { DependencyView } from "@coordy/protocol";
+import type { GraphEdgeView, GraphNodeView, NodeKind } from "@coordy/protocol";
 import { Bot, ListTodo, Share2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -37,14 +37,12 @@ import {
   type GraphLayers,
   type GraphNode,
 } from "../../lib/coordy/graph-projection";
-import { taskIdentifier } from "../../lib/coordy/issues";
 import {
-  agentDisplayName,
   harnessLabel,
   runStatusLabel,
   taskStatusLabel,
 } from "../../lib/coordy/labels";
-import { asAgents, asDependencies, asRuns, asTasks } from "../../lib/coordy/views";
+import { asGraphSnapshot } from "../../lib/coordy/views";
 import { useSession } from "../../state/session-store";
 import { resolvedTheme, useThemeStore } from "../../state/theme-store";
 import { useCommand, useWorkspaceQuery } from "../pages";
@@ -249,15 +247,21 @@ function DependencyActions({
   onReaffirm,
   onRemove,
 }: {
-  dependency: DependencyView;
+  dependency: GraphEdgeView;
   disabled: boolean;
-  onReaffirm: (id: string) => void;
+  onReaffirm: (id: string, generation: number) => void;
   onRemove: (id: string) => void;
 }) {
   return (
     <div className="flex gap-2">
       {dependency.valid ? null : (
-        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => onReaffirm(dependency.id)}>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          onClick={() => onReaffirm(dependency.id, dependency.generation)}
+        >
           确认仍有效
         </Button>
       )}
@@ -268,37 +272,43 @@ function DependencyActions({
   );
 }
 
+function snapshotNode(nodes: GraphNodeView[], id: string | undefined): GraphNodeView | undefined {
+  return nodes.find((node) => node.id === id);
+}
+
+function nodeKind(nodes: GraphNodeView[], id: string): NodeKind {
+  return snapshotNode(nodes, id)?.kind ?? "task";
+}
+
 function GraphInspector({
   selected,
   selectedEdge,
-  agents,
-  tasks,
+  snapshotNodes,
+  snapshotEdges,
   nodes,
-  dependencies,
   workspaceId,
 }: {
   selected: GraphNode | null;
   selectedEdge: GraphEdge | null;
-  agents: ReturnType<typeof asAgents>;
-  tasks: ReturnType<typeof asTasks>;
+  snapshotNodes: GraphNodeView[];
+  snapshotEdges: GraphEdgeView[];
   nodes: GraphNode[];
-  dependencies: DependencyView[];
   workspaceId: string | null;
 }) {
   const navigate = useNavigate();
   const command = useCommand();
-  const targets = nodes.filter((node) => node.id !== selected?.id);
-  const targetItems = Object.fromEntries(targets.map((node) => [node.id, node.label]));
-  const [toId, setToId] = useState(targets[0]?.id ?? "");
+  const sources = nodes.filter((node) => node.id !== selected?.id);
+  const sourceItems = Object.fromEntries(sources.map((node) => [node.id, node.label]));
+  const [sourceId, setSourceId] = useState(sources[0]?.id ?? "");
   const [entity, setEntity] = useState("repo");
 
   useEffect(() => {
-    setToId(targets[0]?.id ?? "");
+    setSourceId(sources[0]?.id ?? "");
     setEntity("repo");
-  }, [selected?.id, targets[0]?.id]);
+  }, [selected?.id, sources[0]?.id]);
 
-  const reaffirm = (dependencyId: string) => {
-    command.mutate({ type: "ReaffirmDependency", dependency_id: dependencyId });
+  const reaffirm = (dependencyId: string, generation: number) => {
+    command.mutate({ type: "ReaffirmDependency", dependency_id: dependencyId, expected_generation: generation });
   };
   const remove = (dependencyId: string) => {
     command.mutate({ type: "RemoveDependency", dependency_id: dependencyId });
@@ -306,10 +316,13 @@ function GraphInspector({
 
   if (selectedEdge) {
     const dependencyId = selectedEdge.id.startsWith("dep:") ? selectedEdge.id.slice(4) : null;
-    const dependency = dependencyId ? dependencies.find((item) => item.id === dependencyId) : null;
+    const dependency = dependencyId
+      ? snapshotEdges.find((item) => item.id === dependencyId && item.kind === "consumes")
+      : null;
     const reaffirmCmd = reaffirmCommandForStaleEdge({
       edgeId: selectedEdge.id,
       stale: selectedEdge.stale,
+      generation: selectedEdge.generation,
     });
     const removeCmd = removeCommandForDependencyEdge(selectedEdge.id);
     return (
@@ -321,10 +334,11 @@ function GraphInspector({
         </header>
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-4">
-            <InspectorField label="从" value={nodeLabel(nodes, selectedEdge.source)} />
-            <InspectorField label="到" value={nodeLabel(nodes, selectedEdge.target)} />
+            <InspectorField label="上游 source" value={nodeLabel(nodes, selectedEdge.source)} />
+            <InspectorField label="下游 target" value={nodeLabel(nodes, selectedEdge.target)} />
             <InspectorField label="类型" value={selectedEdge.kind === "assigned" ? "指派" : "依赖"} />
             {dependency ? <InspectorField label="实体" value={dependency.entity} /> : null}
+            {dependency ? <InspectorField label="generation" value={String(dependency.generation)} /> : null}
           </div>
         </ScrollArea>
         {dependency && (reaffirmCmd || removeCmd) ? (
@@ -346,8 +360,8 @@ function GraphInspector({
       <div className="flex h-full items-center px-4 text-sm text-muted-foreground">选中节点或边以声明、确认或移除依赖</div>
     );
   }
+  const detail = snapshotNode(snapshotNodes, selected.id);
   if (selected.kind === "agent") {
-    const agent = agents.find((item) => item.id === selected.id);
     return (
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
@@ -356,8 +370,11 @@ function GraphInspector({
         </header>
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-4">
-            <InspectorField label="名称" value={agent ? agentDisplayName(agent) : selected.label} />
-            <InspectorField label="Harness" value={agent ? harnessLabel(agent.harness) : selected.subtitle ?? ""} />
+            <InspectorField label="名称" value={detail?.title ?? selected.label} />
+            <InspectorField
+              label="Harness"
+              value={detail?.harness ? harnessLabel(detail.harness) : selected.subtitle ?? ""}
+            />
             <InspectorField label="状态" value={agentStatusLabel(selected.status)} />
             {selected.replan ? <Badge variant="destructive">需重规划</Badge> : null}
           </div>
@@ -370,13 +387,13 @@ function GraphInspector({
       </div>
     );
   }
-  const task = tasks.find((item) => item.id === selected.id);
-  const assignee = agents.find((item) => item.id === task?.assignee_agent_id);
-  const blockers = (task?.blocker_ids ?? []).map((id) => ({
-    id,
-    label: tasks.find((item) => item.id === id)?.title ?? nodeLabel(nodes, id),
-  }));
-  const outgoing = dependencies.filter((dep) => dep.from_id === selected.id);
+  const assignee = snapshotNode(snapshotNodes, detail?.assignee_agent_id ?? undefined);
+  const blockers = snapshotEdges.filter(
+    (edge) => edge.kind === "precedence" && edge.target.id === selected.id,
+  );
+  const incoming = snapshotEdges.filter(
+    (edge) => edge.kind === "consumes" && edge.target.id === selected.id,
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -386,11 +403,11 @@ function GraphInspector({
       </header>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-4 p-4">
-          <InspectorField label="标题" value={task?.title ?? selected.label} />
-          <InspectorField label="编号" value={task ? taskIdentifier(task) : selected.subtitle ?? ""} />
-          <InspectorField label="状态" value={taskStatusLabel(task?.status ?? selected.status)} />
-          <InspectorField label="指派智能体" value={assignee ? agentDisplayName(assignee) : "未指派"} />
-          {task?.blocked_reason ? <InspectorField label="阻塞原因" value={task.blocked_reason} /> : null}
+          <InspectorField label="标题" value={detail?.title ?? selected.label} />
+          <InspectorField label="编号" value={detail?.subtitle || selected.subtitle || ""} />
+          <InspectorField label="状态" value={taskStatusLabel(detail?.status ?? selected.status)} />
+          <InspectorField label="指派智能体" value={assignee ? assignee.title : "未指派"} />
+          {detail?.blocked_reason ? <InspectorField label="阻塞原因" value={detail.blocked_reason} /> : null}
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">阻塞边</p>
             {blockers.length === 0 ? (
@@ -398,20 +415,20 @@ function GraphInspector({
             ) : (
               blockers.map((blocker) => (
                 <div key={blocker.id} className="rounded-md border border-border px-2 py-1.5 text-sm">
-                  {blocker.label}
+                  {nodeLabel(nodes, blocker.source.id)}
                 </div>
               ))
             )}
           </div>
           <div className="space-y-2">
-            <p className="text-[11px] text-muted-foreground">依赖边</p>
-            {outgoing.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground">依赖边（上游 source）</p>
+            {incoming.length === 0 ? (
               <p className="text-sm text-muted-foreground">未声明依赖</p>
             ) : (
-              outgoing.map((dep) => (
+              incoming.map((dep) => (
                 <div key={dep.id} className="space-y-2 rounded-md border border-border p-2">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm">{nodeLabel(nodes, dep.to_id)}</p>
+                    <p className="truncate text-sm">{nodeLabel(nodes, dep.source.id)}</p>
                     {dep.valid ? (
                       <Badge variant="secondary">{dep.entity || "依赖"}</Badge>
                     ) : (
@@ -432,17 +449,26 @@ function GraphInspector({
             className="space-y-2"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!workspaceId || !toId || toId === selected.id) return;
-              command.mutate(declareDependencyCommand(workspaceId, selected.id, toId, entity));
+              if (!workspaceId || !sourceId || sourceId === selected.id) return;
+              command.mutate(
+                declareDependencyCommand(
+                  workspaceId,
+                  sourceId,
+                  selected.id,
+                  entity,
+                  nodeKind(snapshotNodes, sourceId),
+                  nodeKind(snapshotNodes, selected.id),
+                ),
+              );
             }}
           >
-            <p className="text-[11px] text-muted-foreground">声明依赖</p>
-            <Select value={toId} items={targetItems} onValueChange={(value) => value && setToId(value)}>
+            <p className="text-[11px] text-muted-foreground">声明依赖（选择上游 source）</p>
+            <Select value={sourceId} items={sourceItems} onValueChange={(value) => value && setSourceId(value)}>
               <SelectTrigger size="sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {targets.map((node) => (
+                {sources.map((node) => (
                   <SelectItem key={node.id} value={node.id}>
                     {node.label}
                   </SelectItem>
@@ -454,7 +480,7 @@ function GraphInspector({
               value={entity}
               onChange={(event) => setEntity(event.target.value)}
             />
-            <Button type="submit" size="sm" className="w-full" disabled={!workspaceId || !toId || command.isPending}>
+            <Button type="submit" size="sm" className="w-full" disabled={!workspaceId || !sourceId || command.isPending}>
               声明依赖
             </Button>
           </form>
@@ -470,24 +496,18 @@ function GraphInspector({
 }
 
 export function GraphPage() {
-  const board = useWorkspaceQuery((workspace_id) => ({ type: "Board", workspace_id }));
-  const agentsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
-  const depsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Dependencies", workspace_id }));
-  const runsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Runs", workspace_id }));
+  const snapQuery = useWorkspaceQuery((workspace_id) => ({ type: "GraphSnapshot", workspace_id }));
   const workspaceId = useSession((s) => s.workspaceId);
-  const tasks = asTasks(board.data);
-  const agents = asAgents(agentsQuery.data);
-  const dependencies = asDependencies(depsQuery.data);
-  const runs = asRuns(runsQuery.data);
+  const snapshot = asGraphSnapshot(snapQuery.data);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_GRAPH_LAYERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const projected = useMemo(
-    () => projectGraph({ agents, tasks, dependencies, runs, layers }),
-    [agents, dependencies, layers, runs, tasks],
-  );
+  const projected = useMemo(() => projectGraph({ snapshot, layers }), [layers, snapshot]);
   const selected = projected.nodes.find((node) => node.id === selectedId) ?? null;
   const selectedEdge = projected.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
+  const health = snapshot?.health;
+  const live = Boolean(health?.consistent && health.lag === 0);
+  const liveTone = live ? "green" : health?.consistent === false ? "red" : "yellow";
 
   useEffect(() => {
     if (selectedId && !projected.nodes.some((node) => node.id === selectedId)) {
@@ -565,18 +585,18 @@ export function GraphPage() {
           <GraphInspector
             selected={selected}
             selectedEdge={selectedEdge}
-            agents={agents}
-            tasks={tasks}
+            snapshotNodes={snapshot?.nodes ?? []}
+            snapshotEdges={snapshot?.edges ?? []}
             nodes={projected.nodes}
-            dependencies={dependencies}
             workspaceId={workspaceId}
           />
         </aside>
       </div>
       <footer className="flex h-8 shrink-0 items-center gap-2 border-t border-border px-3 text-xs text-muted-foreground">
-        <StatusLamp tone="green" label="Live" />
-        <span>Live</span>
+        <StatusLamp tone={liveTone} label="Live" />
+        <span>{live ? "Live" : `cursor lag ${health?.lag ?? "?"}`}</span>
       </footer>
     </section>
   );
 }
+

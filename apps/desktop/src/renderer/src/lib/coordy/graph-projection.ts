@@ -1,6 +1,5 @@
-import type { AgentView, DependencyView, RunView, TaskView } from "@coordy/protocol";
-import { taskIdentifier } from "./issues";
-import { agentDisplayName, listableAgents } from "./labels";
+import type { GraphEdgeKind as ProtocolEdgeKind, GraphEdgeView, GraphNodeView, GraphSnapshotView } from "@coordy/protocol";
+import { isPlaceholderHarness } from "./views";
 
 export type GraphLayerId = "agents" | "tasks" | "depends";
 
@@ -39,113 +38,85 @@ export type GraphEdge = {
   target: string;
   stale?: boolean;
   label?: string;
+  generation?: number;
 };
 
 export type GraphProjectionInput = {
-  agents: AgentView[];
-  tasks: TaskView[];
-  dependencies?: DependencyView[];
-  runs?: RunView[];
+  snapshot?: GraphSnapshotView | null;
   layers?: Partial<GraphLayers>;
 };
-
-function pausedRun(run: RunView): boolean {
-  return run.status === "paused" || run.queue_status === "paused";
-}
-
-function runningRun(run: RunView): boolean {
-  return run.status === "running" || run.queue_status === "running";
-}
 
 function resolveLayers(layers?: Partial<GraphLayers>): GraphLayers {
   return { ...DEFAULT_GRAPH_LAYERS, ...layers };
 }
 
+function canvasKind(kind: GraphNodeView["kind"]): GraphNodeKind {
+  return kind === "agent" ? "agent" : "task";
+}
+
+function projectedEdgeId(edge: GraphEdgeView): string {
+  if (edge.id.startsWith("dep:") || edge.id.startsWith("blocker:") || edge.id.startsWith("assigned:")) {
+    return edge.id;
+  }
+  return `dep:${edge.id}`;
+}
+
+function edgeVisible(kind: ProtocolEdgeKind, layers: GraphLayers): boolean {
+  if (kind === "assigned_to") return layers.agents && layers.tasks;
+  if (kind === "consumes" || kind === "precedence") return layers.depends;
+  return layers.depends;
+}
+
+function edgeKind(kind: ProtocolEdgeKind): GraphEdgeKind {
+  return kind === "assigned_to" ? "assigned" : "depends_on";
+}
+
+function edgeLabel(edge: GraphEdgeView): string {
+  if (edge.kind === "assigned_to") return "指派";
+  if (edge.kind === "precedence") return "前置";
+  if (!edge.valid || edge.state !== "active") return "失效";
+  return edge.entity || "依赖";
+}
+
 export function projectGraph(input: GraphProjectionInput): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const layers = resolveLayers(input.layers);
-  const agents = listableAgents(input.agents);
-  const tasks = input.tasks.filter((task) => Boolean(task.id) && task.status !== "deleted");
-  const dependencies = input.dependencies ?? [];
-  const runs = input.runs ?? [];
-
-  const staleFromIds = new Set(
-    dependencies.filter((dep) => !dep.valid).map((dep) => dep.from_id),
-  );
+  const snapshot = input.snapshot;
+  if (!snapshot) return { nodes: [], edges: [] };
 
   const nodes: GraphNode[] = [];
-  if (layers.agents) {
-    for (const agent of agents) {
-      const agentRuns = runs.filter((run) => run.agent_id === agent.id);
-      const replan =
-        agentRuns.some(pausedRun) ||
-        staleFromIds.has(agent.id) ||
-        tasks.some((task) => task.assignee_agent_id === agent.id && staleFromIds.has(task.id));
-      const status = agentRuns.some(runningRun) ? "running" : replan ? "paused" : "idle";
-      nodes.push({
-        id: agent.id,
-        kind: "agent",
-        label: agentDisplayName(agent),
-        status,
-        replan,
-        subtitle: agent.harness,
-      });
+  for (const node of snapshot.nodes) {
+    if (node.kind === "agent") {
+      if (!layers.agents) continue;
+      if (isPlaceholderHarness(node.harness ?? node.subtitle ?? "")) continue;
+    } else if (!layers.tasks) {
+      continue;
     }
-  }
-  if (layers.tasks) {
-    for (const task of tasks) {
-      nodes.push({
-        id: task.id,
-        kind: "task",
-        label: task.title,
-        status: task.status,
-        subtitle: taskIdentifier(task),
-      });
-    }
+    nodes.push({
+      id: node.id,
+      kind: canvasKind(node.kind),
+      label: node.title,
+      status: node.status,
+      replan: Boolean(node.replan),
+      subtitle: node.subtitle,
+    });
   }
 
   const visible = new Set(nodes.map((node) => node.id));
   const edges: GraphEdge[] = [];
-
-  if (layers.agents && layers.tasks) {
-    for (const task of tasks) {
-      const agentId = task.assignee_agent_id?.trim();
-      if (!agentId || !visible.has(agentId) || !visible.has(task.id)) continue;
-      edges.push({
-        id: `assigned:${agentId}:${task.id}`,
-        kind: "assigned",
-        source: agentId,
-        target: task.id,
-        label: "指派",
-      });
-    }
-  }
-
-  if (layers.depends) {
-    for (const task of tasks) {
-      for (const blockerId of task.blocker_ids ?? []) {
-        if (!blockerId || blockerId === task.id) continue;
-        if (!visible.has(blockerId) || !visible.has(task.id)) continue;
-        edges.push({
-          id: `blocker:${blockerId}:${task.id}`,
-          kind: "depends_on",
-          source: blockerId,
-          target: task.id,
-          label: "前置",
-        });
-      }
-    }
-    for (const dep of dependencies) {
-      if (!dep.from_id || !dep.to_id || dep.from_id === dep.to_id) continue;
-      if (!visible.has(dep.from_id) || !visible.has(dep.to_id)) continue;
-      edges.push({
-        id: `dep:${dep.id}`,
-        kind: "depends_on",
-        source: dep.from_id,
-        target: dep.to_id,
-        stale: !dep.valid,
-        label: dep.valid ? dep.entity || "依赖" : "失效",
-      });
-    }
+  for (const edge of snapshot.edges) {
+    if (!edgeVisible(edge.kind, layers)) continue;
+    if (!edge.source?.id || !edge.target?.id || edge.source.id === edge.target.id) continue;
+    if (!visible.has(edge.source.id) || !visible.has(edge.target.id)) continue;
+    const stale = edge.kind === "consumes" && (!edge.valid || edge.state !== "active");
+    edges.push({
+      id: projectedEdgeId(edge),
+      kind: edgeKind(edge.kind),
+      source: edge.source.id,
+      target: edge.target.id,
+      stale,
+      label: edgeLabel(edge),
+      generation: edge.generation,
+    });
   }
 
   return { nodes, edges };

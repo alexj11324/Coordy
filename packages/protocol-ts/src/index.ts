@@ -12,6 +12,21 @@ export type Actor =
 
 export type CustomFieldValue = { key: string; value: string };
 export type Mention = { kind: string; id: string };
+export type NodeKind = "task" | "agent" | "contract";
+export type NodeRef = { kind: NodeKind; id: string };
+export type GraphEdgeKind =
+  | "precedence"
+  | "consumes"
+  | "assigned_to"
+  | "produces"
+  | "requires_approval"
+  | "authority";
+export type GraphEdgeState =
+  | "active"
+  | "stale"
+  | "pending_validation"
+  | "rejected"
+  | "superseded";
 
 export type Command =
   | { type: "CreateWorkspace"; name: string }
@@ -117,11 +132,17 @@ export type Command =
   | {
       type: "DeclareDependency";
       workspace_id: string;
-      from_id: string;
-      to_id: string;
+      source?: NodeRef | null;
+      target?: NodeRef | null;
+      from_id?: string;
+      to_id?: string;
+      kind?: GraphEdgeKind;
       entity: string;
+      reason?: string | null;
+      origin_run_id?: string | null;
+      selector_path?: string | null;
     }
-  | { type: "ReaffirmDependency"; dependency_id: string }
+  | { type: "ReaffirmDependency"; dependency_id: string; expected_generation: number }
   | { type: "RemoveDependency"; dependency_id: string }
   | { type: "AddIssueBlocker"; task_id: string; blocker_id: string }
   | { type: "RemoveIssueBlocker"; task_id: string; blocker_id: string }
@@ -218,6 +239,7 @@ export type Query =
   | { type: "Memory"; workspace_id: string }
   | { type: "Contracts"; workspace_id: string }
   | { type: "Dependencies"; workspace_id: string }
+  | { type: "GraphSnapshot"; workspace_id: string }
   | { type: "Conflicts"; workspace_id: string }
   | { type: "Runs"; workspace_id: string }
   | { type: "Run"; run_id: string }
@@ -345,7 +367,73 @@ export type ContractView = {
   participant_ids: string[];
   approvals: string[];
 };
-export type DependencyView = { id: string; from_id: string; to_id: string; entity: string; valid: boolean };
+export type DependencyView = {
+  id: string;
+  source: NodeRef;
+  target: NodeRef;
+  entity: string;
+  kind: GraphEdgeKind;
+  state: GraphEdgeState;
+  generation: number;
+  origin_run_id?: string | null;
+  actor_id?: string | null;
+  reason?: string | null;
+  selector_path?: string | null;
+  observed_version?: number | null;
+  current_version?: number | null;
+  from_id: string;
+  to_id: string;
+  valid: boolean;
+};
+export type GraphNodeView = {
+  id: string;
+  kind: NodeKind;
+  title: string;
+  status: string;
+  workspace_id: string;
+  subtitle?: string;
+  assignee_agent_id?: string | null;
+  blocked_reason?: string | null;
+  replan?: boolean;
+  harness?: string;
+};
+export type GraphEdgeView = {
+  id: string;
+  workspace_id: string;
+  source: NodeRef;
+  target: NodeRef;
+  kind: GraphEdgeKind;
+  entity: string;
+  state: GraphEdgeState;
+  generation: number;
+  origin_run_id?: string | null;
+  actor_id?: string | null;
+  reason?: string | null;
+  source_event?: string | null;
+  created_at?: string;
+  selector_path?: string | null;
+  observed_version?: number | null;
+  current_version?: number | null;
+  valid: boolean;
+};
+export type NodeMaterializationView = {
+  node: NodeRef;
+  workspace_id: string;
+  state: GraphEdgeState;
+  artifact_revision: number;
+  updated_at: string;
+};
+export type GraphHealthView = { consistent: boolean; lag: number };
+export type GraphSnapshotView = {
+  type: "GraphSnapshot";
+  workspace_id: string;
+  revision: number;
+  event_cursor: number;
+  nodes: GraphNodeView[];
+  edges: GraphEdgeView[];
+  materializations: NodeMaterializationView[];
+  health: GraphHealthView;
+};
 export type ConflictView = { id: string; summary: string; status: string };
 export type RunView = {
   id: string;
@@ -462,6 +550,7 @@ export type View =
   | { type: "Memory"; items: MemoryView[] }
   | { type: "Contracts"; items: ContractView[] }
   | { type: "Dependencies"; items: DependencyView[] }
+  | GraphSnapshotView
   | { type: "Conflicts"; items: ConflictView[] }
   | { type: "Runs"; items: RunView[] }
   | { type: "Run"; run: RunView; events: RunEventView[] }

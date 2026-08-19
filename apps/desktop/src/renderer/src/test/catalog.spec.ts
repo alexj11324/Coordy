@@ -100,7 +100,9 @@ describe("skill starters", () => {
     expect(starter?.body).toContain("DEPENDS: <id 或 COOR-n> [entity]");
     expect(starter?.body).toContain("PLAN:");
     expect(starter?.body).toContain("ACCEPTANCE:");
-    expect(starter?.body).toContain("失效后须确认");
+    expect(starter?.body).toContain("失效后须带当前 generation 确认");
+    expect(starter?.body).toContain("source→target");
+    expect(starter?.body.includes("两边指派")).toBe(false);
     expect(starter?.body.includes("React Flow")).toBe(false);
     expect(starter?.body.includes("LangGraph")).toBe(false);
     expect(skillStarterById(null)).toBeNull();

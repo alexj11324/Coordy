@@ -659,8 +659,8 @@ export function DependenciesPage() {
   const tasks = asTasks(board.data);
   const agentList = listableAgents(asAgents(agents.data));
   const nodes = [
-    ...tasks.map((task) => ({ id: task.id, label: `任务 · ${task.title}` })),
-    ...agentList.map((agent) => ({ id: agent.id, label: `智能体 · ${agent.name}` })),
+    ...tasks.map((task) => ({ id: task.id, label: `任务 · ${task.title}`, kind: "task" as const })),
+    ...agentList.map((agent) => ({ id: agent.id, label: `智能体 · ${agent.name}`, kind: "agent" as const })),
   ];
   const nodeItems = Object.fromEntries(nodes.map((node) => [node.id, node.label]));
   const fromId = useForm("");
@@ -672,7 +672,7 @@ export function DependenciesPage() {
   const selectedTo = toId.value || nodes[1]?.id || nodes[0]?.id || "";
   return (
     <section>
-      <PageHeader title="依赖" description="声明内核可校验的边，例如任务锁定仓库。" />
+      <PageHeader title="依赖" description="声明上游 source 到下游 target 的 Consumes 边。确认带 generation，不会自动开工。" />
       <form
         className="mb-4 grid gap-2 md:grid-cols-4"
         onSubmit={(event: FormEvent) => {
@@ -681,8 +681,8 @@ export function DependenciesPage() {
             command.mutate({
               type: "DeclareDependency",
               workspace_id: workspaceId,
-              from_id: selectedFrom,
-              to_id: selectedTo,
+              source: { kind: nodes.find((node) => node.id === selectedFrom)?.kind ?? "task", id: selectedFrom },
+              target: { kind: nodes.find((node) => node.id === selectedTo)?.kind ?? "task", id: selectedTo },
               entity: entity.value || "repo",
             });
           }
@@ -718,17 +718,17 @@ export function DependenciesPage() {
         </Button>
       </form>
       {items.length === 0 ? (
-        <EmptyList icon={GitBranch} title="暂无依赖" description="在已有任务或智能体后，声明一条从 A 到 B 的边。" />
+        <EmptyList icon={GitBranch} title="暂无依赖" description="选择上游 source 与下游 target 后声明一条 Consumes 边。" />
       ) : (
         items.map((dep) => (
           <Card key={dep.id} size="sm" className="mb-2">
             <CardHeader>
               <CardTitle className="font-mono text-sm">
-                {dep.from_id} → {dep.to_id}
+                {dep.source.id} → {dep.target.id}
               </CardTitle>
               <CardDescription>{dep.entity}</CardDescription>
               <CardAction>
-                <Badge variant={dep.valid ? "outline" : "destructive"}>{dep.valid ? "有效" : "失效"}</Badge>
+                <Badge variant={dep.valid ? "outline" : "destructive"}>{dep.valid ? "有效" : dep.state}</Badge>
               </CardAction>
             </CardHeader>
           </Card>
