@@ -1964,6 +1964,13 @@ impl Kernel {
                     health,
                 })
             }
+            Query::GraphEvaluation { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                Ok(View::GraphEvaluation(crate::graph::evaluate_world(
+                    &world,
+                    &workspace_id,
+                )))
+            }
             Query::Conflicts { workspace_id } => {
                 require_member(&world, &actor, &workspace_id)?;
                 Ok(View::Conflicts {

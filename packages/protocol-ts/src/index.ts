@@ -240,6 +240,7 @@ export type Query =
   | { type: "Contracts"; workspace_id: string }
   | { type: "Dependencies"; workspace_id: string }
   | { type: "GraphSnapshot"; workspace_id: string }
+  | { type: "GraphEvaluation"; workspace_id: string }
   | { type: "Conflicts"; workspace_id: string }
   | { type: "Runs"; workspace_id: string }
   | { type: "Run"; run_id: string }
@@ -424,6 +425,15 @@ export type NodeMaterializationView = {
   updated_at: string;
 };
 export type GraphHealthView = { consistent: boolean; lag: number };
+export type BlockedNodeView = { node_id: string; reasons: string[] };
+export type GraphEvaluationView = {
+  graph_revision: number;
+  ready_nodes: string[];
+  blocked_nodes: BlockedNodeView[];
+  stale_nodes: string[];
+  required_validations: string[];
+  diagnostics: string[];
+};
 export type GraphSnapshotView = {
   type: "GraphSnapshot";
   workspace_id: string;
@@ -551,6 +561,7 @@ export type View =
   | { type: "Contracts"; items: ContractView[] }
   | { type: "Dependencies"; items: DependencyView[] }
   | GraphSnapshotView
+  | { type: "GraphEvaluation" } & GraphEvaluationView
   | { type: "Conflicts"; items: ConflictView[] }
   | { type: "Runs"; items: RunView[] }
   | { type: "Run"; run: RunView; events: RunEventView[] }

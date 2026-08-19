@@ -2180,13 +2180,17 @@ pub(crate) fn mark_node_succeeded(world: &mut World, workspace_id: &str, node_id
         GraphEdgeState::Active,
         revision,
     );
+    let fingerprint = {
+        let snap = crate::graph::state_from_world(world, workspace_id);
+        crate::graph::input_fingerprint(&snap, node_id)
+    };
     record_graph_event(
         world,
         workspace_id,
         "task_succeeded",
         None,
         Some(node_id),
-        json!({ "revision": revision }),
+        json!({ "revision": revision, "input_fingerprint": fingerprint }),
     );
 }
 

@@ -658,6 +658,7 @@ pub enum Query {
     Contracts { workspace_id: String },
     Dependencies { workspace_id: String },
     GraphSnapshot { workspace_id: String },
+    GraphEvaluation { workspace_id: String },
     Conflicts { workspace_id: String },
     Runs { workspace_id: String },
     Run { run_id: String },
@@ -744,6 +745,7 @@ pub enum View {
         materializations: Vec<NodeMaterializationView>,
         health: GraphHealthView,
     },
+    GraphEvaluation(GraphEvaluationView),
     Conflicts {
         items: Vec<ConflictView>,
     },
@@ -1059,6 +1061,22 @@ pub struct NodeMaterializationView {
 pub struct GraphHealthView {
     pub consistent: bool,
     pub lag: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlockedNodeView {
+    pub node_id: String,
+    pub reasons: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphEvaluationView {
+    pub graph_revision: u64,
+    pub ready_nodes: Vec<String>,
+    pub blocked_nodes: Vec<BlockedNodeView>,
+    pub stale_nodes: Vec<String>,
+    pub required_validations: Vec<String>,
+    pub diagnostics: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
