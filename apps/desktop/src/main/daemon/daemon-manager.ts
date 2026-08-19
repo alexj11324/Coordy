@@ -41,7 +41,14 @@ export class DaemonManager {
     const dataDir = join(app.getPath("userData"), "data");
     this.process = spawn(
       bin,
-      ["--data-dir", dataDir, "--socket", this.socketPath, "--token", this.token],
+      [
+        "--data-dir",
+        dataDir,
+        "--socket",
+        this.socketPath,
+        "--token",
+        this.token,
+      ],
       { stdio: "pipe", env: { ...process.env, PATH: daemonPath() } },
     );
     await waitForSocket(this.socketPath, 50);
@@ -50,7 +57,21 @@ export class DaemonManager {
     return this.client;
   }
 
+  async reconnect(): Promise<DaemonClient> {
+    const client = new DaemonClient();
+    await client.connect(this.socketPath, this.token);
+    this.client?.close();
+    this.client = client;
+    return client;
+  }
+
+  disconnect() {
+    this.client?.close();
+    this.client = null;
+  }
+
   stop() {
+    this.disconnect();
     this.process?.kill();
   }
 }

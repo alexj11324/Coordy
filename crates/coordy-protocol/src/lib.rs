@@ -805,6 +805,10 @@ pub enum View {
         edges: Vec<GraphEdgeView>,
         materializations: Vec<NodeMaterializationView>,
         health: GraphHealthView,
+        #[serde(default)]
+        events: Vec<GraphTimelineEventView>,
+        #[serde(default)]
+        evaluation: GraphEvaluationView,
     },
     GraphEvaluation(GraphEvaluationView),
     Conflicts {
@@ -1130,13 +1134,13 @@ pub struct GraphHealthView {
     pub lag: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BlockedNodeView {
     pub node_id: String,
     pub reasons: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphEvaluationView {
     pub graph_revision: u64,
     pub ready_nodes: Vec<String>,
@@ -1144,6 +1148,18 @@ pub struct GraphEvaluationView {
     pub stale_nodes: Vec<String>,
     pub required_validations: Vec<String>,
     pub diagnostics: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphTimelineEventView {
+    pub id: String,
+    pub kind: String,
+    pub at: String,
+    #[serde(default)]
+    pub edge_id: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    pub summary: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1515,12 +1531,32 @@ pub struct AgentContextView {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum Effect {
-    Ready { cursor: u64 },
-    InboxPosted { item: InboxView },
-    RunEvent { run_id: String, event: RunEventView },
-    Pause { run_id: String, reason: String },
-    Replan { run_id: String, reason: String },
-    StateChanged { workspace_id: String },
+    Ready {
+        cursor: u64,
+    },
+    InboxPosted {
+        item: InboxView,
+    },
+    RunEvent {
+        run_id: String,
+        event: RunEventView,
+    },
+    Pause {
+        run_id: String,
+        reason: String,
+    },
+    Replan {
+        run_id: String,
+        reason: String,
+    },
+    StateChanged {
+        workspace_id: String,
+    },
+    GraphDelta {
+        workspace_id: String,
+        revision: u64,
+        cursor: u64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -2817,13 +2817,15 @@ impl Kernel {
                 let (revision, event_cursor, nodes, edges, materializations, health) =
                     product::graph_snapshot(&world, &workspace_id);
                 Ok(View::GraphSnapshot {
-                    workspace_id,
+                    workspace_id: workspace_id.clone(),
                     revision,
                     event_cursor,
                     nodes,
                     edges,
                     materializations,
                     health,
+                    events: product::graph_timeline(&world, &workspace_id),
+                    evaluation: crate::graph::evaluate_world(&world, &workspace_id),
                 })
             }
             Query::GraphEvaluation { workspace_id } => {

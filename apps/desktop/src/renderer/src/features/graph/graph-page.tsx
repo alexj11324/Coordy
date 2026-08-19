@@ -24,7 +24,13 @@ import {
   SelectValue,
   Switch,
 } from "@coordy/ui";
-import type { GraphEdgeView, GraphNodeView, NodeKind } from "@coordy/protocol";
+import type {
+  GraphEdgeView,
+  GraphEvaluationView,
+  GraphNodeView,
+  GraphTimelineEventView,
+  NodeKind,
+} from "@coordy/protocol";
 import { Bot, ListTodo, Share2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -48,16 +54,25 @@ import { useSession } from "../../state/session-store";
 import { resolvedTheme, useThemeStore } from "../../state/theme-store";
 import { useCommand, useWorkspaceQuery } from "../pages";
 import { StatusLamp } from "../status-lamp";
-import { AgentGraphNode, TaskGraphNode, type GraphCanvasNode } from "./canvas-nodes";
+import {
+  AgentGraphNode,
+  TaskGraphNode,
+  type GraphCanvasNode,
+} from "./canvas-nodes";
 import { DataEdge, type DataEdgeType } from "./data-edge";
 import {
   declareDependencyCommand,
   graphConductorStatusLabel,
   reaffirmCommandForStaleEdge,
   removeCommandForDependencyEdge,
+  timelineEntries,
   staleDependencyHoldLabel,
 } from "./graph-commands";
 import { layoutGraph } from "./layout";
+import {
+  applyGraphDeltaRevision,
+  graphLiveState,
+} from "../../lib/coordy/graph-stream";
 
 const NODE_TYPES: NodeTypes = {
   agent: AgentGraphNode,
@@ -76,12 +91,29 @@ const LAYER_ITEMS: { id: GraphLayerId; label: string }[] = [
 
 function graphSignature(nodes: GraphNode[], edges: GraphEdge[]): string {
   return JSON.stringify({
-    nodes: nodes.map((node) => [node.id, node.kind, node.label, node.status, node.replan, node.subtitle]),
-    edges: edges.map((edge) => [edge.id, edge.source, edge.target, edge.kind, edge.stale, edge.label]),
+    nodes: nodes.map((node) => [
+      node.id,
+      node.kind,
+      node.label,
+      node.status,
+      node.replan,
+      node.subtitle,
+    ]),
+    edges: edges.map((edge) => [
+      edge.id,
+      edge.source,
+      edge.target,
+      edge.kind,
+      edge.stale,
+      edge.label,
+    ]),
   });
 }
 
-function toFlowNodes(nodes: GraphNode[], selectedId: string | null): GraphCanvasNode[] {
+function toFlowNodes(
+  nodes: GraphNode[],
+  selectedId: string | null,
+): GraphCanvasNode[] {
   return nodes.map((node) => ({
     id: node.id,
     type: node.kind,
@@ -97,7 +129,10 @@ function toFlowNodes(nodes: GraphNode[], selectedId: string | null): GraphCanvas
   }));
 }
 
-function toFlowEdges(edges: GraphEdge[], selectedEdgeId: string | null): DataEdgeType[] {
+function toFlowEdges(
+  edges: GraphEdge[],
+  selectedEdgeId: string | null,
+): DataEdgeType[] {
   return edges.map((edge) => ({
     id: edge.id,
     type: "data",
@@ -150,7 +185,10 @@ function GraphCanvas({
   const colorMode = resolvedTheme(preference);
   const [nodes, setNodes] = useState<GraphCanvasNode[]>([]);
   const [edges, setEdges] = useState<DataEdgeType[]>([]);
-  const signature = useMemo(() => graphSignature(sourceNodes, sourceEdges), [sourceEdges, sourceNodes]);
+  const signature = useMemo(
+    () => graphSignature(sourceNodes, sourceEdges),
+    [sourceEdges, sourceNodes],
+  );
   const selectedRef = useRef(selectedId);
   selectedRef.current = selectedId;
   const selectedEdgeRef = useRef(selectedEdgeId);
@@ -169,8 +207,18 @@ function GraphCanvas({
     let cancelled = false;
     void layoutGraph(nextNodes, nextEdges).then((laidOut) => {
       if (cancelled || token !== generation.current) return;
-      setNodes(laidOut.map((node) => ({ ...node, selected: node.id === selectedRef.current })));
-      setEdges(nextEdges.map((edge) => ({ ...edge, selected: edge.id === selectedEdgeRef.current })));
+      setNodes(
+        laidOut.map((node) => ({
+          ...node,
+          selected: node.id === selectedRef.current,
+        })),
+      );
+      setEdges(
+        nextEdges.map((edge) => ({
+          ...edge,
+          selected: edge.id === selectedEdgeRef.current,
+        })),
+      );
       window.requestAnimationFrame(() => {
         void fitView({ padding: 0.18, duration: 180 });
       });
@@ -181,16 +229,26 @@ function GraphCanvas({
   }, [fitView, signature, sourceEdges, sourceNodes]);
 
   useEffect(() => {
-    setNodes((current) => current.map((node) => ({ ...node, selected: node.id === selectedId })));
+    setNodes((current) =>
+      current.map((node) => ({ ...node, selected: node.id === selectedId })),
+    );
   }, [selectedId]);
 
   useEffect(() => {
-    setEdges((current) => current.map((edge) => ({ ...edge, selected: edge.id === selectedEdgeId })));
+    setEdges((current) =>
+      current.map((edge) => ({
+        ...edge,
+        selected: edge.id === selectedEdgeId,
+      })),
+    );
   }, [selectedEdgeId]);
 
-  const onNodesChange: OnNodesChange<GraphCanvasNode> = useCallback((changes) => {
-    setNodes((current) => applyNodeChanges(changes, current));
-  }, []);
+  const onNodesChange: OnNodesChange<GraphCanvasNode> = useCallback(
+    (changes) => {
+      setNodes((current) => applyNodeChanges(changes, current));
+    },
+    [],
+  );
 
   const onNodeClick: NodeMouseHandler<GraphCanvasNode> = useCallback(
     (_event, node) => {
@@ -280,13 +338,18 @@ function DependencyActions({
         移除
       </Button>
       {dependency.valid ? null : (
-        <span className="self-center text-[11px] text-muted-foreground">{staleDependencyHoldLabel(hasConductor)}</span>
+        <span className="self-center text-[11px] text-muted-foreground">
+          {staleDependencyHoldLabel(hasConductor)}
+        </span>
       )}
     </div>
   );
 }
 
-function snapshotNode(nodes: GraphNodeView[], id: string | undefined): GraphNodeView | undefined {
+function snapshotNode(
+  nodes: GraphNodeView[],
+  id: string | undefined,
+): GraphNodeView | undefined {
   return nodes.find((node) => node.id === id);
 }
 
@@ -301,6 +364,8 @@ function GraphInspector({
   snapshotEdges,
   nodes,
   workspaceId,
+  events,
+  evaluation,
   hasConductor,
   conductorName,
 }: {
@@ -310,13 +375,17 @@ function GraphInspector({
   snapshotEdges: GraphEdgeView[];
   nodes: GraphNode[];
   workspaceId: string | null;
+  events: GraphTimelineEventView[];
+  evaluation: GraphEvaluationView | undefined;
   hasConductor: boolean;
   conductorName: string | null;
 }) {
   const navigate = useNavigate();
   const command = useCommand();
   const sources = nodes.filter((node) => node.id !== selected?.id);
-  const sourceItems = Object.fromEntries(sources.map((node) => [node.id, node.label]));
+  const sourceItems = Object.fromEntries(
+    sources.map((node) => [node.id, node.label]),
+  );
   const [sourceId, setSourceId] = useState(sources[0]?.id ?? "");
   const [entity, setEntity] = useState("repo");
 
@@ -349,31 +418,62 @@ function GraphInspector({
   };
 
   if (selectedEdge) {
-    const dependencyId = selectedEdge.id.startsWith("dep:") ? selectedEdge.id.slice(4) : null;
+    const dependencyId = selectedEdge.id.startsWith("dep:")
+      ? selectedEdge.id.slice(4)
+      : null;
     const dependency = dependencyId
-      ? snapshotEdges.find((item) => item.id === dependencyId && item.kind === "consumes")
+      ? snapshotEdges.find(
+          (item) => item.id === dependencyId && item.kind === "consumes",
+        )
       : null;
     const reaffirmCmd = reaffirmCommandForStaleEdge({
       edgeId: selectedEdge.id,
       stale: selectedEdge.stale,
       generation: selectedEdge.generation,
     });
-    const removeCmd = removeCommandForDependencyEdge(selectedEdge.id, selectedEdge.generation);
+    const removeCmd = removeCommandForDependencyEdge(
+      selectedEdge.id,
+      selectedEdge.generation,
+    );
     return (
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Share2 className="size-4 text-muted-foreground" />
-          <h2 className="truncate text-sm font-medium">{selectedEdge.label || "边"}</h2>
-          {selectedEdge.stale ? <Badge variant="destructive">{staleDependencyHoldLabel(hasConductor)}</Badge> : null}
-          {hasConductor ? <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge> : null}
+          <h2 className="truncate text-sm font-medium">
+            {selectedEdge.label || "边"}
+          </h2>
+          {selectedEdge.stale ? (
+            <Badge variant="destructive">
+              {staleDependencyHoldLabel(hasConductor)}
+            </Badge>
+          ) : null}
+          {hasConductor ? (
+            <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge>
+          ) : null}
         </header>
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-4">
-            <InspectorField label="上游 source" value={nodeLabel(nodes, selectedEdge.source)} />
-            <InspectorField label="下游 target" value={nodeLabel(nodes, selectedEdge.target)} />
-            <InspectorField label="类型" value={selectedEdge.kind === "assigned" ? "指派" : "依赖"} />
-            {dependency ? <InspectorField label="实体" value={dependency.entity} /> : null}
-            {dependency ? <InspectorField label="generation" value={String(dependency.generation)} /> : null}
+            <InspectorField
+              label="上游 source"
+              value={nodeLabel(nodes, selectedEdge.source)}
+            />
+            <InspectorField
+              label="下游 target"
+              value={nodeLabel(nodes, selectedEdge.target)}
+            />
+            <InspectorField
+              label="类型"
+              value={selectedEdge.kind === "assigned" ? "指派" : "依赖"}
+            />
+            {dependency ? (
+              <InspectorField label="实体" value={dependency.entity} />
+            ) : null}
+            {dependency ? (
+              <InspectorField
+                label="generation"
+                value={String(dependency.generation)}
+              />
+            ) : null}
           </div>
         </ScrollArea>
         {dependency && (reaffirmCmd || removeCmd) ? (
@@ -392,10 +492,58 @@ function GraphInspector({
   }
 
   if (!selected) {
+    const timeline = timelineEntries(events);
+    const diagnostics = evaluation?.diagnostics ?? [];
     return (
-      <div className="flex h-full flex-col justify-center gap-2 px-4 text-sm text-muted-foreground">
-        <p>选中节点或边以声明、确认或移除依赖</p>
-        {hasConductor ? <p>{graphConductorStatusLabel(true)}{conductorName ? ` · ${conductorName}` : ""}</p> : null}
+      <div className="flex h-full min-h-0 flex-col">
+        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <Share2 className="size-4 text-muted-foreground" />
+          <h2 className="truncate text-sm font-medium">图诊断</h2>
+          {hasConductor ? (
+            <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge>
+          ) : null}
+        </header>
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="space-y-4 p-4">
+            {hasConductor && conductorName ? (
+              <p className="text-sm text-muted-foreground">
+                当前总管 · {conductorName}
+              </p>
+            ) : null}
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">时间线</p>
+              {timeline.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  还没有图事件。选中节点可声明依赖。
+                </p>
+              ) : (
+                timeline.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="rounded-md border border-border px-2 py-1.5"
+                  >
+                    <p className="text-sm">{entry.summary}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {entry.kind}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">诊断</p>
+              {diagnostics.length === 0 ? (
+                <p className="text-sm text-muted-foreground">无阻塞诊断</p>
+              ) : (
+                diagnostics.map((line) => (
+                  <p key={line} className="text-sm">
+                    {line}
+                  </p>
+                ))
+              )}
+            </div>
+          </div>
+        </ScrollArea>
       </div>
     );
   }
@@ -409,24 +557,44 @@ function GraphInspector({
         </header>
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-4">
-            <InspectorField label="名称" value={detail?.title ?? selected.label} />
+            <InspectorField
+              label="名称"
+              value={detail?.title ?? selected.label}
+            />
             <InspectorField
               label="Harness"
-              value={detail?.harness ? harnessLabel(detail.harness) : selected.subtitle ?? ""}
+              value={
+                detail?.harness
+                  ? harnessLabel(detail.harness)
+                  : (selected.subtitle ?? "")
+              }
             />
-            <InspectorField label="状态" value={agentStatusLabel(selected.status)} />
-            {selected.replan ? <Badge variant="destructive">需重规划</Badge> : null}
+            <InspectorField
+              label="状态"
+              value={agentStatusLabel(selected.status)}
+            />
+            {selected.replan ? (
+              <Badge variant="destructive">需重规划</Badge>
+            ) : null}
           </div>
         </ScrollArea>
         <div className="border-t border-border p-3">
-          <Button type="button" size="sm" className="w-full" onClick={() => navigate(`/agents/${selected.id}`)}>
+          <Button
+            type="button"
+            size="sm"
+            className="w-full"
+            onClick={() => navigate(`/agents/${selected.id}`)}
+          >
             打开智能体
           </Button>
         </div>
       </div>
     );
   }
-  const assignee = snapshotNode(snapshotNodes, detail?.assignee_agent_id ?? undefined);
+  const assignee = snapshotNode(
+    snapshotNodes,
+    detail?.assignee_agent_id ?? undefined,
+  );
   const blockers = snapshotEdges.filter(
     (edge) => edge.kind === "precedence" && edge.target.id === selected.id,
   );
@@ -439,40 +607,78 @@ function GraphInspector({
       <header className="flex items-center gap-2 border-b border-border px-4 py-3">
         <ListTodo className="size-4 text-muted-foreground" />
         <h2 className="truncate text-sm font-medium">{selected.label}</h2>
-        {hasConductor ? <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge> : null}
+        {hasConductor ? (
+          <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge>
+        ) : null}
       </header>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-4 p-4">
-          <InspectorField label="标题" value={detail?.title ?? selected.label} />
-          <InspectorField label="编号" value={detail?.subtitle || selected.subtitle || ""} />
-          <InspectorField label="状态" value={taskStatusLabel(detail?.status ?? selected.status)} />
-          <InspectorField label="指派智能体" value={assignee ? assignee.title : "未指派"} />
-          {detail?.blocked_reason ? <InspectorField label="阻塞原因" value={detail.blocked_reason} /> : null}
+          <InspectorField
+            label="标题"
+            value={detail?.title ?? selected.label}
+          />
+          <InspectorField
+            label="编号"
+            value={detail?.subtitle || selected.subtitle || ""}
+          />
+          <InspectorField
+            label="状态"
+            value={taskStatusLabel(detail?.status ?? selected.status)}
+          />
+          <InspectorField
+            label="指派智能体"
+            value={assignee ? assignee.title : "未指派"}
+          />
+          {detail?.blocked_reason ? (
+            <InspectorField label="阻塞原因" value={detail.blocked_reason} />
+          ) : null}
+          {evaluation?.blocked_nodes
+            .find((row) => row.node_id === selected.id)
+            ?.reasons.map((reason) => (
+              <InspectorField key={reason} label="图阻塞" value={reason} />
+            ))}
+          {(evaluation?.diagnostics ?? [])
+            .filter((line) => line.startsWith(`${selected.id}:`))
+            .map((line) => (
+              <InspectorField key={line} label="诊断" value={line} />
+            ))}
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">阻塞边</p>
             {blockers.length === 0 ? (
               <p className="text-sm text-muted-foreground">无前置事项</p>
             ) : (
               blockers.map((blocker) => (
-                <div key={blocker.id} className="rounded-md border border-border px-2 py-1.5 text-sm">
+                <div
+                  key={blocker.id}
+                  className="rounded-md border border-border px-2 py-1.5 text-sm"
+                >
                   {nodeLabel(nodes, blocker.source.id)}
                 </div>
               ))
             )}
           </div>
           <div className="space-y-2">
-            <p className="text-[11px] text-muted-foreground">依赖边（上游 source）</p>
+            <p className="text-[11px] text-muted-foreground">
+              依赖边（上游 source）
+            </p>
             {incoming.length === 0 ? (
               <p className="text-sm text-muted-foreground">未声明依赖</p>
             ) : (
               incoming.map((dep) => (
-                <div key={dep.id} className="space-y-2 rounded-md border border-border p-2">
+                <div
+                  key={dep.id}
+                  className="space-y-2 rounded-md border border-border p-2"
+                >
                   <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm">{nodeLabel(nodes, dep.source.id)}</p>
+                    <p className="truncate text-sm">
+                      {nodeLabel(nodes, dep.source.id)}
+                    </p>
                     {dep.valid ? (
                       <Badge variant="secondary">{dep.entity || "依赖"}</Badge>
                     ) : (
-                      <Badge variant="destructive">{staleDependencyHoldLabel(hasConductor)}</Badge>
+                      <Badge variant="destructive">
+                        {staleDependencyHoldLabel(hasConductor)}
+                      </Badge>
                     )}
                   </div>
                   <DependencyActions
@@ -503,8 +709,14 @@ function GraphInspector({
               );
             }}
           >
-            <p className="text-[11px] text-muted-foreground">声明依赖（选择上游 source）</p>
-            <Select value={sourceId} items={sourceItems} onValueChange={(value) => value && setSourceId(value)}>
+            <p className="text-[11px] text-muted-foreground">
+              声明依赖（选择上游 source）
+            </p>
+            <Select
+              value={sourceId}
+              items={sourceItems}
+              onValueChange={(value) => value && setSourceId(value)}
+            >
               <SelectTrigger size="sm">
                 <SelectValue />
               </SelectTrigger>
@@ -521,14 +733,24 @@ function GraphInspector({
               value={entity}
               onChange={(event) => setEntity(event.target.value)}
             />
-            <Button type="submit" size="sm" className="w-full" disabled={!workspaceId || !sourceId || command.isPending}>
+            <Button
+              type="submit"
+              size="sm"
+              className="w-full"
+              disabled={!workspaceId || !sourceId || command.isPending}
+            >
               声明依赖
             </Button>
           </form>
         </div>
       </ScrollArea>
       <div className="border-t border-border p-3">
-        <Button type="button" size="sm" className="w-full" onClick={() => navigate(`/board/${selected.id}`)}>
+        <Button
+          type="button"
+          size="sm"
+          className="w-full"
+          onClick={() => navigate(`/board/${selected.id}`)}
+        >
           打开事项
         </Button>
       </div>
@@ -537,26 +759,72 @@ function GraphInspector({
 }
 
 export function GraphPage() {
-  const agentsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
-  const workspaceQuery = useWorkspaceQuery((workspace_id) => ({ type: "Workspace", workspace_id }));
-  const snapQuery = useWorkspaceQuery((workspace_id) => ({ type: "GraphSnapshot", workspace_id }));
+  const agentsQuery = useWorkspaceQuery((workspace_id) => ({
+    type: "Agents",
+    workspace_id,
+  }));
+  const workspaceQuery = useWorkspaceQuery((workspace_id) => ({
+    type: "Workspace",
+    workspace_id,
+  }));
+  const snapQuery = useWorkspaceQuery((workspace_id) => ({
+    type: "GraphSnapshot",
+    workspace_id,
+  }));
   const workspaceId = useSession((s) => s.workspaceId);
   const agents = asAgents(agentsQuery.data);
   const workspace = asWorkspace(workspaceQuery.data);
   const conductorId = workspace?.conductor_agent_id?.trim() || null;
   const hasConductor = Boolean(conductorId);
-  const conductorAgent = conductorId ? agents.find((agent) => agent.id === conductorId) : undefined;
-  const conductorName = conductorAgent ? agentDisplayName(conductorAgent) : conductorId;
+  const conductorAgent = conductorId
+    ? agents.find((agent) => agent.id === conductorId)
+    : undefined;
+  const conductorName = conductorAgent
+    ? agentDisplayName(conductorAgent)
+    : conductorId;
   const snapshot = asGraphSnapshot(snapQuery.data);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_GRAPH_LAYERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
-  const projected = useMemo(() => projectGraph({ snapshot, layers }), [layers, snapshot]);
-  const selected = projected.nodes.find((node) => node.id === selectedId) ?? null;
-  const selectedEdge = projected.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
-  const health = snapshot?.health;
-  const live = Boolean(health?.consistent && health.lag === 0);
-  const liveTone = live ? "green" : health?.consistent === false ? "red" : "yellow";
+  const [deltaRevision, setDeltaRevision] = useState<number | null>(null);
+  const [streamHealth, setStreamHealth] = useState<
+    "unknown" | "healthy" | "unhealthy"
+  >("unknown");
+  const projected = useMemo(
+    () => projectGraph({ snapshot, layers }),
+    [layers, snapshot],
+  );
+  const selected =
+    projected.nodes.find((node) => node.id === selectedId) ?? null;
+  const selectedEdge =
+    projected.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
+  const liveState = graphLiveState({
+    consistent: snapshot?.health.consistent === true,
+    snapshotRevision: snapshot?.revision ?? 0,
+    deltaRevision,
+    streamHealth,
+  });
+
+  useEffect(() => {
+    setDeltaRevision(null);
+    setStreamHealth("unknown");
+    const api = window.coordy;
+    if (!api?.subscribe) {
+      setStreamHealth("unhealthy");
+      return;
+    }
+    return api.subscribe((effect) => {
+      if (effect.type === "StreamHealth") {
+        setStreamHealth(effect.healthy ? "healthy" : "unhealthy");
+        return;
+      }
+      if (effect.type !== "GraphDelta") return;
+      if (workspaceId && effect.workspace_id !== workspaceId) return;
+      setDeltaRevision((current) =>
+        applyGraphDeltaRevision(current ?? 0, effect.revision),
+      );
+    });
+  }, [workspaceId]);
 
   useEffect(() => {
     if (selectedId && !projected.nodes.some((node) => node.id === selectedId)) {
@@ -565,7 +833,10 @@ export function GraphPage() {
   }, [projected.nodes, selectedId]);
 
   useEffect(() => {
-    if (selectedEdgeId && !projected.edges.some((edge) => edge.id === selectedEdgeId)) {
+    if (
+      selectedEdgeId &&
+      !projected.edges.some((edge) => edge.id === selectedEdgeId)
+    ) {
       setSelectedEdgeId(null);
     }
   }, [projected.edges, selectedEdgeId]);
@@ -580,13 +851,19 @@ export function GraphPage() {
           </header>
           <div className="space-y-3 p-3">
             {LAYER_ITEMS.map((item) => (
-              <label key={item.id} className="flex items-center justify-between gap-2 text-sm">
+              <label
+                key={item.id}
+                className="flex items-center justify-between gap-2 text-sm"
+              >
                 <span>{item.label}</span>
                 <Switch
                   size="sm"
                   checked={layers[item.id]}
                   onCheckedChange={(checked) =>
-                    setLayers((current) => ({ ...current, [item.id]: Boolean(checked) }))
+                    setLayers((current) => ({
+                      ...current,
+                      [item.id]: Boolean(checked),
+                    }))
                   }
                 />
               </label>
@@ -638,14 +915,16 @@ export function GraphPage() {
             snapshotEdges={snapshot?.edges ?? []}
             nodes={projected.nodes}
             workspaceId={workspaceId}
+            events={snapshot?.events ?? []}
+            evaluation={snapshot?.evaluation}
             hasConductor={hasConductor}
             conductorName={conductorName}
           />
         </aside>
       </div>
       <footer className="flex h-8 shrink-0 items-center gap-2 border-t border-border px-3 text-xs text-muted-foreground">
-        <StatusLamp tone={liveTone} label="Live" />
-        <span>{live ? "Live" : `cursor lag ${health?.lag ?? "?"}`}</span>
+        <StatusLamp tone={liveState.tone} label="Live" />
+        <span>{liveState.live ? "Live" : `cursor lag ${liveState.lag}`}</span>
         {hasConductor ? (
           <span>
             {graphConductorStatusLabel(true)}

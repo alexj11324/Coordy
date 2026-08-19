@@ -11,6 +11,7 @@ import {
 } from "./security/browser-window-policy";
 import { DaemonManager } from "./daemon/daemon-manager";
 import { cliBinaryPath } from "./daemon/daemon-binary-path";
+import { createEffectPoller } from "./daemon/effect-poller";
 import { installCliBinaries } from "./install-cli";
 import { listDirectory } from "./list-directory";
 import { resolvePreloadPath } from "./preload-path";
@@ -173,22 +174,22 @@ app.whenReady().then(async () => {
     app.quit();
   });
   createWindow();
-  let cursor = 0;
-  const timer = setInterval(async () => {
-    if (!daemon.client) return;
-    try {
-      const effects = (await daemon.client.subscribe(cursor)) as unknown;
-      if (!Array.isArray(effects) || effects.length === 0) return;
-      cursor += effects.length;
+  const poll = createEffectPoller({
+    client: () => daemon.client,
+    disconnect: () => daemon.disconnect(),
+    reconnect: () => daemon.reconnect(),
+    onHealth: (healthy) => {
       for (const win of BrowserWindow.getAllWindows()) {
-        for (const effect of effects) {
-          win.webContents.send(IPC.effect, effect);
-        }
+        win.webContents.send(IPC.effect, { type: "StreamHealth", healthy });
       }
-    } catch {
-      /* daemon may be restarting */
-    }
-  }, 400);
+    },
+    onEffects: (effects) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        for (const effect of effects) win.webContents.send(IPC.effect, effect);
+      }
+    },
+  });
+  const timer = setInterval(() => void poll(), 400);
   app.on("before-quit", () => {
     clearInterval(timer);
     daemon.stop();
