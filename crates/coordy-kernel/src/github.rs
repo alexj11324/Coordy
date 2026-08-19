@@ -64,7 +64,8 @@ fn find_idents(prefix_up: &str, hay: &str) -> Vec<String> {
             while j < bytes.len() && bytes[j].is_ascii_digit() {
                 j += 1;
             }
-            if j > num_start {
+            let suffix_boundary = j == bytes.len() || !bytes[j].is_ascii_alphanumeric();
+            if j > num_start && suffix_boundary {
                 out.push(format!("{}-{}", prefix_up, &hay_up[num_start..j]));
                 i = j;
                 continue;
@@ -172,5 +173,14 @@ mod tests {
                 close_intent: true,
             }]
         );
+    }
+
+    #[test]
+    fn identifier_requires_a_boundary_after_the_number() {
+        assert!(issue_links("COOR", "coor-7th-attempt", "n", "").is_empty());
+        assert!(issue_links("COOR", "feat", "n", "Closes COOR-7th").is_empty());
+
+        let links = issue_links("COOR", "coor-7-fix", "n", "");
+        assert_eq!(links[0].identifier, "COOR-7");
     }
 }

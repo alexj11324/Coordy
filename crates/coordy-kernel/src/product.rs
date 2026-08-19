@@ -1691,8 +1691,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             ))
         }
         Command::SyncGithubPullRequests(sync) => {
-            require_not_agent(actor)?;
-            require_member(world, actor, &sync.workspace_id)?;
+            if !matches!(actor, Actor::Daemon) {
+                return Err(CoordyError::denied(
+                    "only the daemon may submit GitHub snapshots",
+                ));
+            }
             let fetched_at = if sync.fetched_at.is_empty() {
                 ids::now()
             } else {

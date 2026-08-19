@@ -9,6 +9,7 @@ mod live;
 mod secrets;
 mod sqlite;
 
+pub use discovery::{import_agents, list_agents};
 pub use git::GitPorts;
 pub use github::{collect, parse_github_remote, parse_pr_list};
 pub use ipc::{connect, serve, RpcClient};
@@ -21,7 +22,10 @@ use std::thread;
 
 use coordy_advisor::{Advisor, DeterministicAdvisor, LlmAdvisor};
 use coordy_kernel::{Kernel, Ports};
-use coordy_protocol::{Actor, AuthenticatedCommand, Command, CoordyError, HarnessEvent, Outcome};
+use coordy_protocol::{
+    Actor, AuthenticatedCommand, AuthorizedQuery, Command, CoordyError, HarnessEvent, Outcome,
+    Query, View,
+};
 
 use crate::live::LivePorts;
 
@@ -106,7 +110,7 @@ impl Runtime {
         &self,
         command: AuthenticatedCommand,
     ) -> Result<Outcome, CoordyError> {
-        let command = self.expand_github_refresh(command);
+        let command = self.expand_github_refresh(command)?;
         let _gate = self.persist_gate.lock().expect("persist gate");
         let snapshot = self.kernel.export_world();
         match self.kernel.submit_sync(command) {
@@ -121,22 +125,33 @@ impl Runtime {
         }
     }
 
-    fn expand_github_refresh(&self, command: AuthenticatedCommand) -> AuthenticatedCommand {
+    fn expand_github_refresh(
+        &self,
+        command: AuthenticatedCommand,
+    ) -> Result<AuthenticatedCommand, CoordyError> {
         let Command::RefreshGithub { workspace_id } = &command.command else {
-            return command;
+            return Ok(command);
         };
-        let workspace_id = workspace_id.clone();
-        let repo = self
-            .kernel
-            .export_world()
-            .workspaces
-            .iter()
-            .find(|ws| ws.id == workspace_id)
-            .and_then(|ws| ws.repo_path.clone());
-        AuthenticatedCommand {
-            actor: command.actor,
-            command: crate::github::collect(repo.as_deref()).into_command(workspace_id),
+        if command.actor.is_agent() {
+            return Err(CoordyError::denied("agent cannot do this"));
         }
+        let workspace_id = workspace_id.clone();
+        let settings = self.kernel.view_sync(AuthorizedQuery {
+            actor: command.actor,
+            query: Query::Settings {
+                workspace_id: workspace_id.clone(),
+            },
+        })?;
+        let View::Settings {
+            repo_path: repo, ..
+        } = settings
+        else {
+            return Err(CoordyError::unavailable("unexpected settings view"));
+        };
+        Ok(AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: crate::github::collect(repo.as_deref()).into_command(workspace_id),
+        })
     }
 }
 

@@ -3331,3 +3331,62 @@ fn github_refresh_without_daemon_is_unavailable() {
         .unwrap_err();
     assert_eq!(err.code, "unavailable");
 }
+
+#[test]
+fn github_sync_rejects_member_forged_snapshots() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "不能由客户端伪造完成".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "forged".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(99, "other", "unrelated", "Closes COOR-1", "merged")],
+            })),
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "denied");
+
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.status, "open");
+    assert!(task.pull_requests.is_empty());
+}

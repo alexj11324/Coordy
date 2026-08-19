@@ -245,3 +245,52 @@ fn refresh_github_via_daemon_fills_manual_link_from_gh() {
     assert_eq!(pr.checks_total, sample.checks_total);
     assert_eq!(pr.checks_rollup, sample.checks_rollup);
 }
+
+#[test]
+fn refresh_github_authorizes_the_request_before_daemon_sync() {
+    let dir = std::env::temp_dir().join(format!(
+        "coordy-gh-auth-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let runtime = Runtime::open(&dir, &dir.join("unused.sock"), "tok".into()).unwrap();
+    let workspace_id = runtime
+        .submit_and_persist(daemon_cmd(Command::CreateWorkspace {
+            name: "github-auth".into(),
+        }))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let principal_id = runtime
+        .submit_and_persist(daemon_cmd(Command::CreatePrincipal {
+            workspace_id: workspace_id.clone(),
+            name: "member".into(),
+        }))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let accepted = runtime.submit_and_persist(AuthenticatedCommand {
+        actor: Actor::Principal { id: principal_id },
+        command: Command::RefreshGithub {
+            workspace_id: workspace_id.clone(),
+        },
+    });
+    assert!(accepted.is_ok(), "authorized refresh failed: {accepted:?}");
+
+    let denied = runtime
+        .submit_and_persist(AuthenticatedCommand {
+            actor: Actor::Principal {
+                id: "not-a-member".into(),
+            },
+            command: Command::RefreshGithub { workspace_id },
+        })
+        .unwrap_err();
+    assert_eq!(denied.code, "denied");
+}
