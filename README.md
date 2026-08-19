@@ -70,7 +70,7 @@ pnpm install
 bash scripts/dev.sh
 ```
 
-`scripts/dev.sh` 会先编译 `coordyd` 和 `coordy`，再启动桌面。Linux 云桌面默认关掉 GPU（`--disable-gpu --no-sandbox`），避免窗口闪一下就退出。
+`scripts/dev.sh` 会先编译 `coordyd` 和 `coordy`，再启动桌面。Linux 云桌面默认使用软件渲染，并传入 `--disable-gpu --disable-dev-shm-usage`，避免窗口闪一下就退出。
 
 只跑守护进程和 CLI（与桌面共用同一套 socket / token）：
 
@@ -100,6 +100,8 @@ pnpm --filter @coordy/desktop typecheck
 ```
 
 根目录 `pnpm test` / `pnpm typecheck` 走 Turbo。协议以 Rust `crates/coordy-protocol` 为准，`packages/protocol-ts` 是校验过的镜像。
+
+CI 还会在 Python 3.11 / 3.12 下安装并测试已归档的 `research/s0-validation/`，同时构建其发行包并检查 review UI 语法；这些检查维护研究归档，不属于桌面运行时的开发前置步骤。
 
 ### 仓库结构
 
@@ -170,5 +172,7 @@ cargo test --workspace
 pnpm --filter @coordy/desktop test
 pnpm --filter @coordy/desktop typecheck
 ```
+
+CI additionally installs and tests the archived `research/s0-validation/` package on Python 3.11 and 3.12, builds its distribution, and checks the review UI syntax. Those jobs preserve the research archive and are not prerequisites for running the desktop product locally.
 
 Product gaps versus the intended desktop surface: [`TODO.md`](TODO.md). Invariants: [`AGENTS.md`](AGENTS.md). ADRs: [`docs/adr/`](docs/adr/).
