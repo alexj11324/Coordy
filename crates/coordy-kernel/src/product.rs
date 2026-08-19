@@ -2460,9 +2460,13 @@ pub(crate) fn record_dependency_edge(
         json!({
             "source": draft.source.id,
             "target": draft.target.id,
+            "source_kind": draft.source.kind,
+            "target_kind": draft.target.kind,
             "kind": draft.kind,
             "entity": entity,
             "origin_run_id": draft.origin_run_id,
+            "observed_version": version,
+            "current_version": version,
         }),
     );
     emit_changed(world, workspace_id.to_string());

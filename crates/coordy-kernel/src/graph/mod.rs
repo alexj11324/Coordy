@@ -426,13 +426,39 @@ pub fn log_event_from_record(record: &GraphEvent) -> Option<GraphLogEvent> {
         "declare" => {
             let source = record.payload.get("source")?.as_str()?.to_string();
             let target = record.payload.get("target")?.as_str()?.to_string();
+            let source_kind = match record.payload.get("source_kind") {
+                Some(value) => serde_json::from_value(value.clone()).ok()?,
+                None => NodeKind::Task,
+            };
+            let target_kind = match record.payload.get("target_kind") {
+                Some(value) => serde_json::from_value(value.clone()).ok()?,
+                None => NodeKind::Task,
+            };
+            let kind = match record.payload.get("kind") {
+                Some(value) => serde_json::from_value(value.clone()).ok()?,
+                None => GraphEdgeKind::Consumes,
+            };
+            let observed_version = match record.payload.get("observed_version") {
+                Some(value) => value.as_u64()?,
+                None => 0,
+            };
+            let current_version = match record.payload.get("current_version") {
+                Some(value) => value.as_u64()?,
+                None => observed_version,
+            };
             Some(GraphLogEvent::Declare {
                 edge: GraphEdge {
                     id: record.edge_id.clone().unwrap_or_else(|| record.id.clone()),
                     workspace_id: record.workspace_id.clone(),
-                    source: NodeRef::task(source),
-                    target: NodeRef::task(target),
-                    kind: GraphEdgeKind::Consumes,
+                    source: NodeRef {
+                        kind: source_kind,
+                        id: source,
+                    },
+                    target: NodeRef {
+                        kind: target_kind,
+                        id: target,
+                    },
+                    kind,
                     entity: record
                         .payload
                         .get("entity")
@@ -451,8 +477,8 @@ pub fn log_event_from_record(record: &GraphEvent) -> Option<GraphLogEvent> {
                     source_event: Some("declare".into()),
                     created_at: record.at.clone(),
                     selector_path: None,
-                    observed_version: Some(0),
-                    current_version: Some(0),
+                    observed_version: Some(observed_version),
+                    current_version: Some(current_version),
                 },
             })
         }
@@ -838,6 +864,59 @@ mod tests {
         let first = evaluate_ready_set(&replay_graph(&events));
         let second = evaluate_ready_set(&replay_graph(&events));
         assert_eq!(first.ready_nodes, second.ready_nodes);
+    }
+
+    #[test]
+    fn persisted_declare_replays_typed_edge_and_versions() {
+        let record = GraphEvent {
+            id: "event-1".into(),
+            workspace_id: "ws".into(),
+            kind: "declare".into(),
+            at: "2026-08-19T00:00:00Z".into(),
+            edge_id: Some("edge-1".into()),
+            node_id: Some("task-1".into()),
+            payload: serde_json::json!({
+                "source": "agent-1",
+                "target": "task-1",
+                "source_kind": "agent",
+                "target_kind": "task",
+                "kind": "assigned_to",
+                "entity": "assignment",
+                "observed_version": 7,
+                "current_version": 9,
+            }),
+        };
+
+        let GraphLogEvent::Declare { edge } = log_event_from_record(&record).expect("declare")
+        else {
+            panic!("expected declare event");
+        };
+        assert_eq!(edge.source.kind, NodeKind::Agent);
+        assert_eq!(edge.target.kind, NodeKind::Task);
+        assert_eq!(edge.kind, GraphEdgeKind::AssignedTo);
+        assert_eq!(edge.observed_version, Some(7));
+        assert_eq!(edge.current_version, Some(9));
+    }
+
+    #[test]
+    fn persisted_declare_rejects_malformed_typed_fields() {
+        for payload in [
+            serde_json::json!({ "source": "a", "target": "b", "source_kind": "bogus" }),
+            serde_json::json!({ "source": "a", "target": "b", "kind": "bogus" }),
+            serde_json::json!({ "source": "a", "target": "b", "observed_version": "7" }),
+            serde_json::json!({ "source": "a", "target": "b", "current_version": -1 }),
+        ] {
+            let record = GraphEvent {
+                id: "event-bad".into(),
+                workspace_id: "ws".into(),
+                kind: "declare".into(),
+                at: "2026-08-19T00:00:00Z".into(),
+                edge_id: None,
+                node_id: None,
+                payload,
+            };
+            assert!(log_event_from_record(&record).is_none());
+        }
     }
 
     #[test]
