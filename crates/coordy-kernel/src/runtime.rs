@@ -208,6 +208,67 @@ impl Kernel {
         Ok(())
     }
 
+    fn released_task_ids(outcome: &Outcome) -> Vec<String> {
+        outcome
+            .ids
+            .get("released_task_ids")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|id| id.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn dispatch_released_blocker_tasks(
+        &self,
+        world: &mut World,
+        actor: &Actor,
+        released: &[String],
+    ) {
+        for task_id in released {
+            let Some(task) = world.task(task_id).cloned() else {
+                continue;
+            };
+            if task.deleted || matches!(task.status.as_str(), "backlog" | "done" | "cancelled") {
+                continue;
+            }
+            if task.blocked_reason.as_deref() == Some("marked blocked") {
+                continue;
+            }
+            if world
+                .runs
+                .iter()
+                .any(|run| run.task_id == *task_id && run.status == "running")
+            {
+                continue;
+            }
+            let prompt = product::blocker_release_prompt(&task);
+            let started = if let Some(agent_id) = task.assignee_agent_id.clone() {
+                self.start_prompt_on_task(
+                    world, actor, task_id, &agent_id, prompt, None, "blocker", true,
+                )
+            } else if let Some(squad_id) = task.assignee_squad_id.clone() {
+                self.dispatch_squad_leader(world, actor, task_id, &squad_id)
+                    .map(|_| Outcome::ok("squad dispatched", json!({})))
+            } else {
+                continue;
+            };
+            if let Err(err) = started {
+                product::push_notice(
+                    world,
+                    &task.workspace_id,
+                    "blocker",
+                    "前置已完成，但未能自动开始",
+                    &err.message,
+                    Some(task_id.clone()),
+                );
+            }
+        }
+    }
+
     fn dispatch_squad_leader(
         &self,
         world: &mut World,
@@ -937,7 +998,7 @@ impl Kernel {
                         .ok_or_else(|| CoordyError::not_found("task"))?;
                     apply_task_status(task, &status);
                 }
-                product::refresh_issue_blocker_dependents(&mut world, &task_id);
+                let released = product::refresh_issue_blocker_dependents(&mut world, &task_id);
                 if previous != status {
                     product::push_notice(
                         &mut world,
@@ -948,6 +1009,7 @@ impl Kernel {
                         Some(task_id.clone()),
                     );
                 }
+                self.dispatch_released_blocker_tasks(&mut world, &actor, &released);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok(
                     "status updated",
@@ -1661,7 +1723,12 @@ impl Kernel {
                 }
                 return Ok(outcome);
             }
-            other => product::submit(&mut world, &actor, other),
+            other => {
+                let outcome = product::submit(&mut world, &actor, other)?;
+                let released = Self::released_task_ids(&outcome);
+                self.dispatch_released_blocker_tasks(&mut world, &actor, &released);
+                Ok(outcome)
+            }
         }
     }
 

@@ -409,6 +409,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 row.deleted = true;
             }
             let dependents = issue_blocking_ids(world, &task_id);
+            let released: Vec<String> = dependents
+                .iter()
+                .filter(|dep| waiting_task_would_release(world, dep, &task_id))
+                .cloned()
+                .collect();
             world
                 .issue_blockers
                 .retain(|edge| edge.task_id != task_id && edge.blocker_id != task_id);
@@ -416,7 +421,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 sync_issue_blocker_hold(world, &dep);
             }
             emit_changed(world, task.workspace_id);
-            Ok(Outcome::ok("task deleted", json!({ "task_id": task_id })))
+            Ok(Outcome::ok(
+                "task deleted",
+                json!({ "task_id": task_id, "released_task_ids": released }),
+            ))
         }
         Command::SubscribeTask { task_id } => {
             let task = world
@@ -1732,10 +1740,34 @@ pub(crate) fn status_needs_clear_blockers(status: &str) -> bool {
     matches!(status, "running" | "review" | "done")
 }
 
-pub(crate) fn refresh_issue_blocker_dependents(world: &mut World, blocker_id: &str) {
+/// Waiting tasks that had `blocker_id` as a blocker and have no other unfinished blockers.
+pub(crate) fn refresh_issue_blocker_dependents(world: &mut World, blocker_id: &str) -> Vec<String> {
     let dependents = issue_blocking_ids(world, blocker_id);
+    let mut released = Vec::new();
     for task_id in dependents {
+        if waiting_task_would_release(world, &task_id, blocker_id) {
+            released.push(task_id.clone());
+        }
         sync_issue_blocker_hold(world, &task_id);
+    }
+    released
+}
+
+pub(crate) fn waiting_task_would_release(world: &World, waiting_id: &str, cleared_blocker_id: &str) -> bool {
+    let blockers = issue_blocker_ids(world, waiting_id);
+    if !blockers.iter().any(|id| id == cleared_blocker_id) {
+        return false;
+    }
+    blockers
+        .iter()
+        .all(|id| id == cleared_blocker_id || issue_blocker_satisfied(world, id))
+}
+
+pub(crate) fn blocker_release_prompt(task: &Task) -> String {
+    if task.description.trim().is_empty() {
+        task.title.clone()
+    } else {
+        task.description.clone()
     }
 }
 
@@ -1831,6 +1863,11 @@ fn remove_issue_blocker(
         .ok_or_else(|| CoordyError::not_found("task"))?;
     require_member(world, actor, &task.workspace_id)?;
     let before = world.issue_blockers.len();
+    let released = if waiting_task_would_release(world, task_id, blocker_id) {
+        vec![task_id.to_string()]
+    } else {
+        Vec::new()
+    };
     world
         .issue_blockers
         .retain(|edge| !(edge.task_id == task_id && edge.blocker_id == blocker_id));
@@ -1841,6 +1878,10 @@ fn remove_issue_blocker(
     emit_changed(world, task.workspace_id);
     Ok(Outcome::ok(
         "blocker removed",
-        json!({ "task_id": task_id, "blocker_id": blocker_id }),
+        json!({
+            "task_id": task_id,
+            "blocker_id": blocker_id,
+            "released_task_ids": released,
+        }),
     ))
 }

@@ -2689,18 +2689,25 @@ fn issue_blocker_holds_start_and_releases_when_done() {
     assert!(waiting_view.unresolved_blocker_ids.is_empty());
     assert_eq!(waiting_view.blocker_ids, vec![blocker.clone()]);
 
-    h.kernel
-        .submit_sync(cmd(
-            Actor::Principal { id: h.alice.clone() },
-            Command::StartRun {
-                task_id: waiting,
-                source: RunSource::Fixture { events: vec![] },
-                agent_id: None,
-                chat_id: None,
-                trigger: String::new(),
+    let View::Runs { items: runs } = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Runs {
+                workspace_id: h.workspace_id.clone(),
             },
         ))
-        .unwrap();
+        .unwrap()
+    else {
+        panic!("runs");
+    };
+    assert!(
+        runs.iter()
+            .any(|run| run.task_id == waiting && run.trigger == "blocker"),
+        "assigned waiting task should start when its blocker is done"
+    );
 }
 
 #[test]
@@ -2753,6 +2760,17 @@ fn issue_blocker_rejects_cycles_and_keeps_manual_block() {
             Actor::Principal {
                 id: h.alice.clone(),
             },
+            Command::AssignTask {
+                task_id: waiting.clone(),
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
             Command::SetTaskStatus {
                 task_id: waiting.clone(),
                 status: "blocked".into(),
@@ -2787,6 +2805,24 @@ fn issue_blocker_rejects_cycles_and_keeps_manual_block() {
     let view = board_task(&alice_board(&h), &waiting);
     assert_eq!(view.status, "blocked");
     assert_eq!(view.blocked_reason.as_deref(), Some("marked blocked"));
+    let View::Runs { items: runs } = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Runs {
+                workspace_id: h.workspace_id,
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("runs");
+    };
+    assert!(
+        !runs.iter().any(|run| run.task_id == waiting && run.trigger == "blocker"),
+        "hand-marked blocked tasks must not auto-start"
+    );
 }
 
 #[test]
@@ -2843,4 +2879,123 @@ fn cancelling_or_removing_blocker_releases_auto_hold() {
         ))
         .unwrap();
     assert_eq!(board_task(&alice_board(&h), &waiting).status, "open");
+}
+
+#[test]
+fn finishing_blocker_starts_assigned_waiting_task() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let blocker = create_open_task(&kernel, &principal_id, &workspace_id, "design");
+    let waiting = create_open_task(&kernel, &principal_id, &workspace_id, "implement");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: waiting.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    assert!(ports.spawns.lock().unwrap().is_empty());
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: blocker,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert_eq!(spawns.len(), 1);
+    assert!(spawns[0].2.contains("事项正文"));
+    let View::Runs { items: runs } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Runs { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("runs");
+    };
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].task_id, waiting);
+    assert_eq!(runs[0].trigger, "blocker");
+}
+
+#[test]
+fn finishing_one_of_two_blockers_does_not_start() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let first = create_open_task(&kernel, &principal_id, &workspace_id, "a");
+    let second = create_open_task(&kernel, &principal_id, &workspace_id, "b");
+    let waiting = create_open_task(&kernel, &principal_id, &workspace_id, "c");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: waiting.clone(),
+                agent_id,
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: first.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: waiting,
+                blocker_id: second.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: first,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    assert!(ports.spawns.lock().unwrap().is_empty());
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::SetTaskStatus {
+                task_id: second,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(ports.spawns.lock().unwrap().len(), 1);
 }

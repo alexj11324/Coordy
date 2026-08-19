@@ -921,6 +921,9 @@ export function TaskDetailPage() {
 
         <section>
           <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">前置事项</h2>
+          <p className={cn("mb-2 px-1.5 text-muted-foreground", uiText)}>
+            这些事项完成后，当前事项才能开始或完成。若已指派负责人，前置一解除就会自动开跑。
+          </p>
           {blockers.length === 0 ? (
             <p className="px-1.5 text-muted-foreground">尚未设置。</p>
           ) : null}
