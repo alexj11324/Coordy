@@ -1012,11 +1012,14 @@ function FieldItem({ className, ...props }: ComponentProps<typeof SelectItem>) {
 
 function PropertyRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] md:text-[13px] hover:bg-muted/60">
-      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
+    <div className="relative flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] md:text-[13px] hover:bg-muted/60">
+      <span className="pointer-events-none relative z-10 flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
         {icon}
       </span>
-      <div className="min-w-0 flex-1">{children}</div>
+      {/* The control extends under the glyph so clicking the icon opens the same picker. */}
+      <div className="-ml-6 min-w-0 flex-1 [&_[data-slot=select-trigger]]:cursor-pointer [&_[data-slot=select-trigger]]:pl-6 [&_label]:w-full [&_label]:cursor-pointer [&_label]:pl-6 [&_p]:pl-6">
+        {children}
+      </div>
     </div>
   );
 }
