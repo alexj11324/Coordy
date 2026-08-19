@@ -3,7 +3,7 @@ use coordy_kernel::{
     parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
 };
 use coordy_protocol::{
-    Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
+    Actor, AuthenticatedCommand, AuthorizedQuery, Command, Effect, GraphEdgeKind, GraphEdgeState,
     HarnessEvent, NodeKind, Query, RunRole, RunSource, ValidationChoice, View,
     STALE_DEPENDENCY_REASON,
 };
@@ -1637,6 +1637,55 @@ fn graph_snapshot_unifies_source_to_target_arrows() {
             assert!(edges.iter().any(|edge| {
                 edge.kind == GraphEdgeKind::AssignedTo && edge.target.id == consumer
             }));
+        }
+        other => panic!("expected graph snapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn graph_delta_revisions_are_monotonic_and_snapshot_carries_timeline() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    let effects = h.kernel.watch(Some(0));
+    let revisions: Vec<u64> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::GraphDelta {
+                workspace_id,
+                revision,
+                ..
+            } if workspace_id == &h.workspace_id => Some(*revision),
+            _ => None,
+        })
+        .collect();
+    assert!(!revisions.is_empty());
+    assert!(revisions.windows(2).all(|pair| pair[1] >= pair[0]));
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::GraphSnapshot {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphSnapshot {
+            revision,
+            events,
+            evaluation,
+            health,
+            ..
+        } => {
+            assert!(health.consistent);
+            assert_eq!(health.lag, 0);
+            assert_eq!(revision, *revisions.last().unwrap());
+            assert!(events.iter().any(|event| event.kind == "declare"));
+            assert!(events.iter().any(|event| event.summary.contains('→')));
+            assert!(evaluation.ready_nodes.contains(&producer));
+            assert!(!evaluation.ready_nodes.contains(&consumer));
         }
         other => panic!("expected graph snapshot, got {other:?}"),
     }

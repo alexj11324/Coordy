@@ -4,6 +4,7 @@ import {
   dependencyIdFromGraphEdgeId,
   reaffirmCommandForStaleEdge,
   removeCommandForDependencyEdge,
+  timelineEntries,
 } from "../features/graph/graph-commands";
 
 describe("graph inspector commands", () => {
@@ -41,5 +42,44 @@ describe("graph inspector commands", () => {
       target: { kind: "task", id: "task_ui" },
       entity: "repo",
     });
+  });
+
+  it("assembles timeline entries from graph_events without inventing dual-start", () => {
+    expect(
+      timelineEntries([
+        {
+          id: "gev_1",
+          kind: "declare",
+          at: "t1",
+          summary: "声明 task_api → task_ui",
+          edge_id: "dep_1",
+        },
+        {
+          id: "gev_2",
+          kind: "attempt_started",
+          at: "t2",
+          summary: "尝试开始",
+          node_id: "task_api",
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "gev_1",
+        kind: "declare",
+        at: "t1",
+        summary: "声明 task_api → task_ui",
+        edge_id: "dep_1",
+        node_id: undefined,
+      },
+      {
+        id: "gev_2",
+        kind: "attempt_started",
+        at: "t2",
+        summary: "尝试开始",
+        edge_id: undefined,
+        node_id: "task_api",
+      },
+    ]);
+    expect(timelineEntries(undefined)).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import type { Command, NodeKind } from "@coordy/protocol";
+import type { Command, GraphTimelineEventView, NodeKind } from "@coordy/protocol";
 
 export function dependencyIdFromGraphEdgeId(edgeId: string): string | null {
   if (!edgeId.startsWith("dep:")) return null;
@@ -39,4 +39,24 @@ export function declareDependencyCommand(
     target: { kind: targetKind, id: targetId },
     entity: entity.trim() || "repo",
   };
+}
+
+export type GraphTimelineEntry = {
+  id: string;
+  kind: string;
+  at: string;
+  summary: string;
+  edge_id?: string | null;
+  node_id?: string | null;
+};
+
+export function timelineEntries(events: GraphTimelineEventView[] | undefined): GraphTimelineEntry[] {
+  return (events ?? []).map((event) => ({
+    id: event.id,
+    kind: event.kind,
+    at: event.at,
+    summary: event.summary,
+    edge_id: event.edge_id,
+    node_id: event.node_id,
+  }));
 }

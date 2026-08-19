@@ -1,10 +1,10 @@
 use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
     CommentView, ComputerView, CoordyError, DependencyView, Effect, GraphEdgeKind, GraphEdgeState,
-    GraphEdgeView, GraphHealthView, GraphNodeView, InboxView, LabelView, Mention, NodeKind,
-    NodeMaterializationView, NodeRef, Outcome, ProjectView, ReviewPacket, RunRole, SkillView,
-    SquadView, StatsView, TaskView, ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON,
-    STALE_DEPENDENCY_REASON,
+    GraphEdgeView, GraphHealthView, GraphNodeView, GraphTimelineEventView, InboxView, LabelView,
+    Mention, NodeKind, NodeMaterializationView, NodeRef, Outcome, ProjectView, ReviewPacket,
+    RunRole, SkillView, SquadView, StatsView, TaskView, ValidationChoice, WorkspaceView,
+    ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
@@ -2178,6 +2178,14 @@ pub(crate) fn record_graph_event(
         node_id: node_id.map(str::to_string),
         payload,
     });
+    crate::runtime::Kernel::emit_effect(
+        world,
+        Effect::GraphDelta {
+            workspace_id: workspace_id.to_string(),
+            revision: world.graph_revision,
+            cursor: world.effects.len() as u64,
+        },
+    );
 }
 
 pub(crate) fn bump_node_artifact(world: &mut World, workspace_id: &str, node_id: &str) -> u64 {
@@ -3054,4 +3062,48 @@ pub(crate) fn graph_snapshot(
             lag: 0,
         },
     )
+}
+
+pub(crate) fn graph_timeline(world: &World, workspace_id: &str) -> Vec<GraphTimelineEventView> {
+    world
+        .graph_events
+        .iter()
+        .filter(|event| event.workspace_id == workspace_id)
+        .map(|event| GraphTimelineEventView {
+            id: event.id.clone(),
+            kind: event.kind.clone(),
+            at: event.at.clone(),
+            edge_id: event.edge_id.clone(),
+            node_id: event.node_id.clone(),
+            summary: timeline_summary(event),
+        })
+        .collect()
+}
+
+fn timeline_summary(event: &crate::world::GraphEvent) -> String {
+    let source = event
+        .payload
+        .get("source")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let target = event
+        .payload
+        .get("target")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    match event.kind.as_str() {
+        "declare" if !source.is_empty() && !target.is_empty() => {
+            format!("声明 {source} → {target}")
+        }
+        "invalidate" => "失效".into(),
+        "reaffirm" => "确认".into(),
+        "validation_decision" => "验证决定".into(),
+        "attempt_started" => "尝试开始".into(),
+        "attempt_completed" => "尝试结束".into(),
+        "task_succeeded" => "节点成功".into(),
+        "artifact_bumped" => "产物版本递增".into(),
+        "generation_rejected" => "代际拒绝".into(),
+        "remove" => "移除依赖".into(),
+        other => other.to_string(),
+    }
 }

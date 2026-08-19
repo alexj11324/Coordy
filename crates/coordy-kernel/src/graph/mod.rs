@@ -2,6 +2,13 @@
 
 pub mod schedule;
 
+pub const GRAPH_ENGINEERING_SKILL: &str = "# 图工程\n\
+\n\
+- 因果方向：source 是上游，target 是下游。\n\
+- 确认失效 Consumes 必须带 expected_generation；确认本身不会开工。\n\
+- 调度器只执行评估器 ready set。A→B 两边都指派时只启动上游 A。\n\
+- 执行者 run 写 REAFFIRM: 无效；验证走 ConductorReview 或人工 ValidationDecision。\n";
+
 use std::collections::{HashMap, HashSet};
 
 use coordy_protocol::{
@@ -915,5 +922,16 @@ mod tests {
                     <= 1
             );
         }
+    }
+
+    #[test]
+    fn graph_engineering_skill_matches_schema_and_does_not_promise_dual_start() {
+        assert!(GRAPH_ENGINEERING_SKILL.contains("source 是上游"));
+        assert!(GRAPH_ENGINEERING_SKILL.contains("target 是下游"));
+        assert!(GRAPH_ENGINEERING_SKILL.contains("expected_generation"));
+        assert!(GRAPH_ENGINEERING_SKILL.contains("不会开工"));
+        assert!(GRAPH_ENGINEERING_SKILL.contains("只启动上游 A"));
+        assert!(!GRAPH_ENGINEERING_SKILL.contains("同时开工"));
+        assert!(!GRAPH_ENGINEERING_SKILL.contains("两边指派就双开"));
     }
 }

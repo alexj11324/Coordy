@@ -24,7 +24,7 @@ import {
   SelectValue,
   Switch,
 } from "@coordy/ui";
-import type { GraphEdgeView, GraphNodeView, NodeKind } from "@coordy/protocol";
+import type { GraphEdgeView, GraphEvaluationView, GraphNodeView, GraphTimelineEventView, NodeKind } from "@coordy/protocol";
 import { Bot, ListTodo, Share2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -53,8 +53,10 @@ import {
   declareDependencyCommand,
   reaffirmCommandForStaleEdge,
   removeCommandForDependencyEdge,
+  timelineEntries,
 } from "./graph-commands";
 import { layoutGraph } from "./layout";
+import { applyGraphDeltaRevision, graphLiveState } from "../../lib/coordy/graph-stream";
 
 const NODE_TYPES: NodeTypes = {
   agent: AgentGraphNode,
@@ -287,6 +289,8 @@ function GraphInspector({
   snapshotEdges,
   nodes,
   workspaceId,
+  events,
+  evaluation,
 }: {
   selected: GraphNode | null;
   selectedEdge: GraphEdge | null;
@@ -294,6 +298,8 @@ function GraphInspector({
   snapshotEdges: GraphEdgeView[];
   nodes: GraphNode[];
   workspaceId: string | null;
+  events: GraphTimelineEventView[];
+  evaluation: GraphEvaluationView | undefined;
 }) {
   const navigate = useNavigate();
   const command = useCommand();
@@ -356,8 +362,44 @@ function GraphInspector({
   }
 
   if (!selected) {
+    const timeline = timelineEntries(events);
+    const diagnostics = evaluation?.diagnostics ?? [];
     return (
-      <div className="flex h-full items-center px-4 text-sm text-muted-foreground">选中节点或边以声明、确认或移除依赖</div>
+      <div className="flex h-full min-h-0 flex-col">
+        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <Share2 className="size-4 text-muted-foreground" />
+          <h2 className="truncate text-sm font-medium">图诊断</h2>
+        </header>
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="space-y-4 p-4">
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">时间线</p>
+              {timeline.length === 0 ? (
+                <p className="text-sm text-muted-foreground">还没有图事件。选中节点可声明依赖。</p>
+              ) : (
+                timeline.map((entry) => (
+                  <div key={entry.id} className="rounded-md border border-border px-2 py-1.5">
+                    <p className="text-sm">{entry.summary}</p>
+                    <p className="text-[11px] text-muted-foreground">{entry.kind}</p>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground">诊断</p>
+              {diagnostics.length === 0 ? (
+                <p className="text-sm text-muted-foreground">无阻塞诊断</p>
+              ) : (
+                diagnostics.map((line) => (
+                  <p key={line} className="text-sm">
+                    {line}
+                  </p>
+                ))
+              )}
+            </div>
+          </div>
+        </ScrollArea>
+      </div>
     );
   }
   const detail = snapshotNode(snapshotNodes, selected.id);
@@ -408,6 +450,16 @@ function GraphInspector({
           <InspectorField label="状态" value={taskStatusLabel(detail?.status ?? selected.status)} />
           <InspectorField label="指派智能体" value={assignee ? assignee.title : "未指派"} />
           {detail?.blocked_reason ? <InspectorField label="阻塞原因" value={detail.blocked_reason} /> : null}
+          {evaluation?.blocked_nodes
+            .find((row) => row.node_id === selected.id)
+            ?.reasons.map((reason) => (
+              <InspectorField key={reason} label="图阻塞" value={reason} />
+            ))}
+          {(evaluation?.diagnostics ?? [])
+            .filter((line) => line.startsWith(`${selected.id}:`))
+            .map((line) => (
+              <InspectorField key={line} label="诊断" value={line} />
+            ))}
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">阻塞边</p>
             {blockers.length === 0 ? (
@@ -502,12 +554,31 @@ export function GraphPage() {
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_GRAPH_LAYERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [deltaRevision, setDeltaRevision] = useState<number | null>(null);
+  const [subscribed, setSubscribed] = useState(false);
   const projected = useMemo(() => projectGraph({ snapshot, layers }), [layers, snapshot]);
   const selected = projected.nodes.find((node) => node.id === selectedId) ?? null;
   const selectedEdge = projected.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
-  const health = snapshot?.health;
-  const live = Boolean(health?.consistent && health.lag === 0);
-  const liveTone = live ? "green" : health?.consistent === false ? "red" : "yellow";
+  const liveState = graphLiveState({
+    consistent: snapshot?.health.consistent === true,
+    snapshotRevision: snapshot?.revision ?? 0,
+    deltaRevision,
+    subscribed,
+  });
+
+  useEffect(() => {
+    const api = window.coordy;
+    if (!api?.subscribe) {
+      setSubscribed(false);
+      return;
+    }
+    setSubscribed(true);
+    return api.subscribe((effect) => {
+      if (effect.type !== "GraphDelta") return;
+      if (workspaceId && effect.workspace_id !== workspaceId) return;
+      setDeltaRevision((current) => applyGraphDeltaRevision(current ?? 0, effect.revision));
+    });
+  }, [workspaceId]);
 
   useEffect(() => {
     if (selectedId && !projected.nodes.some((node) => node.id === selectedId)) {
@@ -589,12 +660,14 @@ export function GraphPage() {
             snapshotEdges={snapshot?.edges ?? []}
             nodes={projected.nodes}
             workspaceId={workspaceId}
+            events={snapshot?.events ?? []}
+            evaluation={snapshot?.evaluation}
           />
         </aside>
       </div>
       <footer className="flex h-8 shrink-0 items-center gap-2 border-t border-border px-3 text-xs text-muted-foreground">
-        <StatusLamp tone={liveTone} label="Live" />
-        <span>{live ? "Live" : `cursor lag ${health?.lag ?? "?"}`}</span>
+        <StatusLamp tone={liveState.tone} label="Live" />
+        <span>{liveState.live ? "Live" : `cursor lag ${liveState.lag}`}</span>
       </footer>
     </section>
   );

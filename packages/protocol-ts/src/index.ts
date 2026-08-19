@@ -445,6 +445,14 @@ export type GraphEvaluationView = {
   required_validations: string[];
   diagnostics: string[];
 };
+export type GraphTimelineEventView = {
+  id: string;
+  kind: string;
+  at: string;
+  edge_id?: string | null;
+  node_id?: string | null;
+  summary: string;
+};
 export type GraphSnapshotView = {
   type: "GraphSnapshot";
   workspace_id: string;
@@ -454,6 +462,8 @@ export type GraphSnapshotView = {
   edges: GraphEdgeView[];
   materializations: NodeMaterializationView[];
   health: GraphHealthView;
+  events?: GraphTimelineEventView[];
+  evaluation?: GraphEvaluationView;
 };
 export type ConflictView = { id: string; summary: string; status: string };
 export type RunView = {
@@ -620,7 +630,8 @@ export type Effect =
   | { type: "RunEvent"; run_id: string; event: RunEventView }
   | { type: "Pause"; run_id: string; reason: string }
   | { type: "Replan"; run_id: string; reason: string }
-  | { type: "StateChanged"; workspace_id: string };
+  | { type: "StateChanged"; workspace_id: string }
+  | { type: "GraphDelta"; workspace_id: string; revision: number; cursor: number };
 
 export type CoordyError = { code: string; message: string };
 
