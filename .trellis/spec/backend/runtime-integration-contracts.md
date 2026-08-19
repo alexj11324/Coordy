@@ -11,15 +11,16 @@
 ### 2. Signatures
 
 - `BuiltinHarness { id, name, bins, family, fixed_args }` owns stable provider identity and daemon-owned launch arguments.
-- `DiscoveredAgentView.launch_state` is one of `ready`, `on_demand`, or `missing`.
+- `DiscoveredAgentView.launch_state` is one of `ready`, `on_demand`, or `missing`; only `ready` is installed or launchable.
 - `resolve_launch(kind, configured, registry_json)` returns the concrete executable and arguments.
 - Runtime execution must choose transport from the concrete discovered entry. A canonical native ID may resolve to an ACP Registry fallback.
 
 ### 3. Contracts
 
-- `ready`: an executable was resolved on the host.
-- `on_demand`: a validated Registry package launch command can be executed by an available package runner.
-- `missing`: the first-class identity remains visible but cannot be selected or submitted.
+- `ready`: an executable was resolved from the host `PATH`; the runtime is shown as `已安装` and may be selected.
+- `on_demand`: Registry metadata exists, but no executable was resolved. It is shown as `未安装` and cannot be selected, imported, submitted, or launched.
+- `missing`: the first-class identity remains visible as `未安装` and cannot be selected, imported, submitted, or launched.
+- Explicit import requests must revalidate the resolved executable. A matching ID or Registry entry is never installation proof.
 - Native structured protocols must observe the provider's terminal-success frame. Receiving text is not sufficient.
 - ACP providers share framing but own launch, authentication, model, thinking, workspace metadata, and session capability policies.
 - Auto access must stay inside the canonical worktree. Permission escalation requests are rejected; provider bypass flags are Full Access only.
@@ -29,7 +30,7 @@
 | Condition | Required result |
 |---|---|
 | Unknown runtime ID | `unavailable`; never default silently to a native protocol |
-| Missing executable without valid on-demand launch | visible `missing`, disabled in every creation path |
+| Missing executable with or without Registry metadata | visible `未安装`, disabled in every creation and import path |
 | Registry binary archive not installed | `missing`; do not invent a download path |
 | Malformed structured frame | `invalid`; do not ignore it after earlier valid text |
 | EOF before provider terminal frame | failure |
@@ -41,7 +42,7 @@
 
 - Good: `grok` initializes ACP, authenticates using an advertised method, starts a session, emits a message, and completes the prompt.
 - Base: a missing `hermes` binary is still shown with its icon and `未安装`, but cannot be selected.
-- Bad: a `qwen-code` Registry ACP fallback is displayed as on-demand and then executed by the native Qwen stream parser.
+- Bad: a `qwen-code` Registry entry without a local executable is labeled installed or accepted by explicit import.
 - Bad: a JSON runtime emits one assistant line, then malformed JSON, and Coordy reports success.
 
 ### 6. Tests Required
@@ -49,7 +50,7 @@
 - A schema-enforced set test must cover every first-class identity exactly once.
 - Each provider family needs a fake executable that asserts fixed argv/input channel, emits one real successful envelope and terminal frame, and has malformed/non-zero coverage.
 - ACP policy tests must assert method order, auth selection, permission rejection in Auto, model/thinking capability, and workspace confinement.
-- UI tests must assert ready/on-demand selectability, missing visibility plus disabled state, and submit-time revalidation.
+- UI tests must assert only `ready` is selectable; `on_demand` and `missing` remain visible as `未安装`, disabled, and fail submit-time revalidation.
 - Cross-layer tests must prove a Registry fallback selects ACP transport instead of the canonical native family.
 
 ### 7. Wrong vs Correct
@@ -70,4 +71,78 @@ match launch.protocol_family.as_str() {
     "acp" => run_acp(launch),
     _ => run_native(launch),
 }
+```
+
+## Scenario: Suggest child tasks with the assigned agent's Harness
+
+### 1. Scope / Trigger
+
+- Trigger: a principal requests advisory child-task titles for an existing task.
+- This is suggestion generation only. It must not create a kernel Run, mutate the source task, or create child tasks.
+- The current task's assigned agent is the sole execution identity; there is no second Harness picker.
+
+### 2. Signatures
+
+- Request: `SuggestTaskSplit { id, workspace_id, task_id, principal_id }`.
+- Response: `TaskSplitSuggestion { titles }` where `titles` contains 2-5 unique, non-empty strings.
+- The daemon resolves `assignee_agent_id`, then copies the agent's stored Harness, model, thinking effort, speed option, and safe CLI arguments into an isolated advisory launch.
+
+### 3. Contracts
+
+- Principal authorization and task/workspace membership are checked before reading the assignee.
+- The assigned agent and its locally installed executable must exist. Registry metadata is insufficient.
+- Advisory execution runs in a fresh temporary directory with Auto access, then cleans up on every exit path.
+- Provider credentials remain owned by the Harness/CLI. The request, response, and advisory launch must not accept or copy a Coordy model API key or base URL.
+- The result parser accepts only a JSON array or fenced JSON array with 2-5 unique, non-empty titles.
+- The user reviews suggestions and explicitly creates each child through the existing child-task command.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Missing/unauthorized workspace or task | fail without spawning |
+| Task has no assigned agent | fail with actionable detail |
+| Assigned agent is missing, archived, or not installed | fail without Registry fallback |
+| Harness exits non-zero, times out, or emits malformed output | fail; no partial suggestions |
+| Fewer than 2, more than 5, blank, or duplicate titles | fail closed |
+| Temporary worktree cleanup fails | surface the cleanup failure; do not report success |
+
+### 5. Good / Base / Bad Cases
+
+- Good: the task is assigned to an installed Codex agent; the advisory launch inherits that agent's model and thinking setting, returns three JSON titles, and the UI renders three reviewable create actions.
+- Base: the task has no assignee, so the UI shows an actionable error and performs no launch.
+- Bad: the renderer sends a Harness ID, model, provider key, or base URL supplied by the user and bypasses the task assignee.
+- Bad: the daemon creates children automatically from unreviewed model output.
+
+### 6. Tests Required
+
+- Rust protocol wire tests must prove the request contains only IDs and no Harness, model, API-key, or base-URL fields.
+- Local-runtime tests must cover authorization, missing assignment, missing installation, success, malformed output, non-zero exit, timeout, and cleanup.
+- A fake provider executable must assert the inherited model/thinking/speed/safe CLI arguments and the isolated working directory.
+- Desktop bridge tests must cover trusted-sender validation and typed response propagation.
+- UI tests must prove the assigned agent is used automatically, suggestions remain reviewable, and child creation occurs only after an explicit user action.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+await suggestTaskSplit({
+  workspaceId,
+  taskId,
+  harness: selectedHarness,
+  model: selectedModel,
+  apiKey: configuredKey,
+})
+```
+
+#### Correct
+
+```ts
+await suggestTaskSplit({
+  id: crypto.randomUUID(),
+  workspace_id: workspaceId,
+  task_id: taskId,
+  principal_id: principalId,
+})
 ```

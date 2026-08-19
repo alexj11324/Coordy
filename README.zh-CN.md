@@ -17,7 +17,7 @@
 
 Coordy 把你常用的编码智能体放进同一个工作区。创建任务、选择合适的智能体、连接依赖、安排自动化，然后直接查看谁在执行、卡在哪里、下一步该由谁接手。
 
-它使用你电脑上已经安装的 Claude Code、Codex、Gemini CLI、GitHub Copilot、OpenCode 和 Cursor。项目、执行记录与密钥都保留在本机。
+它直接使用电脑上已经安装并登录的编码智能体 CLI。项目与执行记录都保留在本机。
 
 ## 核心能力
 
@@ -64,26 +64,25 @@ cargo run -p coordy -- acp-stub
 
 ## 智能体接入
 
-Coordy 目前支持 38 个编码智能体：6 个使用原生 CLI 适配器，另外 32 个通过 ACP 接入。原生适配器直接使用各工具自己的无头接口，并提供对应的启动参数、权限控制和事件解析。
+Coordy 内置完整的 Multica first-class harness 目录，并额外支持 Gemini CLI。每项接入都使用对应的原生或 ACP 协议；只要 harness 提供模型发现能力，模型选择器就会读取本机当前目录，不再展示 Coordy 自己猜测的型号。
 
-### 内置原生适配器
+### First-class harness
 
 <table>
   <tr>
-    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/claude-acp.svg" width="36" alt="Claude Code 图标"><br><strong>Claude Code</strong><br><sub><code>claude</code> · stream JSON</sub></td>
-    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/codex-acp.svg" width="36" alt="Codex 图标"><br><strong>Codex</strong><br><sub><code>codex exec --json</code></sub></td>
-    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/gemini.svg" width="36" alt="Gemini CLI 图标"><br><strong>Gemini CLI</strong><br><sub><code>gemini -p</code></sub></td>
-  </tr>
-  <tr>
-    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/github-copilot-cli.svg" width="36" alt="GitHub Copilot 图标"><br><strong>GitHub Copilot</strong><br><sub><code>copilot</code> · JSON</sub></td>
-    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/opencode.svg" width="36" alt="OpenCode 图标"><br><strong>OpenCode</strong><br><sub><code>opencode run</code></sub></td>
-    <td align="center"><img src="https://cdn.agentclientprotocol.com/registry/v1/latest/cursor.svg" width="36" alt="Cursor 图标"><br><strong>Cursor</strong><br><sub><code>cursor-agent</code> · stream JSON</sub></td>
+    <td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/claude.svg" width="32"><br>Claude Code</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/codebuddy.svg" width="32"><br>CodeBuddy</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/codex.svg" width="32"><br>Codex</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/copilot.svg" width="32"><br>Copilot</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/opencode.svg" width="32"><br>OpenCode</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/deveco.png" width="32"><br>DevEco</td>
+  </tr><tr>
+    <td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/openclaw.svg" width="32"><br>OpenClaw</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/hermes.webp" width="32"><br>Hermes</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/pi.svg" width="32"><br>Pi</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/omp.svg" width="32"><br>OMP</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/cursor.svg" width="32"><br>Cursor</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/kimi.svg" width="32"><br>Kimi</td>
+  </tr><tr>
+    <td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/reasonix.svg" width="32"><br>Reasonix</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/dsh.svg" width="32"><br>DSH</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/kiro.svg" width="32"><br>Kiro</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/antigravity.png" width="32"><br>Antigravity</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/qoder.svg" width="32"><br>Qoder</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/qoderclicn.svg" width="32"><br>Qoder CN</td>
+  </tr><tr>
+    <td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/traecli.png" width="32"><br>TRAE</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/grok.svg" width="32"><br>Grok</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/qwen.svg" width="32"><br>Qwen</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/qwenpaw.svg" width="32"><br>QwenPaw</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/mcode.svg" width="32"><br>MCode</td><td align="center"><img src="apps/desktop/src/renderer/src/assets/provider-icons/gemini.svg" width="32"><br>Gemini</td>
   </tr>
 </table>
 
 ### ACP 智能体
 
-Coordy 会读取实时的 [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry)，并导入提供 `npx`、`uvx` 或平台二进制启动命令的智能体。当前 Registry 除上面的 6 个智能体外，还包含以下 32 个 ACP 接入：
+Coordy 会读取实时的 [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry)。Registry 内容会变化，因此不把某次抓取的数量写成固定上限。只有在 `PATH` 中找到真实可执行文件的工具才显示“已安装”；其他项目统一显示“未安装”并禁止选择。Registry 里有名字，不等于这台电脑已经安装。
 
 |                                                                                                                          | 智能体      |                                                                                                                            | 智能体         |
 | :----------------------------------------------------------------------------------------------------------------------: | ----------- | :------------------------------------------------------------------------------------------------------------------------: | -------------- |
@@ -104,7 +103,7 @@ Coordy 会读取实时的 [Agent Client Protocol Registry](https://agentclientpr
 |     <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/qwen-code.svg" width="24" alt="Qwen Code 图标">     | Qwen Code   |       <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/sigit.svg" width="24" alt="siGit Code 图标">        | siGit Code     |
 |       <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/stakpak.svg" width="24" alt="Stakpak 图标">       | Stakpak     |        <img src="https://cdn.agentclientprotocol.com/registry/v1/latest/vtcode.svg" width="24" alt="VT Code 图标">         | VT Code        |
 
-Registry 智能体会与原生适配器一起显示在 Harness 目录中。运行其中的智能体可能需要对应的包运行时、账号或服务商凭据；模型访问可以在设置中使用你自己的服务商密钥进行配置。
+Registry 智能体会与原生适配器一起显示在 Harness 目录中。安装并登录对应 Harness 后刷新，即可创建智能体；Coordy 不再单独要求配置模型 API 密钥。
 
 ## 本机优先
 
@@ -116,7 +115,7 @@ Electron 应用  →  安全 preload  →  本机 IPC  →  coordyd  →  编码
 - `coordyd` 负责工作区状态和执行。
 - 桌面端通过用户级 Unix socket 或 Windows named pipe 连接。
 - 工作区数据与运行记录保存在本机 SQLite。
-- API 密钥保存在权限为 `0600` 的私有文件中，不进入数据库。
+- 服务商登录与凭据由各 Harness 自己管理，Coordy 不要求额外填写模型 API 密钥。
 - 智能体私有记忆只留在本机，不进入共享同步数据。
 
 需要多人共享时，可以启用可选的 `coordy-server` 控制面；单人本机使用不需要它。

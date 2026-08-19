@@ -6,11 +6,10 @@ import type {
   View,
   AppInfo,
   InstallCliResult,
-  SecretStatus,
-  SetSecretInput,
   DiscoveredAgentView,
+  HarnessModelCatalog,
   ImportAgentsResult,
-  DraftCompletion,
+  TaskSplitSuggestion,
 } from "@coordy/protocol";
 
 export type DirEntry = {
@@ -33,11 +32,13 @@ export interface CoordyDesktopBridge {
   listDirectory(path: string): Promise<DirEntry[]>;
   getAppInfo(): Promise<AppInfo>;
   installCli(): Promise<InstallCliResult>;
-  secretsStatus(): Promise<SecretStatus>;
-  setSecret(input: SetSecretInput): Promise<SecretStatus>;
-  clearSecret(): Promise<SecretStatus>;
-  completeDraft(kind: string, prompt: string): Promise<DraftCompletion>;
+  suggestTaskSplit(input: {
+    workspace_id: string;
+    task_id: string;
+    principal_id: string;
+  }): Promise<TaskSplitSuggestion>;
   discoverAgents(refresh?: boolean): Promise<DiscoveredAgentView[]>;
+  discoverHarnessModels(harness: string): Promise<HarnessModelCatalog>;
   importAgents(input: {
     workspace_id: string;
     principal_id: string;

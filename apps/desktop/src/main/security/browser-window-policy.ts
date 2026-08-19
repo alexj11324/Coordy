@@ -1,13 +1,21 @@
 import type { WebContents } from "electron";
 
 export function validateIpcSender(sender: WebContents): boolean {
-  const url = sender.getURL();
-  if (!url) return false;
-  return (
-    url.startsWith("file:") ||
-    url.startsWith("http://localhost:") ||
-    url.startsWith("http://127.0.0.1:")
-  );
+  return isTrustedRendererUrl(sender.getURL());
+}
+
+export function isTrustedRendererUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "file:") return true;
+    return (
+      parsed.protocol === "http:" &&
+      Boolean(parsed.port) &&
+      (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")
+    );
+  } catch {
+    return false;
+  }
 }
 
 export const BROWSER_WINDOW_POLICY = {
@@ -37,7 +45,9 @@ export function canOpenExternal(url: string): boolean {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:") return false;
-    return EXTERNAL_LINK_ALLOWLIST.some((allowed) => parsed.origin === new URL(allowed).origin);
+    return EXTERNAL_LINK_ALLOWLIST.some(
+      (allowed) => parsed.origin === new URL(allowed).origin,
+    );
   } catch {
     return false;
   }

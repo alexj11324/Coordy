@@ -1,13 +1,13 @@
 //! Local IPC, SQLite persistence, Git worktrees, and harness process control.
 
 mod discovery;
-mod draft;
 mod git;
 mod github;
 mod ipc;
 mod live;
 mod secrets;
 mod sqlite;
+mod suggest;
 
 pub use discovery::{import_agents, list_agents};
 pub use git::GitPorts;

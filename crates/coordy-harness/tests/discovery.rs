@@ -1,9 +1,76 @@
 use std::sync::Mutex;
 
-use coordy_harness::{discover, launch_uses_acp, spawn_native_session, SecretEnv};
+use coordy_harness::{
+    discover, extra_bin_dirs, launch_uses_acp, spawn_native_session, which_bin, SecretEnv,
+};
 use coordy_protocol::{DiscoveredAgentView, HarnessEvent};
 
 static PATH_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(unix)]
+#[test]
+fn path_probe_skips_plain_files_and_accepts_executable_files() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _guard = PATH_LOCK.lock().unwrap();
+    let root = std::env::temp_dir().join(format!(
+        "coordy-executable-probe-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let plain_dir = root.join("plain");
+    let executable_dir = root.join("executable");
+    std::fs::create_dir_all(&plain_dir).unwrap();
+    std::fs::create_dir_all(&executable_dir).unwrap();
+    let name = format!("coordy-probe-{}", std::process::id());
+    let plain = plain_dir.join(&name);
+    let executable = executable_dir.join(&name);
+    std::fs::write(&plain, "not executable").unwrap();
+    std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let original = std::env::var_os("PATH");
+    std::env::set_var("PATH", &plain_dir);
+    assert_eq!(
+        which_bin(&name),
+        None,
+        "a plain file must not count as installed"
+    );
+    std::env::set_var(
+        "PATH",
+        std::env::join_paths([&plain_dir, &executable_dir]).unwrap(),
+    );
+    assert_eq!(which_bin(&name), Some(executable));
+    match original {
+        Some(value) => std::env::set_var("PATH", value),
+        None => std::env::remove_var("PATH"),
+    }
+}
+
+#[test]
+fn extra_bin_dirs_include_common_gui_invisible_user_install_locations() {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .expect("HOME");
+    let dirs = extra_bin_dirs();
+    for relative in [
+        ".local/bin",
+        ".cargo/bin",
+        ".npm-global/bin",
+        ".opencode/bin",
+        ".grok/bin",
+        ".antigravity/antigravity/bin",
+        ".antigravity-ide/antigravity-ide/bin",
+        ".bun/bin",
+        "Library/pnpm",
+        "bin",
+    ] {
+        assert!(dirs.contains(&home.join(relative)), "missing {relative}");
+    }
+}
 
 #[test]
 fn execution_transport_follows_the_discovered_registry_fallback() {
