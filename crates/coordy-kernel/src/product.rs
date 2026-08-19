@@ -1,16 +1,17 @@
 use coordy_protocol::{
-    AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command, CommentView,
-    ComputerView, CoordyError, Effect, InboxView, LabelView, Mention, Outcome, ProjectView, SkillView,
-    SquadView, StatsView, TaskView, WorkspaceView, ISSUE_BLOCKER_REASON,
+    AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
+    CommentView, ComputerView, CoordyError, Effect, InboxView, LabelView, Mention, Outcome,
+    ProjectView, SkillView, SquadView, StatsView, TaskView, WorkspaceView, ISSUE_BLOCKER_REASON,
+    STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
 use crate::authority::{actor_in_workspace, can_command_agent};
 use crate::ids;
 use crate::world::{
-    Attachment, Automation, Chat, ChatMessage, Comment, Computer, CustomPropertyDef, DirectoryLock,
-    Integration, IssueBlockerEdge, Principal, Project, Reaction, Skill, Squad, Task, TaskSubscription,
-    Workspace, WorkspaceLabel, World,
+    Attachment, Automation, Chat, ChatMessage, Comment, Computer, CustomPropertyDef,
+    DependencyEdge, DirectoryLock, Integration, IssueBlockerEdge, Principal, Project, Reaction,
+    Skill, Squad, Task, TaskSubscription, Workspace, WorkspaceLabel, World,
 };
 
 pub fn slugify(name: &str) -> String {
@@ -30,8 +31,16 @@ pub fn slugify(name: &str) -> String {
     }
 }
 
-pub fn ensure_unique_slug(world: &World, workspace_id: &str, slug: &str) -> Result<(), CoordyError> {
-    if world.workspaces.iter().any(|w| w.id != workspace_id && !w.archived && w.slug == slug) {
+pub fn ensure_unique_slug(
+    world: &World,
+    workspace_id: &str,
+    slug: &str,
+) -> Result<(), CoordyError> {
+    if world
+        .workspaces
+        .iter()
+        .any(|w| w.id != workspace_id && !w.archived && w.slug == slug)
+    {
         return Err(CoordyError::invalid("workspace slug must be unique"));
     }
     Ok(())
@@ -59,7 +68,10 @@ pub fn workspace_view(ws: &Workspace) -> WorkspaceView {
     }
 }
 
-pub fn allocate_issue_number(world: &mut World, workspace_id: &str) -> Result<(u64, String), CoordyError> {
+pub fn allocate_issue_number(
+    world: &mut World,
+    workspace_id: &str,
+) -> Result<(u64, String), CoordyError> {
     let ws = world
         .workspaces
         .iter_mut()
@@ -268,7 +280,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 ws.issue_prefix = prefix;
             }
             emit_changed(world, workspace_id.clone());
-            Ok(Outcome::ok("workspace updated", json!({ "workspace_id": workspace_id })))
+            Ok(Outcome::ok(
+                "workspace updated",
+                json!({ "workspace_id": workspace_id }),
+            ))
         }
         Command::DeleteWorkspace { workspace_id } => {
             require_not_agent(actor)?;
@@ -278,7 +293,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             };
             ws.archived = true;
             emit_changed(world, workspace_id.clone());
-            Ok(Outcome::ok("workspace deleted", json!({ "workspace_id": workspace_id })))
+            Ok(Outcome::ok(
+                "workspace deleted",
+                json!({ "workspace_id": workspace_id }),
+            ))
         }
         Command::LeaveWorkspace { workspace_id } => {
             require_not_agent(actor)?;
@@ -304,7 +322,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             }
             world.principals.retain(|p| p.id != pid);
             emit_changed(world, workspace_id);
-            Ok(Outcome::ok("left workspace", json!({ "principal_id": pid })))
+            Ok(Outcome::ok(
+                "left workspace",
+                json!({ "principal_id": pid }),
+            ))
         }
         Command::InvitePrincipal {
             workspace_id,
@@ -313,7 +334,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
         } => {
             require_not_agent(actor)?;
             require_member(world, actor, &workspace_id)?;
-            let role = if role.is_empty() { "member".into() } else { role };
+            let role = if role.is_empty() {
+                "member".into()
+            } else {
+                role
+            };
             if !role_ok(&role) {
                 return Err(CoordyError::invalid("unknown role"));
             }
@@ -341,7 +366,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 row.role = role.clone();
             }
             emit_changed(world, principal.workspace_id);
-            Ok(Outcome::ok("role updated", json!({ "principal_id": principal_id, "role": role })))
+            Ok(Outcome::ok(
+                "role updated",
+                json!({ "principal_id": principal_id, "role": role }),
+            ))
         }
         Command::AssignIssue {
             task_id,
@@ -365,7 +393,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             }
             if let Some(row) = world.task_mut(&task_id) {
                 if let Some(agent_id) = agent_id {
-                    row.assignee_agent_id = if agent_id.is_empty() { None } else { Some(agent_id) };
+                    row.assignee_agent_id = if agent_id.is_empty() {
+                        None
+                    } else {
+                        Some(agent_id)
+                    };
                 }
                 if let Some(principal_id) = principal_id {
                     row.assignee_principal_id = if principal_id.is_empty() {
@@ -375,13 +407,25 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                     };
                 }
                 if let Some(squad_id) = squad_id {
-                    row.assignee_squad_id = if squad_id.is_empty() { None } else { Some(squad_id) };
+                    row.assignee_squad_id = if squad_id.is_empty() {
+                        None
+                    } else {
+                        Some(squad_id)
+                    };
                 }
                 if let Some(project_id) = project_id {
-                    row.project_id = if project_id.is_empty() { None } else { Some(project_id) };
+                    row.project_id = if project_id.is_empty() {
+                        None
+                    } else {
+                        Some(project_id)
+                    };
                 }
                 if let Some(parent_id) = parent_id {
-                    row.parent_id = if parent_id.is_empty() { None } else { Some(parent_id) };
+                    row.parent_id = if parent_id.is_empty() {
+                        None
+                    } else {
+                        Some(parent_id)
+                    };
                 }
                 if let Some(stage) = stage {
                     row.stage = stage;
@@ -477,7 +521,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             emit_changed(world, workspace_id);
             Ok(Outcome::ok("reordered", json!({})))
         }
-        Command::AddAttachment { task_id, name, path } => {
+        Command::AddAttachment {
+            task_id,
+            name,
+            path,
+        } => {
             require_not_agent(actor)?;
             let task = world
                 .task(&task_id)
@@ -499,7 +547,12 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
         }
         Command::RemoveAttachment { attachment_id } => {
             require_not_agent(actor)?;
-            let Some(att) = world.attachments.iter().find(|a| a.id == attachment_id).cloned() else {
+            let Some(att) = world
+                .attachments
+                .iter()
+                .find(|a| a.id == attachment_id)
+                .cloned()
+            else {
                 return Err(CoordyError::not_found("attachment"));
             };
             let workspace_id = world.task(&att.task_id).map(|t| t.workspace_id.clone());
@@ -507,7 +560,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             if let Some(workspace_id) = workspace_id {
                 emit_changed(world, workspace_id);
             }
-            Ok(Outcome::ok("removed", json!({ "attachment_id": attachment_id })))
+            Ok(Outcome::ok(
+                "removed",
+                json!({ "attachment_id": attachment_id }),
+            ))
         }
         Command::ArchiveInbox { item_id } => {
             let Some(item) = world.inbox.iter_mut().find(|i| i.id == item_id) else {
@@ -524,7 +580,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             item.read = read;
             Ok(Outcome::ok("inbox updated", json!({ "item_id": item_id })))
         }
-        Command::SetNotificationPrefs { workspace_id, kinds } => {
+        Command::SetNotificationPrefs {
+            workspace_id,
+            kinds,
+        } => {
             require_not_agent(actor)?;
             require_member(world, actor, &workspace_id)?;
             world.notification_kinds = kinds;
@@ -594,20 +653,35 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                     row.priority = priority;
                 }
                 if let Some(lead_id) = lead_id {
-                    row.lead_id = if lead_id.is_empty() { None } else { Some(lead_id) };
+                    row.lead_id = if lead_id.is_empty() {
+                        None
+                    } else {
+                        Some(lead_id)
+                    };
                 }
                 if let Some(start_date) = start_date {
-                    row.start_date = if start_date.is_empty() { None } else { Some(start_date) };
+                    row.start_date = if start_date.is_empty() {
+                        None
+                    } else {
+                        Some(start_date)
+                    };
                 }
                 if let Some(due_date) = due_date {
-                    row.due_date = if due_date.is_empty() { None } else { Some(due_date) };
+                    row.due_date = if due_date.is_empty() {
+                        None
+                    } else {
+                        Some(due_date)
+                    };
                 }
                 if let Some(resource) = resource {
                     row.resource = resource;
                 }
             }
             emit_changed(world, project.workspace_id);
-            Ok(Outcome::ok("project updated", json!({ "project_id": project_id })))
+            Ok(Outcome::ok(
+                "project updated",
+                json!({ "project_id": project_id }),
+            ))
         }
         Command::DeleteProject { project_id } => {
             require_not_agent(actor)?;
@@ -623,7 +697,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 }
             }
             emit_changed(world, project.workspace_id);
-            Ok(Outcome::ok("project deleted", json!({ "project_id": project_id })))
+            Ok(Outcome::ok(
+                "project deleted",
+                json!({ "project_id": project_id }),
+            ))
         }
         Command::CreateSquad {
             workspace_id,
@@ -670,9 +747,15 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 }
             }
             emit_changed(world, squad.workspace_id);
-            Ok(Outcome::ok("squad updated", json!({ "squad_id": squad_id })))
+            Ok(Outcome::ok(
+                "squad updated",
+                json!({ "squad_id": squad_id }),
+            ))
         }
-        Command::SetSquadMembers { squad_id, agent_ids } => {
+        Command::SetSquadMembers {
+            squad_id,
+            agent_ids,
+        } => {
             require_not_agent(actor)?;
             let squad = world
                 .squad(&squad_id)
@@ -683,7 +766,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 row.member_agent_ids = agent_ids;
             }
             emit_changed(world, squad.workspace_id);
-            Ok(Outcome::ok("squad members updated", json!({ "squad_id": squad_id })))
+            Ok(Outcome::ok(
+                "squad members updated",
+                json!({ "squad_id": squad_id }),
+            ))
         }
         Command::DeleteSquad { squad_id } => {
             require_not_agent(actor)?;
@@ -694,7 +780,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_member(world, actor, &squad.workspace_id)?;
             world.squads.retain(|s| s.id != squad_id);
             emit_changed(world, squad.workspace_id);
-            Ok(Outcome::ok("squad deleted", json!({ "squad_id": squad_id })))
+            Ok(Outcome::ok(
+                "squad deleted",
+                json!({ "squad_id": squad_id }),
+            ))
         }
         Command::CreateSkill {
             workspace_id,
@@ -733,7 +822,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 }
             }
             emit_changed(world, skill.workspace_id);
-            Ok(Outcome::ok("skill updated", json!({ "skill_id": skill_id })))
+            Ok(Outcome::ok(
+                "skill updated",
+                json!({ "skill_id": skill_id }),
+            ))
         }
         Command::DeleteSkill { skill_id } => {
             require_not_agent(actor)?;
@@ -747,9 +839,15 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 agent.skill_ids.retain(|id| id != &skill_id);
             }
             emit_changed(world, skill.workspace_id);
-            Ok(Outcome::ok("skill deleted", json!({ "skill_id": skill_id })))
+            Ok(Outcome::ok(
+                "skill deleted",
+                json!({ "skill_id": skill_id }),
+            ))
         }
-        Command::SetAgentSkills { agent_id, skill_ids } => {
+        Command::SetAgentSkills {
+            agent_id,
+            skill_ids,
+        } => {
             let agent = world
                 .agent(&agent_id)
                 .cloned()
@@ -792,7 +890,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 last_triggered_at: None,
             });
             emit_changed(world, workspace_id);
-            Ok(Outcome::ok("automation created", json!({ "automation_id": id })))
+            Ok(Outcome::ok(
+                "automation created",
+                json!({ "automation_id": id }),
+            ))
         }
         Command::UpdateAutomation {
             automation_id,
@@ -830,7 +931,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 }
             }
             emit_changed(world, auto.workspace_id);
-            Ok(Outcome::ok("automation updated", json!({ "automation_id": automation_id })))
+            Ok(Outcome::ok(
+                "automation updated",
+                json!({ "automation_id": automation_id }),
+            ))
         }
         Command::TriggerAutomation { automation_id } => {
             require_not_agent(actor)?;
@@ -857,7 +961,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_member(world, actor, &auto.workspace_id)?;
             world.automations.retain(|a| a.id != automation_id);
             emit_changed(world, auto.workspace_id);
-            Ok(Outcome::ok("automation deleted", json!({ "automation_id": automation_id })))
+            Ok(Outcome::ok(
+                "automation deleted",
+                json!({ "automation_id": automation_id }),
+            ))
         }
         Command::AddComment {
             task_id,
@@ -913,7 +1020,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             emit_changed(world, task.workspace_id);
             Ok(Outcome::ok("comment added", json!({ "comment_id": id })))
         }
-        Command::ResolveComment { comment_id, resolved } => {
+        Command::ResolveComment {
+            comment_id,
+            resolved,
+        } => {
             require_not_agent(actor)?;
             let comment = world
                 .comment(&comment_id)
@@ -924,7 +1034,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 row.resolved = resolved;
             }
             emit_changed(world, comment.workspace_id);
-            Ok(Outcome::ok("comment resolved", json!({ "comment_id": comment_id })))
+            Ok(Outcome::ok(
+                "comment resolved",
+                json!({ "comment_id": comment_id }),
+            ))
         }
         Command::SetCommentConclusion { comment_id } => {
             require_not_agent(actor)?;
@@ -933,11 +1046,18 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 .cloned()
                 .ok_or_else(|| CoordyError::not_found("comment"))?;
             require_member(world, actor, &comment.workspace_id)?;
-            for row in world.comments.iter_mut().filter(|c| c.task_id == comment.task_id) {
+            for row in world
+                .comments
+                .iter_mut()
+                .filter(|c| c.task_id == comment.task_id)
+            {
                 row.conclusion = row.id == comment_id;
             }
             emit_changed(world, comment.workspace_id);
-            Ok(Outcome::ok("conclusion set", json!({ "comment_id": comment_id })))
+            Ok(Outcome::ok(
+                "conclusion set",
+                json!({ "comment_id": comment_id }),
+            ))
         }
         Command::AddReaction { target_id, emoji } => {
             if emoji.trim().is_empty() {
@@ -957,7 +1077,9 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
         } => {
             require_member(world, actor, &workspace_id)?;
             let Some(pid) = actor.principal_id() else {
-                return Err(CoordyError::denied("only a member can start a private chat"));
+                return Err(CoordyError::denied(
+                    "only a member can start a private chat",
+                ));
             };
             let agent = world
                 .agent(&agent_id)
@@ -1030,14 +1152,21 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 run_id: None,
             });
             emit_changed(world, chat.workspace_id);
-            Ok(Outcome::ok("message sent", json!({ "message_id": id, "chat_id": chat_id })))
+            Ok(Outcome::ok(
+                "message sent",
+                json!({ "message_id": id, "chat_id": chat_id }),
+            ))
         }
         Command::StopChat { chat_id } => {
             let chat = world
                 .chat(&chat_id)
                 .cloned()
                 .ok_or_else(|| CoordyError::not_found("chat"))?;
-            for run in world.runs.iter_mut().filter(|r| r.chat_id.as_deref() == Some(chat_id.as_str()) && r.status == "running") {
+            for run in world
+                .runs
+                .iter_mut()
+                .filter(|r| r.chat_id.as_deref() == Some(chat_id.as_str()) && r.status == "running")
+            {
                 run.status = "cancelled".into();
             }
             emit_changed(world, chat.workspace_id);
@@ -1131,8 +1260,16 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             concurrency_limit,
         } => {
             require_member(world, actor, &workspace_id)?;
-            let kind = if kind.is_empty() { "local".into() } else { kind };
-            let concurrency_limit = if concurrency_limit == 0 { 20 } else { concurrency_limit };
+            let kind = if kind.is_empty() {
+                "local".into()
+            } else {
+                kind
+            };
+            let concurrency_limit = if concurrency_limit == 0 {
+                20
+            } else {
+                concurrency_limit
+            };
             if let Some(idx) = world
                 .computers
                 .iter()
@@ -1145,7 +1282,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                     computer.id.clone()
                 };
                 emit_changed(world, workspace_id);
-                return Ok(Outcome::ok("computer registered", json!({ "computer_id": id })));
+                return Ok(Outcome::ok(
+                    "computer registered",
+                    json!({ "computer_id": id }),
+                ));
             }
             let id = ids::new("pc");
             world.computers.push(Computer {
@@ -1158,7 +1298,10 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 concurrency_limit,
             });
             emit_changed(world, workspace_id);
-            Ok(Outcome::ok("computer registered", json!({ "computer_id": id })))
+            Ok(Outcome::ok(
+                "computer registered",
+                json!({ "computer_id": id }),
+            ))
         }
         Command::DuplicateAgent { agent_id } => {
             let agent = world
@@ -1171,7 +1314,9 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                 Actor::Agent { .. } => false,
             };
             if !allowed {
-                return Err(CoordyError::denied("only the owner may duplicate this agent"));
+                return Err(CoordyError::denied(
+                    "only the owner may duplicate this agent",
+                ));
             }
             let id = ids::new("ag");
             let mut copy = agent.clone();
@@ -1213,7 +1358,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             world
                 .labels
                 .retain(|l| !(l.workspace_id == workspace_id && l.name == name));
-            for task in world.tasks.iter_mut().filter(|t| t.workspace_id == workspace_id) {
+            for task in world
+                .tasks
+                .iter_mut()
+                .filter(|t| t.workspace_id == workspace_id)
+            {
                 task.labels.retain(|l| l != &name);
             }
             emit_changed(world, workspace_id);
@@ -1245,7 +1394,11 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             emit_changed(world, workspace_id);
             Ok(Outcome::ok("property saved", json!({})))
         }
-        Command::LinkPullRequest { task_id, number, url } => {
+        Command::LinkPullRequest {
+            task_id,
+            number,
+            url,
+        } => {
             require_not_agent(actor)?;
             let task = world
                 .task(&task_id)
@@ -1254,10 +1407,14 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_member(world, actor, &task.workspace_id)?;
             if let Some(row) = world.task_mut(&task_id) {
                 row.pull_requests.retain(|p| p.number != number);
-                row.pull_requests.push(coordy_protocol::PullRequestView { number, url });
+                row.pull_requests
+                    .push(coordy_protocol::PullRequestView { number, url });
             }
             emit_changed(world, task.workspace_id);
-            Ok(Outcome::ok("pr linked", json!({ "task_id": task_id, "number": number })))
+            Ok(Outcome::ok(
+                "pr linked",
+                json!({ "task_id": task_id, "number": number }),
+            ))
         }
         Command::SetIntegration {
             workspace_id,
@@ -1287,11 +1444,17 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             emit_changed(world, workspace_id);
             Ok(Outcome::ok("integration saved", json!({})))
         }
-        Command::AddIssueBlocker { task_id, blocker_id } => {
+        Command::AddIssueBlocker {
+            task_id,
+            blocker_id,
+        } => {
             require_not_agent(actor)?;
             add_issue_blocker(world, actor, &task_id, &blocker_id)
         }
-        Command::RemoveIssueBlocker { task_id, blocker_id } => {
+        Command::RemoveIssueBlocker {
+            task_id,
+            blocker_id,
+        } => {
             require_not_agent(actor)?;
             remove_issue_blocker(world, actor, &task_id, &blocker_id)
         }
@@ -1421,15 +1584,26 @@ pub fn stats_view(world: &World, workspace_id: &str) -> StatsView {
         .collect::<Vec<_>>();
     StatsView {
         issue_count: issues.len(),
-        open_count: issues.iter().filter(|t| t.status != "done" && t.status != "cancelled").count(),
+        open_count: issues
+            .iter()
+            .filter(|t| t.status != "done" && t.status != "cancelled")
+            .count(),
         done_count: issues.iter().filter(|t| t.status == "done").count(),
         agent_count: world
             .agents
             .iter()
             .filter(|a| a.workspace_id == workspace_id && !a.archived)
             .count(),
-        run_count: world.runs.iter().filter(|r| r.workspace_id == workspace_id).count(),
-        project_count: world.projects.iter().filter(|p| p.workspace_id == workspace_id).count(),
+        run_count: world
+            .runs
+            .iter()
+            .filter(|r| r.workspace_id == workspace_id)
+            .count(),
+        project_count: world
+            .projects
+            .iter()
+            .filter(|p| p.workspace_id == workspace_id)
+            .count(),
     }
 }
 
@@ -1451,7 +1625,9 @@ pub fn can_see_chat(actor: &Actor, chat: &Chat) -> bool {
     match actor {
         Actor::Daemon => true,
         Actor::Principal { id } => chat.owner_principal_id == *id,
-        Actor::Agent { id, principal_id } => chat.agent_id == *id || chat.owner_principal_id == *principal_id,
+        Actor::Agent { id, principal_id } => {
+            chat.agent_id == *id || chat.owner_principal_id == *principal_id
+        }
     }
 }
 
@@ -1693,6 +1869,18 @@ pub(crate) fn unresolved_blocker_ids(world: &World, task_id: &str) -> Vec<String
         .collect()
 }
 
+fn happens_before_successors(world: &World, node: &str) -> Vec<String> {
+    let mut next = issue_blocking_ids(world, node);
+    next.extend(
+        world
+            .dependencies
+            .iter()
+            .filter(|dep| dep.to_id == node)
+            .map(|dep| dep.from_id.clone()),
+    );
+    next
+}
+
 fn issue_graph_reaches(world: &World, from: &str, target: &str) -> bool {
     let mut stack = vec![from.to_string()];
     let mut seen = std::collections::HashSet::new();
@@ -1703,7 +1891,7 @@ fn issue_graph_reaches(world: &World, from: &str, target: &str) -> bool {
         if node == target {
             return true;
         }
-        stack.extend(issue_blocking_ids(world, &node));
+        stack.extend(happens_before_successors(world, &node));
     }
     false
 }
@@ -1721,19 +1909,75 @@ fn issue_label(world: &World, task_id: &str) -> String {
         .unwrap_or_else(|| task_id.to_string())
 }
 
-pub(crate) fn reject_if_unresolved_blockers(world: &World, task_id: &str) -> Result<(), CoordyError> {
+pub(crate) fn reject_if_unresolved_blockers(
+    world: &World,
+    task_id: &str,
+) -> Result<(), CoordyError> {
     let unresolved = unresolved_blocker_ids(world, task_id);
     if unresolved.is_empty() {
         return Ok(());
     }
-    let labels: Vec<String> = unresolved
-        .iter()
-        .map(|id| issue_label(world, id))
-        .collect();
+    let labels: Vec<String> = unresolved.iter().map(|id| issue_label(world, id)).collect();
     Err(CoordyError::invalid(format!(
         "前置事项尚未完成：{}",
         labels.join("、")
     )))
+}
+
+pub(crate) fn task_has_stale_dependency(world: &World, task_id: &str) -> bool {
+    world
+        .dependencies
+        .iter()
+        .any(|dep| dep.from_id == task_id && !dep.valid)
+}
+
+pub(crate) fn reject_if_stale_dependencies(
+    world: &World,
+    task_id: &str,
+) -> Result<(), CoordyError> {
+    if task_has_stale_dependency(world, task_id) {
+        Err(CoordyError::invalid(STALE_DEPENDENCY_REASON))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn apply_stale_dependency_hold(world: &mut World, task_id: &str) {
+    let Some(task) = world.task_mut(task_id) else {
+        return;
+    };
+    if task.deleted || task.status == "done" || task.status == "cancelled" {
+        return;
+    }
+    if task.blocked_reason.is_none()
+        || task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
+        || task.blocked_reason.as_deref() == Some(STALE_DEPENDENCY_REASON)
+    {
+        task.status = "blocked".into();
+        task.blocked_reason = Some(STALE_DEPENDENCY_REASON.into());
+    }
+}
+
+pub(crate) fn refresh_task_run_gates(world: &mut World, task_id: &str) {
+    if task_has_stale_dependency(world, task_id) {
+        apply_stale_dependency_hold(world, task_id);
+        return;
+    }
+    let unresolved = unresolved_blocker_ids(world, task_id);
+    if unresolved.is_empty() {
+        if let Some(task) = world.task_mut(task_id) {
+            if task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
+                || task.blocked_reason.as_deref() == Some(STALE_DEPENDENCY_REASON)
+            {
+                if task.status == "blocked" {
+                    task.status = "open".into();
+                }
+                task.blocked_reason = None;
+            }
+        }
+        return;
+    }
+    sync_issue_blocker_hold(world, task_id);
 }
 
 pub(crate) fn status_needs_clear_blockers(status: &str) -> bool {
@@ -1753,7 +1997,11 @@ pub(crate) fn refresh_issue_blocker_dependents(world: &mut World, blocker_id: &s
     released
 }
 
-pub(crate) fn waiting_task_would_release(world: &World, waiting_id: &str, cleared_blocker_id: &str) -> bool {
+pub(crate) fn waiting_task_would_release(
+    world: &World,
+    waiting_id: &str,
+    cleared_blocker_id: &str,
+) -> bool {
     let blockers = issue_blocker_ids(world, waiting_id);
     if !blockers.iter().any(|id| id == cleared_blocker_id) {
         return false;
@@ -1788,8 +2036,7 @@ fn sync_issue_blocker_hold(world: &mut World, task_id: &str) {
     if task.status == "done" || task.status == "cancelled" || task.deleted {
         return;
     }
-    if task.blocked_reason.is_none()
-        || task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
+    if task.blocked_reason.is_none() || task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
     {
         task.status = "blocked".into();
         task.blocked_reason = Some(ISSUE_BLOCKER_REASON.into());
@@ -1818,7 +2065,9 @@ fn add_issue_blocker(
         return Err(CoordyError::invalid("blocker is deleted"));
     }
     if blocker.workspace_id != task.workspace_id {
-        return Err(CoordyError::invalid("blocker must be in the same workspace"));
+        return Err(CoordyError::invalid(
+            "blocker must be in the same workspace",
+        ));
     }
     if task_id == blocker_id {
         return Err(CoordyError::invalid("事项不能把自己设为前置"));
@@ -1883,5 +2132,131 @@ fn remove_issue_blocker(
             "blocker_id": blocker_id,
             "released_task_ids": released,
         }),
+    ))
+}
+
+fn is_live_task(world: &World, id: &str) -> bool {
+    world.task(id).map(|task| !task.deleted).unwrap_or(false)
+}
+
+pub(crate) fn record_dependency_edge(
+    world: &mut World,
+    workspace_id: &str,
+    from_id: &str,
+    to_id: &str,
+    entity: &str,
+) -> Result<Outcome, CoordyError> {
+    if from_id.trim().is_empty() || to_id.trim().is_empty() {
+        return Err(CoordyError::invalid("dependency endpoints are required"));
+    }
+    if from_id == to_id {
+        return Err(CoordyError::invalid("依赖不能指向自己"));
+    }
+    let entity = if entity.trim().is_empty() {
+        "repo"
+    } else {
+        entity.trim()
+    };
+    if let Some(existing) = world.dependencies.iter().find(|dep| {
+        dep.workspace_id == workspace_id
+            && dep.from_id == from_id
+            && dep.to_id == to_id
+            && dep.entity == entity
+    }) {
+        return Ok(Outcome::ok(
+            "dependency already recorded",
+            json!({ "dependency_id": existing.id }),
+        ));
+    }
+    if is_live_task(world, from_id)
+        && is_live_task(world, to_id)
+        && issue_graph_reaches(world, from_id, to_id)
+    {
+        return Err(CoordyError::invalid("依赖不能形成循环"));
+    }
+    let id = ids::new("dep");
+    world.dependencies.push(DependencyEdge {
+        id: id.clone(),
+        workspace_id: workspace_id.to_string(),
+        from_id: from_id.to_string(),
+        to_id: to_id.to_string(),
+        entity: entity.to_string(),
+        valid: true,
+    });
+    emit_changed(world, workspace_id.to_string());
+    Ok(Outcome::ok(
+        "dependency recorded",
+        json!({ "dependency_id": id }),
+    ))
+}
+
+pub(crate) fn declare_dependency(
+    world: &mut World,
+    actor: &Actor,
+    workspace_id: &str,
+    from_id: &str,
+    to_id: &str,
+    entity: &str,
+) -> Result<Outcome, CoordyError> {
+    if !actor_in_workspace(world, actor, workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    record_dependency_edge(world, workspace_id, from_id, to_id, entity)
+}
+
+pub(crate) fn reaffirm_dependency(
+    world: &mut World,
+    actor: &Actor,
+    dependency_id: &str,
+) -> Result<Outcome, CoordyError> {
+    let dep = world
+        .dependencies
+        .iter()
+        .find(|dep| dep.id == dependency_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("dependency"))?;
+    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    if let Some(row) = world
+        .dependencies
+        .iter_mut()
+        .find(|d| d.id == dependency_id)
+    {
+        row.valid = true;
+    }
+    for conflict in world.conflicts.iter_mut() {
+        if conflict.status == "open" && conflict.summary.contains(dependency_id) {
+            conflict.status = "resolved".into();
+        }
+    }
+    refresh_task_run_gates(world, &dep.from_id);
+    emit_changed(world, dep.workspace_id);
+    Ok(Outcome::ok(
+        "dependency reaffirmed",
+        json!({ "dependency_id": dependency_id, "task_id": dep.from_id }),
+    ))
+}
+
+pub(crate) fn remove_dependency(
+    world: &mut World,
+    actor: &Actor,
+    dependency_id: &str,
+) -> Result<Outcome, CoordyError> {
+    let dep = world
+        .dependencies
+        .iter()
+        .find(|dep| dep.id == dependency_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("dependency"))?;
+    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    world.dependencies.retain(|edge| edge.id != dependency_id);
+    refresh_task_run_gates(world, &dep.from_id);
+    emit_changed(world, dep.workspace_id);
+    Ok(Outcome::ok(
+        "dependency removed",
+        json!({ "dependency_id": dependency_id, "task_id": dep.from_id }),
     ))
 }

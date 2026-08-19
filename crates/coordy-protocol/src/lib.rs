@@ -9,6 +9,8 @@ pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const HARNESS_SESSION_TOOL: &str = "coordy.session";
 /// `blocked_reason` written when a task is held by unfinished issue blockers.
 pub const ISSUE_BLOCKER_REASON: &str = "waiting on unfinished blockers";
+/// `blocked_reason` / StartRun gate when a consumer dependency is `valid = false`.
+pub const STALE_DEPENDENCY_REASON: &str = "依赖已失效，须先确认或重规划";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -291,6 +293,12 @@ pub enum Command {
         from_id: String,
         to_id: String,
         entity: String,
+    },
+    ReaffirmDependency {
+        dependency_id: String,
+    },
+    RemoveDependency {
+        dependency_id: String,
     },
     AddIssueBlocker {
         task_id: String,

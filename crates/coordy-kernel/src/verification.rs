@@ -136,11 +136,77 @@ pub fn require_active_contract(world: &World, workspace_id: &str) -> Result<(), 
     Ok(())
 }
 
-pub fn invalidate_dependencies(world: &mut World, changed_entity: &str, changer_task: &str) {
+pub fn parse_depends_claim(claim: &str) -> Option<(String, String)> {
+    let mut parts = claim.split_whitespace();
+    let target = parts.next()?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let entity = parts
+        .next()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+        .unwrap_or("repo");
+    Some((target.to_string(), entity.to_string()))
+}
+
+pub fn resolve_depends_target(world: &World, workspace_id: &str, token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let mut hits: Vec<String> = Vec::new();
+    let mut push_unique = |id: String| {
+        if !hits.iter().any(|existing| existing == &id) {
+            hits.push(id);
+        }
+    };
+    for task in world
+        .tasks
+        .iter()
+        .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+    {
+        if task.id == token || (!task.identifier.is_empty() && task.identifier == token) {
+            push_unique(task.id.clone());
+        }
+    }
+    for agent in world
+        .agents
+        .iter()
+        .filter(|agent| agent.workspace_id == workspace_id && !agent.archived)
+    {
+        if agent.id == token {
+            push_unique(agent.id.clone());
+        }
+    }
+    for contract in world
+        .contracts
+        .iter()
+        .filter(|contract| contract.workspace_id == workspace_id)
+    {
+        if contract.id == token {
+            push_unique(contract.id.clone());
+        }
+    }
+    if hits.len() == 1 {
+        hits.pop()
+    } else {
+        None
+    }
+}
+
+pub fn invalidate_dependencies(
+    world: &mut World,
+    changed_entity: &str,
+    changer_task: &str,
+) -> Vec<String> {
+    let mut consumers = Vec::new();
+    let mut conflicts = Vec::new();
     for dep in world.dependencies.iter_mut() {
         if dep.entity == changed_entity && dep.from_id != changer_task && dep.valid {
             dep.valid = false;
-            world.conflicts.push(crate::world::Conflict {
+            consumers.push(dep.from_id.clone());
+            conflicts.push(crate::world::Conflict {
                 id: crate::ids::new("conflict"),
                 workspace_id: dep.workspace_id.clone(),
                 summary: format!("dependency {} invalidated by {}", dep.id, changer_task),
@@ -148,4 +214,11 @@ pub fn invalidate_dependencies(world: &mut World, changed_entity: &str, changer_
             });
         }
     }
+    world.conflicts.extend(conflicts);
+    consumers.sort();
+    consumers.dedup();
+    for task_id in &consumers {
+        crate::product::apply_stale_dependency_hold(world, task_id);
+    }
+    consumers
 }
