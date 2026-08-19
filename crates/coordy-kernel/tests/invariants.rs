@@ -1,11 +1,13 @@
 use coordy_advisor::DeterministicAdvisor;
 use coordy_kernel::{
-    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
+    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, NoopPorts,
+    RecordingPorts,
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
     HarnessEvent, NodeKind, Query, RunRole, RunSource, View, STALE_DEPENDENCY_REASON,
 };
+use std::sync::Arc;
 
 fn daemon() -> Actor {
     Actor::Daemon
@@ -1763,6 +1765,36 @@ fn graph_scheduler_opens_downstream_once_after_upstream_session() {
             .count(),
         1
     );
+}
+
+#[test]
+fn graph_scheduler_does_not_leave_running_run_after_spawn_failure() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    let failing = Harness {
+        kernel: Kernel::with_world(
+            h.kernel.export_world(),
+            Arc::new(NoopPorts),
+            Arc::new(DeterministicAdvisor),
+        ),
+        workspace_id: h.workspace_id.clone(),
+        alice: h.alice.clone(),
+        bob: h.bob.clone(),
+        a1: h.a1.clone(),
+        a2: h.a2.clone(),
+    };
+
+    assign_a1(&failing, &producer);
+    let first = graph_execute_runs(&failing);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].status, "failed");
+
+    assign_a1(&failing, &producer);
+    let second = graph_execute_runs(&failing);
+    assert_eq!(second.len(), 2, "a failed spawn must remain retryable");
+    assert!(second.iter().all(|run| run.status == "failed"));
 }
 
 #[test]

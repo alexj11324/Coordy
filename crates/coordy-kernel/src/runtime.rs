@@ -159,7 +159,7 @@ impl Kernel {
                     .filter(|path| !path.is_empty())
             })
             .unwrap_or_else(|| ".".into());
-        self.ports.spawn_harness(
+        if let Err(error) = self.ports.spawn_harness(
             &harness,
             &worktree,
             &prompt,
@@ -168,7 +168,13 @@ impl Kernel {
             &agent.thinking,
             &agent.speed,
             &agent.cli_args,
-        )?;
+        ) {
+            if let Some(run) = world.run_mut(&run_id) {
+                run.status = "failed".into();
+                run.queue_status = "failed".into();
+            }
+            return Err(error);
+        }
         Ok(Outcome::ok("harness started", json!({ "run_id": run_id })))
     }
 
