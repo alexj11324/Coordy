@@ -567,6 +567,7 @@ export function GraphPage() {
   });
 
   useEffect(() => {
+    setDeltaRevision(null);
     const api = window.coordy;
     if (!api?.subscribe) {
       setSubscribed(false);
@@ -672,4 +673,3 @@ export function GraphPage() {
     </section>
   );
 }
-
