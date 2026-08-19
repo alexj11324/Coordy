@@ -1,8 +1,10 @@
 use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
-    CommentView, ComputerView, CoordyError, Effect, GithubPullRequestItem, GithubView, InboxView,
-    LabelView, Mention, Outcome, ProjectView, PullRequestView, SkillView, SquadView, StatsView,
-    TaskView, WorkspaceView, ISSUE_BLOCKER_REASON,
+    CommentView, ComputerView, CoordyError, DependencyView, Effect, GithubPullRequestItem,
+    GithubView, GraphEdgeKind, GraphEdgeState, GraphEdgeView, GraphHealthView, GraphNodeView,
+    InboxView, LabelView, Mention, NodeKind, NodeMaterializationView, NodeRef, Outcome,
+    ProjectView, PullRequestView, SkillView, SquadView, StatsView, TaskView, WorkspaceView,
+    ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
@@ -10,8 +12,8 @@ use crate::authority::{actor_in_workspace, can_command_agent};
 use crate::ids;
 use crate::world::{
     Attachment, Automation, Chat, ChatMessage, Comment, Computer, CustomPropertyDef, DirectoryLock,
-    Integration, IssueBlockerEdge, Principal, Project, Reaction, Skill, Squad, Task,
-    TaskSubscription, Workspace, WorkspaceLabel, World,
+    GraphEdge, Integration, IssueBlockerEdge, NodeMaterialization, Principal, Project, Reaction,
+    Skill, Squad, Task, TaskSubscription, Workspace, WorkspaceLabel, World,
 };
 
 pub fn slugify(name: &str) -> String {
@@ -2187,6 +2189,18 @@ pub(crate) fn unresolved_blocker_ids(world: &World, task_id: &str) -> Vec<String
         .collect()
 }
 
+fn happens_before_successors(world: &World, node: &str) -> Vec<String> {
+    let mut next = issue_blocking_ids(world, node);
+    next.extend(
+        world
+            .dependencies
+            .iter()
+            .filter(|dep| dep.state != GraphEdgeState::Superseded && dep.source.id == node)
+            .map(|dep| dep.target.id.clone()),
+    );
+    next
+}
+
 fn issue_graph_reaches(world: &World, from: &str, target: &str) -> bool {
     let mut stack = vec![from.to_string()];
     let mut seen = std::collections::HashSet::new();
@@ -2197,7 +2211,7 @@ fn issue_graph_reaches(world: &World, from: &str, target: &str) -> bool {
         if node == target {
             return true;
         }
-        stack.extend(issue_blocking_ids(world, &node));
+        stack.extend(happens_before_successors(world, &node));
     }
     false
 }
@@ -2228,6 +2242,63 @@ pub(crate) fn reject_if_unresolved_blockers(
         "前置事项尚未完成：{}",
         labels.join("、")
     )))
+}
+
+pub(crate) fn task_has_stale_dependency(world: &World, task_id: &str) -> bool {
+    world.dependencies.iter().any(|dep| {
+        dep.target.id == task_id
+            && dep.kind == GraphEdgeKind::Consumes
+            && dep.state.blocks_consumer()
+    })
+}
+
+pub(crate) fn reject_if_stale_dependencies(
+    world: &World,
+    task_id: &str,
+) -> Result<(), CoordyError> {
+    if task_has_stale_dependency(world, task_id) {
+        Err(CoordyError::invalid(STALE_DEPENDENCY_REASON))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn apply_stale_dependency_hold(world: &mut World, task_id: &str) {
+    let Some(task) = world.task_mut(task_id) else {
+        return;
+    };
+    if task.deleted || task.status == "done" || task.status == "cancelled" {
+        return;
+    }
+    if task.blocked_reason.is_none()
+        || task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
+        || task.blocked_reason.as_deref() == Some(STALE_DEPENDENCY_REASON)
+    {
+        task.status = "blocked".into();
+        task.blocked_reason = Some(STALE_DEPENDENCY_REASON.into());
+    }
+}
+
+pub(crate) fn refresh_task_run_gates(world: &mut World, task_id: &str) {
+    if task_has_stale_dependency(world, task_id) {
+        apply_stale_dependency_hold(world, task_id);
+        return;
+    }
+    let unresolved = unresolved_blocker_ids(world, task_id);
+    if unresolved.is_empty() {
+        if let Some(task) = world.task_mut(task_id) {
+            if task.blocked_reason.as_deref() == Some(ISSUE_BLOCKER_REASON)
+                || task.blocked_reason.as_deref() == Some(STALE_DEPENDENCY_REASON)
+            {
+                if task.status == "blocked" {
+                    task.status = "open".into();
+                }
+                task.blocked_reason = None;
+            }
+        }
+        return;
+    }
+    sync_issue_blocker_hold(world, task_id);
 }
 
 pub(crate) fn status_needs_clear_blockers(status: &str) -> bool {
@@ -2383,4 +2454,709 @@ fn remove_issue_blocker(
             "released_task_ids": released,
         }),
     ))
+}
+
+pub(crate) fn record_graph_event(
+    world: &mut World,
+    workspace_id: &str,
+    kind: &str,
+    edge_id: Option<&str>,
+    node_id: Option<&str>,
+    payload: serde_json::Value,
+) {
+    world.graph_revision = world.graph_revision.saturating_add(1);
+    world.graph_events.push(crate::world::GraphEvent {
+        id: ids::new("gev"),
+        workspace_id: workspace_id.to_string(),
+        kind: kind.into(),
+        at: ids::now(),
+        edge_id: edge_id.map(str::to_string),
+        node_id: node_id.map(str::to_string),
+        payload,
+    });
+}
+
+pub(crate) fn bump_node_artifact(world: &mut World, workspace_id: &str, node_id: &str) -> u64 {
+    let next = world.node_artifacts.get(node_id).copied().unwrap_or(0) + 1;
+    world.node_artifacts.insert(node_id.to_string(), next);
+    record_graph_event(
+        world,
+        workspace_id,
+        "artifact_bumped",
+        None,
+        Some(node_id),
+        json!({ "revision": next }),
+    );
+    next
+}
+
+pub(crate) fn mark_node_succeeded(world: &mut World, workspace_id: &str, node_id: &str) {
+    let revision = world.node_artifacts.get(node_id).copied().unwrap_or(0);
+    upsert_materialization(
+        world,
+        workspace_id,
+        NodeRef::task(node_id),
+        GraphEdgeState::Active,
+        revision,
+    );
+    record_graph_event(
+        world,
+        workspace_id,
+        "task_succeeded",
+        None,
+        Some(node_id),
+        json!({ "revision": revision }),
+    );
+}
+
+pub(crate) fn stale_done_materialization(world: &mut World, task_id: &str) {
+    let Some(task) = world.task(task_id) else {
+        return;
+    };
+    if task.status != "done" && task.status != "cancelled" {
+        return;
+    }
+    let workspace_id = task.workspace_id.clone();
+    let revision = world.node_artifacts.get(task_id).copied().unwrap_or(0);
+    upsert_materialization(
+        world,
+        &workspace_id,
+        NodeRef::task(task_id),
+        GraphEdgeState::Stale,
+        revision,
+    );
+}
+
+fn upsert_materialization(
+    world: &mut World,
+    workspace_id: &str,
+    node: NodeRef,
+    state: GraphEdgeState,
+    artifact_revision: u64,
+) {
+    let now = ids::now();
+    if let Some(row) = world
+        .materializations
+        .iter_mut()
+        .find(|row| row.node.id == node.id && row.workspace_id == workspace_id)
+    {
+        row.state = state;
+        row.artifact_revision = artifact_revision;
+        row.updated_at = now;
+        return;
+    }
+    world.materializations.push(NodeMaterialization {
+        workspace_id: workspace_id.to_string(),
+        node,
+        state,
+        artifact_revision,
+        updated_at: now,
+    });
+}
+
+fn node_workspace_id(world: &World, node: &NodeRef) -> Option<String> {
+    match node.kind {
+        NodeKind::Task => world.task(&node.id).map(|task| task.workspace_id.clone()),
+        NodeKind::Agent => world
+            .agent(&node.id)
+            .map(|agent| agent.workspace_id.clone()),
+        NodeKind::Contract => world
+            .contracts
+            .iter()
+            .find(|contract| contract.id == node.id)
+            .map(|contract| contract.workspace_id.clone()),
+    }
+}
+
+fn node_exists(world: &World, node: &NodeRef) -> bool {
+    match node.kind {
+        NodeKind::Task => world
+            .task(&node.id)
+            .map(|task| !task.deleted)
+            .unwrap_or(false),
+        NodeKind::Agent => world
+            .agent(&node.id)
+            .map(|agent| !agent.archived)
+            .unwrap_or(false),
+        NodeKind::Contract => world
+            .contracts
+            .iter()
+            .any(|contract| contract.id == node.id),
+    }
+}
+
+pub(crate) fn resolve_node_in_workspace(
+    world: &World,
+    workspace_id: &str,
+    id: &str,
+) -> Result<NodeRef, CoordyError> {
+    if let Some(task) = world.task(id) {
+        if task.deleted {
+            return Err(CoordyError::invalid("依赖端点不存在"));
+        }
+        if task.workspace_id != workspace_id {
+            return Err(CoordyError::invalid("依赖端点不能跨工作区"));
+        }
+        return Ok(NodeRef::task(id));
+    }
+    if let Some(agent) = world.agent(id) {
+        if agent.archived {
+            return Err(CoordyError::invalid("依赖端点不存在"));
+        }
+        if agent.workspace_id != workspace_id {
+            return Err(CoordyError::invalid("依赖端点不能跨工作区"));
+        }
+        return Ok(NodeRef::agent(id));
+    }
+    if let Some(contract) = world.contracts.iter().find(|contract| contract.id == id) {
+        if contract.workspace_id != workspace_id {
+            return Err(CoordyError::invalid("依赖端点不能跨工作区"));
+        }
+        return Ok(NodeRef::contract(id));
+    }
+    Err(CoordyError::invalid("依赖端点不存在"))
+}
+
+fn verify_node_ref(
+    world: &World,
+    workspace_id: &str,
+    node: NodeRef,
+) -> Result<NodeRef, CoordyError> {
+    if node.id.trim().is_empty() {
+        return Err(CoordyError::invalid("dependency endpoints are required"));
+    }
+    if node_exists(world, &node) {
+        return match node_workspace_id(world, &node) {
+            Some(ws) if ws == workspace_id => Ok(node),
+            Some(_) => Err(CoordyError::invalid("依赖端点不能跨工作区")),
+            None => Err(CoordyError::invalid("依赖端点不存在")),
+        };
+    }
+    let other_ws = world
+        .task(&node.id)
+        .map(|task| task.workspace_id.clone())
+        .or_else(|| {
+            world
+                .agent(&node.id)
+                .map(|agent| agent.workspace_id.clone())
+        })
+        .or_else(|| {
+            world
+                .contracts
+                .iter()
+                .find(|contract| contract.id == node.id)
+                .map(|contract| contract.workspace_id.clone())
+        });
+    match other_ws {
+        Some(ws) if ws != workspace_id => Err(CoordyError::invalid("依赖端点不能跨工作区")),
+        _ => Err(CoordyError::invalid("依赖端点不存在")),
+    }
+}
+
+fn resolve_declare_refs(
+    world: &World,
+    workspace_id: &str,
+    source: Option<NodeRef>,
+    target: Option<NodeRef>,
+    from_id: &str,
+    to_id: &str,
+) -> Result<(NodeRef, NodeRef), CoordyError> {
+    let source = if let Some(node) = source {
+        verify_node_ref(world, workspace_id, node)?
+    } else if !to_id.trim().is_empty() {
+        resolve_node_in_workspace(world, workspace_id, to_id.trim())?
+    } else {
+        return Err(CoordyError::invalid("dependency endpoints are required"));
+    };
+    let target = if let Some(node) = target {
+        verify_node_ref(world, workspace_id, node)?
+    } else if !from_id.trim().is_empty() {
+        resolve_node_in_workspace(world, workspace_id, from_id.trim())?
+    } else {
+        return Err(CoordyError::invalid("dependency endpoints are required"));
+    };
+    Ok((source, target))
+}
+
+fn declare_kind_supported(kind: &GraphEdgeKind) -> bool {
+    matches!(
+        kind,
+        GraphEdgeKind::Consumes | GraphEdgeKind::Precedence | GraphEdgeKind::AssignedTo
+    )
+}
+
+pub(crate) struct GraphEdgeDraft {
+    pub source: NodeRef,
+    pub target: NodeRef,
+    pub kind: GraphEdgeKind,
+    pub entity: String,
+    pub reason: Option<String>,
+    pub origin_run_id: Option<String>,
+    pub selector_path: Option<String>,
+}
+
+pub(crate) struct DeclareDependencyRequest {
+    pub workspace_id: String,
+    pub source: Option<NodeRef>,
+    pub target: Option<NodeRef>,
+    pub from_id: String,
+    pub to_id: String,
+    pub kind: GraphEdgeKind,
+    pub entity: String,
+    pub reason: Option<String>,
+    pub origin_run_id: Option<String>,
+    pub selector_path: Option<String>,
+}
+
+pub(crate) fn record_dependency_edge(
+    world: &mut World,
+    actor: &Actor,
+    workspace_id: &str,
+    draft: GraphEdgeDraft,
+) -> Result<Outcome, CoordyError> {
+    if draft.source.id.trim().is_empty() || draft.target.id.trim().is_empty() {
+        return Err(CoordyError::invalid("dependency endpoints are required"));
+    }
+    if draft.source.id == draft.target.id {
+        return Err(CoordyError::invalid("依赖不能指向自己"));
+    }
+    if !declare_kind_supported(&draft.kind) {
+        return Err(CoordyError::invalid("尚未支持该依赖类型"));
+    }
+    let entity = if draft.entity.trim().is_empty() {
+        "repo"
+    } else {
+        draft.entity.trim()
+    };
+    if let Some(existing) = world.dependencies.iter().find(|dep| {
+        dep.workspace_id == workspace_id
+            && dep.source.id == draft.source.id
+            && dep.target.id == draft.target.id
+            && dep.kind == draft.kind
+            && dep.entity == entity
+            && dep.state != GraphEdgeState::Superseded
+    }) {
+        return Ok(Outcome::ok(
+            "dependency already recorded",
+            json!({ "dependency_id": existing.id }),
+        ));
+    }
+    if issue_graph_reaches(world, &draft.target.id, &draft.source.id) {
+        return Err(CoordyError::invalid("依赖不能形成循环"));
+    }
+    let version = world
+        .node_artifacts
+        .get(&draft.source.id)
+        .copied()
+        .unwrap_or(0);
+    let id = ids::new("dep");
+    let created_at = ids::now();
+    world.dependencies.push(GraphEdge {
+        id: id.clone(),
+        workspace_id: workspace_id.to_string(),
+        source: draft.source.clone(),
+        target: draft.target.clone(),
+        kind: draft.kind.clone(),
+        entity: entity.to_string(),
+        state: GraphEdgeState::Active,
+        generation: 1,
+        origin_run_id: draft.origin_run_id.clone(),
+        actor_id: Some(actor.id().to_string()),
+        reason: draft.reason.clone(),
+        source_event: Some("declare".into()),
+        created_at,
+        selector_path: draft.selector_path.clone(),
+        observed_version: Some(version),
+        current_version: Some(version),
+    });
+    record_graph_event(
+        world,
+        workspace_id,
+        "declare",
+        Some(&id),
+        Some(&draft.target.id),
+        json!({
+            "source": draft.source.id,
+            "target": draft.target.id,
+            "kind": draft.kind,
+            "entity": entity,
+            "origin_run_id": draft.origin_run_id,
+        }),
+    );
+    emit_changed(world, workspace_id.to_string());
+    Ok(Outcome::ok(
+        "dependency recorded",
+        json!({ "dependency_id": id }),
+    ))
+}
+
+pub(crate) fn declare_dependency(
+    world: &mut World,
+    actor: &Actor,
+    request: DeclareDependencyRequest,
+) -> Result<Outcome, CoordyError> {
+    if !actor_in_workspace(world, actor, &request.workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    let (source, target) = resolve_declare_refs(
+        world,
+        &request.workspace_id,
+        request.source,
+        request.target,
+        &request.from_id,
+        &request.to_id,
+    )?;
+    if request.origin_run_id.is_some() {
+        return Err(CoordyError::invalid(
+            "origin run is reserved for internally observed dependencies",
+        ));
+    }
+    record_dependency_edge(
+        world,
+        actor,
+        &request.workspace_id,
+        GraphEdgeDraft {
+            source,
+            target,
+            kind: request.kind,
+            entity: request.entity,
+            reason: request.reason,
+            origin_run_id: request.origin_run_id,
+            selector_path: request.selector_path,
+        },
+    )
+}
+
+pub(crate) fn reaffirm_dependency(
+    world: &mut World,
+    actor: &Actor,
+    dependency_id: &str,
+    expected_generation: u64,
+) -> Result<Outcome, CoordyError> {
+    let dep = world
+        .dependencies
+        .iter()
+        .find(|dep| dep.id == dependency_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("dependency"))?;
+    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    if dep.generation != expected_generation {
+        record_graph_event(
+            world,
+            &dep.workspace_id,
+            "generation_rejected",
+            Some(dependency_id),
+            Some(&dep.target.id),
+            json!({
+                "expected": expected_generation,
+                "actual": dep.generation,
+            }),
+        );
+        return Err(CoordyError::invalid("dependency generation mismatch"));
+    }
+    if let Some(row) = world
+        .dependencies
+        .iter_mut()
+        .find(|d| d.id == dependency_id)
+    {
+        row.state = GraphEdgeState::Active;
+        row.observed_version = row.current_version;
+        row.actor_id = Some(actor.id().to_string());
+        row.source_event = Some("reaffirm".into());
+    }
+    for conflict in world.conflicts.iter_mut() {
+        if conflict.status == "open" && conflict.summary.contains(dependency_id) {
+            conflict.status = "resolved".into();
+        }
+    }
+    record_graph_event(
+        world,
+        &dep.workspace_id,
+        "reaffirm",
+        Some(dependency_id),
+        Some(&dep.target.id),
+        json!({ "generation": expected_generation }),
+    );
+    refresh_task_run_gates(world, &dep.target.id);
+    emit_changed(world, dep.workspace_id);
+    Ok(Outcome::ok(
+        "dependency reaffirmed",
+        json!({ "dependency_id": dependency_id, "task_id": dep.target.id }),
+    ))
+}
+
+pub(crate) fn remove_dependency(
+    world: &mut World,
+    actor: &Actor,
+    dependency_id: &str,
+) -> Result<Outcome, CoordyError> {
+    let dep = world
+        .dependencies
+        .iter()
+        .find(|dep| dep.id == dependency_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("dependency"))?;
+    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    world.dependencies.retain(|edge| edge.id != dependency_id);
+    record_graph_event(
+        world,
+        &dep.workspace_id,
+        "remove",
+        Some(dependency_id),
+        Some(&dep.target.id),
+        json!({}),
+    );
+    refresh_task_run_gates(world, &dep.target.id);
+    emit_changed(world, dep.workspace_id);
+    Ok(Outcome::ok(
+        "dependency removed",
+        json!({ "dependency_id": dependency_id, "task_id": dep.target.id }),
+    ))
+}
+
+pub(crate) fn dependency_view(dep: &GraphEdge) -> DependencyView {
+    DependencyView {
+        id: dep.id.clone(),
+        source: dep.source.clone(),
+        target: dep.target.clone(),
+        entity: dep.entity.clone(),
+        kind: dep.kind.clone(),
+        state: dep.state.clone(),
+        generation: dep.generation,
+        origin_run_id: dep.origin_run_id.clone(),
+        actor_id: dep.actor_id.clone(),
+        reason: dep.reason.clone(),
+        selector_path: dep.selector_path.clone(),
+        observed_version: dep.observed_version,
+        current_version: dep.current_version,
+        from_id: dep.target.id.clone(),
+        to_id: dep.source.id.clone(),
+        valid: dep.valid(),
+    }
+}
+
+fn graph_edge_view(dep: &GraphEdge) -> GraphEdgeView {
+    GraphEdgeView {
+        id: dep.id.clone(),
+        workspace_id: dep.workspace_id.clone(),
+        source: dep.source.clone(),
+        target: dep.target.clone(),
+        kind: dep.kind.clone(),
+        entity: dep.entity.clone(),
+        state: dep.state.clone(),
+        generation: dep.generation,
+        origin_run_id: dep.origin_run_id.clone(),
+        actor_id: dep.actor_id.clone(),
+        reason: dep.reason.clone(),
+        source_event: dep.source_event.clone(),
+        created_at: dep.created_at.clone(),
+        selector_path: dep.selector_path.clone(),
+        observed_version: dep.observed_version,
+        current_version: dep.current_version,
+        valid: dep.valid(),
+    }
+}
+
+fn synthetic_edge(
+    id: String,
+    workspace_id: &str,
+    source: NodeRef,
+    target: NodeRef,
+    kind: GraphEdgeKind,
+    entity: &str,
+) -> GraphEdgeView {
+    GraphEdgeView {
+        id,
+        workspace_id: workspace_id.to_string(),
+        source,
+        target,
+        kind,
+        entity: entity.into(),
+        state: GraphEdgeState::Active,
+        generation: 0,
+        origin_run_id: None,
+        actor_id: None,
+        reason: None,
+        source_event: None,
+        created_at: String::new(),
+        selector_path: None,
+        observed_version: None,
+        current_version: None,
+        valid: true,
+    }
+}
+
+fn task_has_replan(world: &World, task_id: &str) -> bool {
+    task_has_stale_dependency(world, task_id)
+        || world.runs.iter().any(|run| {
+            run.task_id == task_id && (run.status == "paused" || run.queue_status == "paused")
+        })
+}
+
+fn agent_status(world: &World, agent_id: &str) -> (String, bool) {
+    let replan = world.tasks.iter().any(|task| {
+        task.assignee_agent_id.as_deref() == Some(agent_id) && task_has_replan(world, &task.id)
+    }) || world.runs.iter().any(|run| {
+        run.agent_id == agent_id && (run.status == "paused" || run.queue_status == "paused")
+    });
+    let running = world.runs.iter().any(|run| {
+        run.agent_id == agent_id && (run.status == "running" || run.queue_status == "running")
+    });
+    let status = if running {
+        "running"
+    } else if replan {
+        "paused"
+    } else {
+        "idle"
+    };
+    (status.into(), replan)
+}
+
+pub(crate) fn graph_snapshot(
+    world: &World,
+    workspace_id: &str,
+) -> (
+    u64,
+    u64,
+    Vec<GraphNodeView>,
+    Vec<GraphEdgeView>,
+    Vec<NodeMaterializationView>,
+    GraphHealthView,
+) {
+    let mut nodes = Vec::new();
+    for task in world
+        .tasks
+        .iter()
+        .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+    {
+        nodes.push(GraphNodeView {
+            id: task.id.clone(),
+            kind: NodeKind::Task,
+            title: task.title.clone(),
+            status: task.status.clone(),
+            workspace_id: task.workspace_id.clone(),
+            subtitle: if task.identifier.is_empty() {
+                String::new()
+            } else {
+                task.identifier.clone()
+            },
+            assignee_agent_id: task.assignee_agent_id.clone(),
+            blocked_reason: task.blocked_reason.clone(),
+            replan: task_has_replan(world, &task.id),
+            harness: String::new(),
+        });
+    }
+    for agent in world
+        .agents
+        .iter()
+        .filter(|agent| agent.workspace_id == workspace_id && !agent.archived)
+    {
+        let (status, replan) = agent_status(world, &agent.id);
+        nodes.push(GraphNodeView {
+            id: agent.id.clone(),
+            kind: NodeKind::Agent,
+            title: agent.name.clone(),
+            status,
+            workspace_id: agent.workspace_id.clone(),
+            subtitle: agent.harness.clone(),
+            assignee_agent_id: None,
+            blocked_reason: None,
+            replan,
+            harness: agent.harness.clone(),
+        });
+    }
+    for contract in world
+        .contracts
+        .iter()
+        .filter(|contract| contract.workspace_id == workspace_id)
+    {
+        nodes.push(GraphNodeView {
+            id: contract.id.clone(),
+            kind: NodeKind::Contract,
+            title: contract.title.clone(),
+            status: contract.status.clone(),
+            workspace_id: contract.workspace_id.clone(),
+            subtitle: "契约".into(),
+            assignee_agent_id: None,
+            blocked_reason: None,
+            replan: false,
+            harness: String::new(),
+        });
+    }
+
+    let mut edges = Vec::new();
+    for task in world
+        .tasks
+        .iter()
+        .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+    {
+        if let Some(agent_id) = task
+            .assignee_agent_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+        {
+            edges.push(synthetic_edge(
+                format!("assigned:{agent_id}:{}", task.id),
+                workspace_id,
+                NodeRef::agent(agent_id),
+                NodeRef::task(&task.id),
+                GraphEdgeKind::AssignedTo,
+                "assignment",
+            ));
+        }
+    }
+    for blocker in world
+        .issue_blockers
+        .iter()
+        .filter(|edge| edge.workspace_id == workspace_id)
+    {
+        edges.push(synthetic_edge(
+            format!("blocker:{}:{}", blocker.blocker_id, blocker.task_id),
+            workspace_id,
+            NodeRef::task(&blocker.blocker_id),
+            NodeRef::task(&blocker.task_id),
+            GraphEdgeKind::Precedence,
+            "issue",
+        ));
+    }
+    for dep in world
+        .dependencies
+        .iter()
+        .filter(|dep| dep.workspace_id == workspace_id && dep.state != GraphEdgeState::Superseded)
+    {
+        edges.push(graph_edge_view(dep));
+    }
+
+    let materializations = world
+        .materializations
+        .iter()
+        .filter(|row| row.workspace_id == workspace_id)
+        .map(|row| NodeMaterializationView {
+            node: row.node.clone(),
+            workspace_id: row.workspace_id.clone(),
+            state: row.state.clone(),
+            artifact_revision: row.artifact_revision,
+            updated_at: row.updated_at.clone(),
+        })
+        .collect();
+    let event_cursor = world
+        .effects
+        .last()
+        .map(|effect| effect.cursor)
+        .unwrap_or(0);
+    (
+        world.graph_revision,
+        event_cursor,
+        nodes,
+        edges,
+        materializations,
+        GraphHealthView {
+            consistent: true,
+            lag: 0,
+        },
+    )
 }

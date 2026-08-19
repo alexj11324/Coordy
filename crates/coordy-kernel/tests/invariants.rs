@@ -4,7 +4,8 @@ use coordy_kernel::{
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GithubPullRequestItem, GithubSync,
-    HarnessEvent, Query, RunSource, View,
+    GraphEdgeKind, GraphEdgeState, HarnessEvent, NodeKind, Query, RunSource, View,
+    STALE_DEPENDENCY_REASON,
 };
 
 fn daemon() -> Actor {
@@ -979,17 +980,13 @@ fn declare_dependency_invalidated_on_apply() {
             },
         ))
         .unwrap();
+    let consumer = issue_title(&h, "dep-consumer");
     h.kernel
         .submit_sync(cmd(
             Actor::Principal {
                 id: h.alice.clone(),
             },
-            Command::DeclareDependency {
-                workspace_id: h.workspace_id.clone(),
-                from_id: "other-task".into(),
-                to_id: task_id.clone(),
-                entity: "repo".into(),
-            },
+            declare_cmd(&h.workspace_id, &consumer, &task_id, "repo"),
         ))
         .unwrap();
     h.kernel
@@ -1020,6 +1017,864 @@ fn declare_dependency_invalidated_on_apply() {
         }
         _ => panic!("deps"),
     }
+}
+
+fn alice_actor(h: &Harness) -> Actor {
+    Actor::Principal {
+        id: h.alice.clone(),
+    }
+}
+
+fn assign_a1(h: &Harness, task_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::AssignTask {
+                task_id: task_id.into(),
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+}
+
+fn bind_demo_repo(h: &Harness) {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::BindRepository {
+                workspace_id: h.workspace_id.clone(),
+                path: "/tmp/coordy-demo-repo".into(),
+            },
+        ))
+        .unwrap();
+}
+
+fn create_worktree(h: &Harness, task_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::CreateWorktree {
+                task_id: task_id.into(),
+            },
+        ))
+        .unwrap();
+}
+
+fn declare_cmd(workspace_id: &str, from_id: &str, to_id: &str, entity: &str) -> Command {
+    Command::DeclareDependency {
+        workspace_id: workspace_id.into(),
+        source: None,
+        target: None,
+        from_id: from_id.into(),
+        to_id: to_id.into(),
+        kind: GraphEdgeKind::Consumes,
+        entity: entity.into(),
+        reason: None,
+        origin_run_id: None,
+        selector_path: None,
+    }
+}
+
+fn declare_dep(h: &Harness, from_id: &str, to_id: &str, entity: &str) -> String {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            declare_cmd(&h.workspace_id, from_id, to_id, entity),
+        ))
+        .unwrap()
+        .ids["dependency_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn reaffirm_dep(h: &Harness, dependency_id: &str) {
+    let generation = alice_deps(h)
+        .into_iter()
+        .find(|dep| dep.id == dependency_id)
+        .expect("dependency")
+        .generation;
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::ReaffirmDependency {
+                dependency_id: dependency_id.into(),
+                expected_generation: generation,
+            },
+        ))
+        .unwrap();
+}
+
+fn start_fixture(h: &Harness, task_id: &str, events: Vec<HarnessEvent>) -> String {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::StartRun {
+                task_id: task_id.into(),
+                source: RunSource::Fixture { events },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn alice_deps(h: &Harness) -> Vec<coordy_protocol::DependencyView> {
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(h),
+            Query::Dependencies {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Dependencies { items } => items,
+        other => panic!("expected dependencies, got {other:?}"),
+    }
+}
+
+fn alice_runs(h: &Harness) -> Vec<coordy_protocol::RunView> {
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(h),
+            Query::Runs {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Runs { items } => items,
+        other => panic!("expected runs, got {other:?}"),
+    }
+}
+
+fn alice_inbox(h: &Harness) -> Vec<coordy_protocol::InboxView> {
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(h),
+            Query::Inbox {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Inbox { items } => items,
+        other => panic!("expected inbox, got {other:?}"),
+    }
+}
+
+fn alice_commitments(h: &Harness) -> Vec<coordy_protocol::CommitmentView> {
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(h),
+            Query::Commitments {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Commitments { items } => items,
+        other => panic!("expected commitments, got {other:?}"),
+    }
+}
+
+#[test]
+fn stale_dependency_gates_start_and_retry_until_reaffirm() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let first_run = start_fixture(&h, &consumer, vec![]);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let waiting = board_task(&alice_board(&h), &consumer);
+    assert_eq!(
+        waiting.blocked_reason.as_deref(),
+        Some(STALE_DEPENDENCY_REASON)
+    );
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && !dep.valid));
+
+    let start_err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::StartRun {
+                task_id: consumer.clone(),
+                source: RunSource::Fixture { events: vec![] },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(start_err.code, "invalid");
+    assert!(start_err.message.contains(STALE_DEPENDENCY_REASON));
+
+    let retry_err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::RetryRun {
+                run_id: first_run.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(retry_err.code, "invalid");
+    assert!(retry_err.message.contains(STALE_DEPENDENCY_REASON));
+
+    reaffirm_dep(&h, &dep_id);
+    let after = board_task(&alice_board(&h), &consumer);
+    assert!(after.blocked_reason.is_none());
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer)
+            .count(),
+        1,
+        "reaffirm must not auto-start a run"
+    );
+    start_fixture(&h, &consumer, vec![]);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::RetryRun { run_id: first_run },
+        ))
+        .unwrap();
+}
+
+#[test]
+fn apply_patch_pauses_downstream_running_run_and_posts_replan() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    declare_dep(&h, &consumer, &producer, "repo");
+    let run_id = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::StartRun {
+                task_id: consumer.clone(),
+                source: RunSource::Acp {
+                    prompt: "implement ui".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let run = alice_runs(&h)
+        .into_iter()
+        .find(|item| item.id == run_id)
+        .expect("downstream run");
+    assert_eq!(run.status, "paused");
+    assert!(alice_inbox(&h).iter().any(|item| item.kind == "replan"));
+}
+
+#[test]
+fn depends_prefix_records_edge_only_when_id_resolves() {
+    let h = setup();
+    let upstream = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    start_fixture(
+        &h,
+        &consumer,
+        vec![
+            HarnessEvent::Message {
+                role: "assistant".into(),
+                content: "DEPENDS: 那个登录 API".into(),
+            },
+            HarnessEvent::Message {
+                role: "assistant".into(),
+                content: format!("DEPENDS: {upstream}"),
+            },
+        ],
+    );
+    let deps = alice_deps(&h);
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].from_id, consumer);
+    assert_eq!(deps[0].to_id, upstream);
+    assert_eq!(deps[0].source.id, upstream);
+    assert_eq!(deps[0].target.id, consumer);
+    assert_eq!(deps[0].kind, GraphEdgeKind::Consumes);
+    assert!(deps[0].origin_run_id.is_some());
+    assert_eq!(deps[0].entity, "repo");
+    assert!(deps[0].valid);
+    let claims: Vec<_> = alice_commitments(&h)
+        .into_iter()
+        .filter(|c| c.commitment_type == "PLAN_DEPENDENCY")
+        .map(|c| c.claim)
+        .collect();
+    assert!(claims.iter().any(|claim| claim.contains("那个登录")));
+    assert!(claims.iter().any(|claim| claim.contains(&upstream)));
+}
+
+#[test]
+fn declare_dependency_rejects_task_cycles() {
+    let h = setup();
+    let first = issue_title(&h, "a");
+    let second = issue_title(&h, "b");
+    declare_dep(&h, &second, &first, "repo");
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &first, &second, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("循环"));
+}
+
+#[test]
+fn declare_dependency_rejects_dangling_and_cross_workspace() {
+    let h = setup();
+    let local = issue_title(&h, "local");
+    let dangling = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, "missing-task", &local, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(dangling.code, "invalid");
+    assert!(dangling.message.contains("不存在"));
+
+    let other_ws = h
+        .kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace {
+                name: "other".into(),
+            },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other_principal = h
+        .kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: other_ws.clone(),
+                name: "Other".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let foreign = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: other_principal,
+            },
+            Command::CreateTask {
+                workspace_id: other_ws,
+                title: "foreign".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let cross = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &foreign, &local, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(cross.code, "invalid");
+    assert!(cross.message.contains("跨工作区"));
+}
+
+#[test]
+fn declare_dependency_rejects_mixed_precedence_consumes_cycle() {
+    let h = setup();
+    let first = issue_title(&h, "a");
+    let second = issue_title(&h, "b");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: second.clone(),
+                blocker_id: first.clone(),
+            },
+        ))
+        .unwrap();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &first, &second, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("循环"));
+}
+
+#[test]
+fn invalidate_only_consumes_from_changed_source() {
+    let h = setup();
+    let producer_a = issue_title(&h, "api-a");
+    let consumer_b = issue_title(&h, "ui-b");
+    let producer_c = issue_title(&h, "api-c");
+    let consumer_d = issue_title(&h, "ui-d");
+    let hit = declare_dep(&h, &consumer_b, &producer_a, "repo");
+    let other = declare_dep(&h, &consumer_d, &producer_c, "repo");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer_a);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer_a,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let deps = alice_deps(&h);
+    let hit_edge = deps.iter().find(|dep| dep.id == hit).expect("hit");
+    let other_edge = deps.iter().find(|dep| dep.id == other).expect("other");
+    assert!(!hit_edge.valid);
+    assert_eq!(hit_edge.state, GraphEdgeState::Stale);
+    assert!(other_edge.valid);
+    assert_eq!(other_edge.state, GraphEdgeState::Active);
+}
+
+#[test]
+fn every_source_change_advances_a_stale_dependency_generation() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "api");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+
+    for patch in ["first change", "second change"] {
+        h.kernel
+            .submit_sync(cmd(
+                alice_actor(&h),
+                Command::ApplyPatch {
+                    task_id: producer.clone(),
+                    patch: patch.into(),
+                },
+            ))
+            .unwrap();
+    }
+
+    let dep = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dependency");
+    assert_eq!(dep.state, GraphEdgeState::Stale);
+    assert_eq!(dep.generation, 3);
+    assert_eq!(dep.current_version, Some(2));
+}
+
+#[test]
+fn legacy_dependency_endpoint_rejects_archived_agent() {
+    let h = setup();
+    let consumer = issue_title(&h, "ui");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ArchiveAgent {
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &consumer, &h.a1, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("不存在"));
+}
+
+#[test]
+fn public_dependency_cannot_claim_an_unrelated_same_workspace_run() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let unrelated = issue_title(&h, "unrelated");
+    assign_a1(&h, &unrelated);
+    let unrelated_run = start_fixture(&h, &unrelated, vec![]);
+    let mut command = declare_cmd(&h.workspace_id, &consumer, &producer, "repo");
+    let Command::DeclareDependency { origin_run_id, .. } = &mut command else {
+        unreachable!();
+    };
+    *origin_run_id = Some(unrelated_run);
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(alice_actor(&h), command))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("origin run"));
+    assert!(alice_deps(&h).is_empty());
+}
+
+#[test]
+fn done_consumer_stays_done_when_materialization_goes_stale() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::SetTaskStatus {
+                task_id: consumer.clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let task = board_task(&alice_board(&h), &consumer);
+    assert_eq!(task.status, "done");
+    assert!(task.blocked_reason.is_none());
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::GraphSnapshot {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphSnapshot {
+            materializations,
+            edges,
+            health,
+            ..
+        } => {
+            assert!(health.consistent);
+            assert_eq!(health.lag, 0);
+            assert!(materializations
+                .iter()
+                .any(|row| { row.node.id == consumer && row.state == GraphEdgeState::Stale }));
+            assert!(edges.iter().any(|edge| {
+                edge.target.id == consumer
+                    && edge.kind == GraphEdgeKind::Consumes
+                    && edge.state == GraphEdgeState::Stale
+            }));
+        }
+        other => panic!("expected graph snapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn reaffirm_rejects_stale_generation_and_does_not_start_run() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let original = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ReaffirmDependency {
+                dependency_id: dep_id.clone(),
+                expected_generation: original,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("generation"));
+    reaffirm_dep(&h, &dep_id);
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer)
+            .count(),
+        0,
+        "reaffirm must not auto-start a run"
+    );
+}
+
+#[test]
+fn graph_snapshot_unifies_source_to_target_arrows() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: consumer.clone(),
+                blocker_id: producer.clone(),
+            },
+        ))
+        .unwrap();
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::GraphSnapshot {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphSnapshot { nodes, edges, .. } => {
+            assert!(nodes
+                .iter()
+                .any(|node| node.id == producer && node.kind == NodeKind::Task));
+            assert!(edges.iter().any(|edge| {
+                edge.kind == GraphEdgeKind::Consumes
+                    && edge.source.id == producer
+                    && edge.target.id == consumer
+            }));
+            assert!(edges.iter().any(|edge| {
+                edge.kind == GraphEdgeKind::Precedence
+                    && edge.source.id == producer
+                    && edge.target.id == consumer
+            }));
+            assert!(edges.iter().any(|edge| {
+                edge.kind == GraphEdgeKind::AssignedTo && edge.target.id == consumer
+            }));
+        }
+        other => panic!("expected graph snapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn start_run_automation_and_squad_still_run_without_graph_edges() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "独立事项");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "no graph".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+
+    let automation_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAutomation {
+                workspace_id: workspace_id.clone(),
+                name: "触发自动化".into(),
+                runbook: "跑一次".into(),
+                assignee_agent_id: Some(agent_id.clone()),
+                schedule: "every:30m".into(),
+                create_issue: true,
+            },
+        ))
+        .unwrap()
+        .ids["automation_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::TriggerAutomation { automation_id },
+        ))
+        .unwrap();
+
+    let leader = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: principal_id.clone(),
+                name: "领队".into(),
+                harness: "claude".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let squad_id = kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::CreateSquad {
+                workspace_id: workspace_id.clone(),
+                name: "无图小队".into(),
+                leader_agent_id: leader,
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let squad_task = create_open_task(&kernel, &principal_id, &workspace_id, "小队事项");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::AssignIssue {
+                task_id: squad_task,
+                agent_id: None,
+                principal_id: None,
+                squad_id: Some(squad_id),
+                project_id: None,
+                parent_id: None,
+                stage: None,
+            },
+        ))
+        .unwrap();
+    let spawns = ports.spawns.lock().unwrap();
+    assert!(spawns.iter().any(|row| row.2.contains("no graph")));
+    assert!(spawns.iter().any(|row| row.2.contains("跑一次")));
+    assert!(spawns.iter().any(|row| row.2.contains("无图小队")));
+}
+
+#[test]
+fn approve_contract_invalidates_contract_dependencies() {
+    let h = setup();
+    let consumer = issue_title(&h, "implement");
+    let proposed = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ProposeContract {
+                workspace_id: h.workspace_id.clone(),
+                title: "shared api".into(),
+                body: "do not break the contract".into(),
+                participant_ids: vec![h.alice.clone(), h.bob.clone()],
+            },
+        ))
+        .unwrap();
+    let contract_id = proposed.ids["contract_id"].as_str().unwrap().to_string();
+    declare_dep(&h, &consumer, &contract_id, "contract");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApproveContract {
+                contract_id: contract_id.clone(),
+            },
+        ))
+        .unwrap();
+    assert!(alice_deps(&h).iter().all(|dep| dep.valid));
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.bob.clone() },
+            Command::ApproveContract { contract_id },
+        ))
+        .unwrap();
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| !dep.valid && dep.from_id == consumer));
+    assert_eq!(
+        board_task(&alice_board(&h), &consumer)
+            .blocked_reason
+            .as_deref(),
+        Some(STALE_DEPENDENCY_REASON)
+    );
 }
 
 #[test]

@@ -24,6 +24,8 @@ export function titleFromPath(path: string): string {
       return "我的任务";
     case "/board":
       return "任务";
+    case "/graph":
+      return "图";
     case "/projects":
       return "项目";
     case "/automations":

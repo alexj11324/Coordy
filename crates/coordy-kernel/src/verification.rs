@@ -1,5 +1,5 @@
 use coordy_advisor::{StateAssessment, StateDiffItem};
-use coordy_protocol::CoordyError;
+use coordy_protocol::{CoordyError, GraphEdgeKind, GraphEdgeState};
 
 use crate::world::{Commitment, World};
 
@@ -136,16 +136,122 @@ pub fn require_active_contract(world: &World, workspace_id: &str) -> Result<(), 
     Ok(())
 }
 
-pub fn invalidate_dependencies(world: &mut World, changed_entity: &str, changer_task: &str) {
-    for dep in world.dependencies.iter_mut() {
-        if dep.entity == changed_entity && dep.from_id != changer_task && dep.valid {
-            dep.valid = false;
-            world.conflicts.push(crate::world::Conflict {
-                id: crate::ids::new("conflict"),
-                workspace_id: dep.workspace_id.clone(),
-                summary: format!("dependency {} invalidated by {}", dep.id, changer_task),
-                status: "open".into(),
-            });
+pub fn parse_depends_claim(claim: &str) -> Option<(String, String)> {
+    let mut parts = claim.split_whitespace();
+    let target = parts.next()?.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let entity = parts
+        .next()
+        .map(|token| token.trim())
+        .filter(|token| !token.is_empty())
+        .unwrap_or("repo");
+    Some((target.to_string(), entity.to_string()))
+}
+
+pub fn resolve_depends_target(world: &World, workspace_id: &str, token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() {
+        return None;
+    }
+    let mut hits: Vec<String> = Vec::new();
+    let mut push_unique = |id: String| {
+        if !hits.iter().any(|existing| existing == &id) {
+            hits.push(id);
+        }
+    };
+    for task in world
+        .tasks
+        .iter()
+        .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+    {
+        if task.id == token || (!task.identifier.is_empty() && task.identifier == token) {
+            push_unique(task.id.clone());
         }
     }
+    for agent in world
+        .agents
+        .iter()
+        .filter(|agent| agent.workspace_id == workspace_id && !agent.archived)
+    {
+        if agent.id == token {
+            push_unique(agent.id.clone());
+        }
+    }
+    for contract in world
+        .contracts
+        .iter()
+        .filter(|contract| contract.workspace_id == workspace_id)
+    {
+        if contract.id == token {
+            push_unique(contract.id.clone());
+        }
+    }
+    if hits.len() == 1 {
+        hits.pop()
+    } else {
+        None
+    }
+}
+
+pub fn invalidate_dependencies(
+    world: &mut World,
+    changed_entity: &str,
+    changer_task: &str,
+) -> Vec<String> {
+    let current_version = world.node_artifacts.get(changer_task).copied();
+    let mut consumers = Vec::new();
+    let mut conflicts = Vec::new();
+    let mut invalidated = Vec::new();
+    for dep in world.dependencies.iter_mut() {
+        if dep.kind != GraphEdgeKind::Consumes {
+            continue;
+        }
+        if dep.source.id != changer_task {
+            continue;
+        }
+        if dep.state == GraphEdgeState::Superseded {
+            continue;
+        }
+        dep.state = GraphEdgeState::Stale;
+        dep.generation = dep.generation.saturating_add(1);
+        dep.current_version = current_version;
+        dep.source_event = Some(format!("invalidate:{changer_task}"));
+        consumers.push(dep.target.id.clone());
+        invalidated.push((
+            dep.id.clone(),
+            dep.workspace_id.clone(),
+            dep.target.id.clone(),
+            dep.generation,
+        ));
+        conflicts.push(crate::world::Conflict {
+            id: crate::ids::new("conflict"),
+            workspace_id: dep.workspace_id.clone(),
+            summary: format!("dependency {} invalidated by {}", dep.id, changer_task),
+            status: "open".into(),
+        });
+    }
+    world.conflicts.extend(conflicts);
+    for (edge_id, workspace_id, node_id, generation) in invalidated {
+        crate::product::record_graph_event(
+            world,
+            &workspace_id,
+            "invalidate",
+            Some(&edge_id),
+            Some(&node_id),
+            serde_json::json!({
+                "changer": changer_task,
+                "entity": changed_entity,
+                "generation": generation,
+            }),
+        );
+    }
+    consumers.sort();
+    consumers.dedup();
+    for task_id in &consumers {
+        crate::product::apply_stale_dependency_hold(world, task_id);
+        crate::product::stale_done_materialization(world, task_id);
+    }
+    consumers
 }

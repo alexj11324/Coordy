@@ -14,6 +14,7 @@ import {
   Play,
   Puzzle,
   Settings,
+  Share2,
   Shield,
   StickyNote,
   User,
@@ -37,6 +38,7 @@ export const personalNav: NavItem[] = [
 
 export const workspaceNav: NavItem[] = [
   { to: "/board", label: "任务", icon: LayoutDashboard },
+  { to: "/graph", label: "图", icon: Share2 },
   { to: "/projects", label: "项目", icon: FolderKanban },
   { to: "/automations", label: "自动化", icon: Workflow },
   { to: "/agents", label: "智能体", icon: Bot },

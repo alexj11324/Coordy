@@ -109,7 +109,15 @@ describe("tabs", () => {
 describe("sidebar nav", () => {
   it("groups personal and workspace destinations like the shadcn sidebar", () => {
     expect(personalNav.map((item) => item.to)).toEqual(["/inbox", "/chat", "/mine"]);
-    expect(workspaceNav.map((item) => item.label)).toContain("智能体");
+    expect(workspaceNav.map((item) => item.label)).toEqual([
+      "任务",
+      "图",
+      "项目",
+      "自动化",
+      "智能体",
+      "小队",
+      "统计",
+    ]);
     expect(navItemActive("/agents/new", { to: "/agents" })).toBe(true);
     expect(navItemActive("/agents/new/ai", { to: "/agents" })).toBe(true);
     expect(navItemActive("/board", { to: "/inbox" })).toBe(false);

@@ -145,3 +145,46 @@ export function starterById(id: AutomationStarterId | null | undefined): Automat
   if (!id) return null;
   return AUTOMATION_STARTERS.find((item) => item.id === id) ?? null;
 }
+
+export type SkillStarterId = "coordy-graph";
+
+export type SkillStarter = {
+  id: SkillStarterId;
+  title: string;
+  summary: string;
+  body: string;
+};
+
+export const SKILL_STARTERS: SkillStarter[] = [
+  {
+    id: "coordy-graph",
+    title: "协调图",
+    summary: "按 Coordy 内核前缀声明目标、约束与依赖，供图模式投影。",
+    body: [
+      "在计划和评论中用内核可解析的前缀写结构化状态。绑定后下一次运行会注入本说明；不要写进 Codex / Claude Code 全局技能目录。",
+      "",
+      "适用：多智能体协作、跨任务依赖、改共享契约或仓库实体。",
+      "",
+      "开始前：先写当前目标与约束，再改代码。不要发明私有图语法。",
+      "",
+      "格式（每行一条）：",
+      "GOAL: <当前目标>",
+      "CONSTRAINT: <必须遵守的约束>",
+      "DECISION: <已做决定>",
+      "DEPENDS: <id 或 COOR-n> [entity]",
+      "PLAN: <下一步计划>",
+      "ACCEPTANCE: <怎样算完成>",
+      "",
+      "DEPENDS 第一段必须是内核能唯一解析的事项 id、智能体 id、契约 id 或编号（例如 task_… / COOR-12）。自由描述不会建边。第二段是实体，默认 repo。成功解析后写入 source→target 的 Consumes 边。",
+      "",
+      "边的方向是上游 source 到下游 target。改上游产物后，只失效 Consumes 且 source 等于变更节点的边。失效后须带当前 generation 确认（或移除后重规划）才能再跑；确认不会自动 StartRun。未指派执行者时内核不会开工。",
+      "",
+      "目标冲突、无法声明依赖、或必须打破 CONSTRAINT 时，停下来询问成员。",
+    ].join("\n"),
+  },
+];
+
+export function skillStarterById(id: SkillStarterId | null | undefined): SkillStarter | null {
+  if (!id) return null;
+  return SKILL_STARTERS.find((item) => item.id === id) ?? null;
+}

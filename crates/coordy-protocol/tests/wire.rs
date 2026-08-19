@@ -143,6 +143,40 @@ fn issue_blocker_command_keeps_pascal_variant() {
 }
 
 #[test]
+fn reaffirm_and_remove_dependency_keep_pascal_variant() {
+    let reaffirm = serde_json::to_value(coordy_protocol::Command::ReaffirmDependency {
+        dependency_id: "dep_1".into(),
+        expected_generation: 1,
+    })
+    .unwrap();
+    assert_eq!(reaffirm["type"], "ReaffirmDependency");
+    assert_eq!(reaffirm["dependency_id"], "dep_1");
+    let remove = serde_json::to_value(coordy_protocol::Command::RemoveDependency {
+        dependency_id: "dep_1".into(),
+    })
+    .unwrap();
+    assert_eq!(remove["type"], "RemoveDependency");
+}
+
+#[test]
+fn submit_rpc_keeps_command_inline_after_boxing() {
+    let req = serde_json::to_value(coordy_protocol::RpcRequest::Submit {
+        id: "1".into(),
+        command: Box::new(coordy_protocol::AuthenticatedCommand {
+            actor: coordy_protocol::Actor::Daemon,
+            command: coordy_protocol::Command::ReaffirmDependency {
+                dependency_id: "dep_1".into(),
+                expected_generation: 1,
+            },
+        }),
+    })
+    .unwrap();
+    assert_eq!(req["type"], "Submit");
+    assert_eq!(req["command"]["command"]["type"], "ReaffirmDependency");
+    assert!(req["command"]["command"].get("0").is_none());
+}
+
+#[test]
 fn task_view_blocker_fields_default_when_omitted() {
     let view: coordy_protocol::TaskView = serde_json::from_value(json!({
         "id": "task_1",
