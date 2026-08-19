@@ -40,6 +40,8 @@ fn path_binary_wins_over_registry_npx() {
     assert!(claude.command.contains("stream-json"));
     assert!(claude.command.contains("-p"));
     assert!(!claude.command.contains("npx"));
+    assert!(!claude.command.contains("bypassPermissions"));
+    assert!(!claude.command.contains("--permission-mode"));
     assert!(
         !claude
             .command
@@ -81,6 +83,8 @@ fn uninstalled_builtins_keep_native_flags() {
     assert_eq!(claude.protocol_family, "claude");
     assert!(claude.command.contains("-p"));
     assert!(claude.command.contains("stream-json"));
+    assert!(!claude.command.contains("bypassPermissions"));
+    assert!(!claude.command.contains("--permission-mode"));
     assert!(
         !claude
             .command
@@ -125,17 +129,111 @@ echo '{"type":"assistant","message":{"content":[{"type":"text","text":"from-cli"
         "",
         "",
         "",
-        "",
+        "--session-id benign",
+        "auto",
         &SecretEnv::default(),
         None,
         |event| events.push(event),
     );
+    let denied = spawn_native_session(
+        "claude",
+        dir.to_str().unwrap(),
+        "hello",
+        "",
+        "",
+        "",
+        "--dangerously-skip-permissions",
+        "auto",
+        &SecretEnv::default(),
+        None,
+        |_| {},
+    )
+    .unwrap_err();
     std::env::set_var("PATH", original);
     result.expect("spawn native claude");
+    assert_eq!(denied.code, "invalid");
+    assert!(denied.message.contains("tool_access is auto"));
     assert!(
         events.iter().any(|event| matches!(
             event,
             HarnessEvent::Message { content, .. } if content.contains("from-cli")
+        )),
+        "{events:?}"
+    );
+}
+
+#[test]
+fn codex_auto_spawn_rejects_attached_access_and_scope_overrides() {
+    let _guard = PATH_LOCK.lock().unwrap();
+    let dir = std::env::temp_dir().join(format!(
+        "coordy-native-codex-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fake = dir.join("codex");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+echo '{"type":"item.completed","item":{"type":"agent_message","text":"from-codex"}}'
+"#,
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let original = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{}:{original}", dir.display()));
+
+    let mut events = Vec::new();
+    let benign = spawn_native_session(
+        "codex",
+        dir.to_str().unwrap(),
+        "hello",
+        "",
+        "",
+        "",
+        "-cservice_tier=fast",
+        "auto",
+        &SecretEnv::default(),
+        None,
+        |event| events.push(event),
+    );
+    for cli_args in [
+        "-s=danger-full-access",
+        "-capproval_policy=never",
+        "-C/tmp/outside",
+        "--add-dir=/tmp/outside",
+        "--profile=unsafe",
+    ] {
+        let denied = spawn_native_session(
+            "codex",
+            dir.to_str().unwrap(),
+            "hello",
+            "",
+            "",
+            "",
+            cli_args,
+            "auto",
+            &SecretEnv::default(),
+            None,
+            |_| {},
+        )
+        .unwrap_err();
+        assert_eq!(denied.code, "invalid", "{cli_args}");
+        assert!(denied.message.contains("tool_access is auto"), "{cli_args}");
+    }
+    std::env::set_var("PATH", original);
+
+    benign.expect("spawn native codex with benign attached config");
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            HarnessEvent::Message { content, .. } if content.contains("from-codex")
         )),
         "{events:?}"
     );

@@ -1142,17 +1142,16 @@ fn update_principal_renames_self_only() {
         View::Account { account } => assert_eq!(account.name, "艾丽丝"),
         _ => panic!("account"),
     }
-    assert!(
-        h.kernel
-            .submit_sync(cmd(
-                Actor::Principal { id: h.bob.clone() },
-                Command::UpdatePrincipal {
-                    principal_id: h.alice.clone(),
-                    name: "黑客".into(),
-                },
-            ))
-            .is_err()
-    );
+    assert!(h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.bob.clone() },
+            Command::UpdatePrincipal {
+                principal_id: h.alice.clone(),
+                name: "黑客".into(),
+            },
+        ))
+        .is_err());
 }
 
 #[test]
@@ -1258,6 +1257,7 @@ fn start_run_acp_spawns_against_bound_repo() {
     assert_eq!(spawns[0].4, "");
     assert_eq!(spawns[0].5, "");
     assert_eq!(spawns[0].6, "");
+    assert_eq!(spawns[0].8, "auto");
 }
 
 #[test]
@@ -1737,6 +1737,7 @@ fn update_agent_stores_description_and_instructions() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -1758,6 +1759,7 @@ fn update_agent_stores_description_and_instructions() {
     assert_eq!(agent.description, "审查前端 Pull Request");
     assert_eq!(agent.instructions, "只在评论里写结论，不要改代码。");
     assert_eq!(agent.harness, "claude-acp");
+    assert_eq!(agent.tool_access, "auto");
 }
 
 #[test]
@@ -1832,6 +1834,7 @@ fn start_run_prepends_agent_instructions() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -1953,6 +1956,7 @@ fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -2068,7 +2072,12 @@ fn live_fixture() -> (
     (kernel, ports, workspace_id, principal_id, agent_id)
 }
 
-fn create_open_task(kernel: &Kernel, principal_id: &str, workspace_id: &str, title: &str) -> String {
+fn create_open_task(
+    kernel: &Kernel,
+    principal_id: &str,
+    workspace_id: &str,
+    title: &str,
+) -> String {
     kernel
         .submit_sync(cmd(
             Actor::Principal {
@@ -2113,6 +2122,7 @@ fn update_agent_cli_and_limit(
                 access_member_ids: None,
                 concurrency_limit,
                 cli_args,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -2332,7 +2342,9 @@ fn trigger_automation_creates_task_and_spawns_assignee() {
     else {
         panic!("board");
     };
-    assert!(tasks.iter().any(|task| task.id == task_id && task.title == "每日检查"));
+    assert!(tasks
+        .iter()
+        .any(|task| task.id == task_id && task.title == "每日检查"));
     let spawns = ports.spawns.lock().unwrap();
     assert_eq!(spawns.len(), 1);
     assert!(spawns[0].2.contains("检查未完成事项"));
@@ -2503,6 +2515,200 @@ fn start_run_passes_cli_args_to_spawn() {
 }
 
 #[test]
+fn tool_access_defaults_to_auto_and_full_access_reaches_spawn() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let View::Agents { items } = kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Query::Agents {
+                workspace_id: workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    assert_eq!(
+        items
+            .iter()
+            .find(|item| item.id == agent_id)
+            .map(|item| item.tool_access.as_str()),
+        Some("auto")
+    );
+
+    let first = create_open_task(&kernel, &principal_id, &workspace_id, "auto-run");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: first.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: first,
+                source: RunSource::Acp {
+                    prompt: "auto".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(ports.spawns.lock().unwrap()[0].8, "auto");
+
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::UpdateAgent {
+                agent_id: agent_id.clone(),
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                tool_access: Some("full_access".into()),
+                mcp_servers: None,
+            },
+        ))
+        .unwrap();
+    let second = create_open_task(&kernel, &principal_id, &workspace_id, "full-run");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: second.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: second,
+                source: RunSource::Acp {
+                    prompt: "full".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(ports.spawns.lock().unwrap()[1].8, "full_access");
+
+    let err = kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::UpdateAgent {
+                agent_id,
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                tool_access: Some("yolo".into()),
+                mcp_servers: None,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("tool_access"));
+}
+
+#[test]
+fn invalid_agent_fields_do_not_partially_update_agent() {
+    let (kernel, _ports, workspace_id, principal_id, agent_id) = live_fixture();
+
+    let invalid_update = |name: Option<&str>,
+                          harness: Option<&str>,
+                          access: Option<&str>,
+                          tool_access: Option<&str>| {
+        Command::UpdateAgent {
+            agent_id: agent_id.clone(),
+            name: name.map(str::to_string),
+            description: Some("也不应保存".into()),
+            instructions: None,
+            harness: harness.map(str::to_string),
+            avatar: None,
+            model: None,
+            thinking: None,
+            speed: None,
+            access: access.map(str::to_string),
+            access_member_ids: None,
+            concurrency_limit: None,
+            cli_args: None,
+            tool_access: tool_access.map(str::to_string),
+            mcp_servers: None,
+        }
+    };
+    for command in [
+        invalid_update(Some(""), None, None, None),
+        invalid_update(Some("不应保存"), Some("  "), None, None),
+        invalid_update(Some("不应保存"), None, Some("public"), None),
+        invalid_update(Some("不应保存"), None, None, Some("yolo")),
+    ] {
+        let err = kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: principal_id.clone(),
+                },
+                command,
+            ))
+            .unwrap_err();
+        assert_eq!(err.code, "invalid");
+    }
+
+    let View::Agents { items } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Agents { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    let agent = items.iter().find(|item| item.id == agent_id).unwrap();
+    assert_eq!(agent.name, "执行者");
+    assert!(agent.description.is_empty());
+    assert_eq!(agent.harness, "claude");
+    assert_eq!(agent.access, "owner");
+    assert_eq!(agent.tool_access, "auto");
+}
+
+#[test]
 fn sweep_automations_arms_then_fires_after_interval() {
     let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
     kernel
@@ -2521,10 +2727,7 @@ fn sweep_automations_arms_then_fires_after_interval() {
         ))
         .unwrap();
     kernel
-        .submit_sync(cmd(
-            daemon(),
-            Command::SweepAutomations { now_ms: 1_000 },
-        ))
+        .submit_sync(cmd(daemon(), Command::SweepAutomations { now_ms: 1_000 }))
         .unwrap();
     let View::Board { tasks } = kernel
         .view_sync(q(
@@ -2542,10 +2745,7 @@ fn sweep_automations_arms_then_fires_after_interval() {
     assert!(!tasks.iter().any(|task| task.title == "间隔任务"));
     assert!(ports.spawns.lock().unwrap().is_empty());
     kernel
-        .submit_sync(cmd(
-            daemon(),
-            Command::SweepAutomations { now_ms: 61_000 },
-        ))
+        .submit_sync(cmd(daemon(), Command::SweepAutomations { now_ms: 61_000 }))
         .unwrap();
     let View::Board { tasks } = kernel
         .view_sync(q(
@@ -2580,7 +2780,11 @@ fn issue_title(h: &Harness, title: &str) -> String {
 }
 
 fn board_task(tasks: &[coordy_protocol::TaskView], id: &str) -> coordy_protocol::TaskView {
-    tasks.iter().find(|task| task.id == id).expect("task").clone()
+    tasks
+        .iter()
+        .find(|task| task.id == id)
+        .expect("task")
+        .clone()
 }
 
 fn alice_board(h: &Harness) -> Vec<coordy_protocol::TaskView> {
@@ -2637,7 +2841,10 @@ fn issue_blocker_holds_start_and_releases_when_done() {
     );
     assert_eq!(waiting_view.blocker_ids, vec![blocker.clone()]);
     assert_eq!(waiting_view.unresolved_blocker_ids, vec![blocker.clone()]);
-    assert_eq!(board_task(&tasks, &blocker).blocking_ids, vec![waiting.clone()]);
+    assert_eq!(
+        board_task(&tasks, &blocker).blocking_ids,
+        vec![waiting.clone()]
+    );
 
     let start_err = h
         .kernel
@@ -2820,7 +3027,9 @@ fn issue_blocker_rejects_cycles_and_keeps_manual_block() {
         panic!("runs");
     };
     assert!(
-        !runs.iter().any(|run| run.task_id == waiting && run.trigger == "blocker"),
+        !runs
+            .iter()
+            .any(|run| run.task_id == waiting && run.trigger == "blocker"),
         "hand-marked blocked tasks must not auto-start"
     );
 }

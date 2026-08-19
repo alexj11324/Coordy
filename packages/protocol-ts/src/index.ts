@@ -46,6 +46,7 @@ export type Command =
       access_member_ids?: string[] | null;
       concurrency_limit?: number | null;
       cli_args?: string | null;
+      tool_access?: string | null;
       mcp_servers?: string[] | null;
     }
   | { type: "ArchiveAgent"; agent_id: string }
@@ -315,6 +316,7 @@ export type AgentView = {
   access_member_ids?: string[];
   concurrency_limit?: number;
   cli_args?: string;
+  tool_access?: string;
   mcp_servers?: string[];
   skill_ids?: string[];
 };

@@ -63,6 +63,7 @@ impl Ports for GitPorts {
         read_jsonl(path)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_harness(
         &self,
         kind: &str,
@@ -73,6 +74,7 @@ impl Ports for GitPorts {
         thinking: &str,
         speed: &str,
         cli_args: &str,
+        tool_access: &str,
     ) -> Result<(), CoordyError> {
         let kind = canonical_harness_id(kind);
         if detect_on_path()
@@ -83,7 +85,16 @@ impl Ports for GitPorts {
                 "{kind} is not installed; use JSONL replay or install the harness"
             )));
         }
-        let mut cmd = spawn_command(kind, worktree, prompt, model, thinking, speed, cli_args)?;
+        let mut cmd = spawn_command(
+            kind,
+            worktree,
+            prompt,
+            model,
+            thinking,
+            speed,
+            cli_args,
+            tool_access,
+        )?;
         let _child = cmd
             .spawn()
             .map_err(|e| CoordyError::unavailable(format!("spawn {kind}: {e}")))?;

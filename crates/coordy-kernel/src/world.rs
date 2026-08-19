@@ -135,6 +135,8 @@ pub struct Agent {
     pub concurrency_limit: u32,
     #[serde(default)]
     pub cli_args: String,
+    #[serde(default = "default_tool_access")]
+    pub tool_access: String,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]
@@ -147,6 +149,10 @@ fn default_access() -> String {
 
 fn default_agent_concurrency() -> u32 {
     6
+}
+
+fn default_tool_access() -> String {
+    "auto".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
