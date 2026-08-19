@@ -1012,7 +1012,9 @@ impl Kernel {
                 .task_plan_auto_completed_parent_ids
                 .iter()
                 .any(|id| id == &parent_id);
-            if all_done {
+            let parent_unblocked =
+                product::reject_if_unresolved_blockers(world, &parent_id).is_ok();
+            if all_done && parent_unblocked {
                 let parent_snapshot = world.task(&parent_id).cloned();
                 let transitioned = parent_snapshot
                     .as_ref()
@@ -2387,6 +2389,7 @@ impl Kernel {
                         content: "运行已停止".into(),
                     },
                 )?;
+                finalize_task_plan_artifact(&mut world, &run_id);
                 self.reconcile_task_plan_scheduling(&mut world);
                 drop(world);
                 self.ports.cancel_harness(&run_id)?;
@@ -2788,6 +2791,8 @@ impl Kernel {
                     std::slice::from_ref(&issue_id),
                     GraphPromptKind::Ready,
                 );
+                let released = self.reconcile_task_plan_parent_statuses(&mut world);
+                self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
                 self.reconcile_task_plan_scheduling(&mut world);
                 Ok(outcome)
             }
@@ -2841,6 +2846,9 @@ impl Kernel {
                     .collect();
                 let outcome =
                     crate::product::submit(&mut world, &actor, Command::StopChat { chat_id })?;
+                for run_id in &run_ids {
+                    finalize_task_plan_artifact(&mut world, run_id);
+                }
                 drop(world);
                 for run_id in run_ids {
                     self.ports.cancel_harness(&run_id)?;
@@ -3607,33 +3615,31 @@ fn ingest_event(
         .ok_or_else(|| CoordyError::not_found("run"))?;
     let event = if let HarnessEvent::Message { role, content } = event {
         if role == "assistant" && run.chat_id.is_some() {
-            let chat_id = run.chat_id.as_deref().expect("chat run");
-            if product::latest_applicable_task_plan_for_chat(world, chat_id)
-                .is_some_and(|proposal| proposal.draft.source_run_id == run.id)
-            {
-                return record_harness_event(
-                    world,
-                    advisor,
-                    &run,
-                    HarnessEvent::Message { role, content },
-                );
-            }
-            let prior_assistant = world
-                .run_events
-                .iter()
-                .filter(|item| item.run_id == run.id && item.kind == "message")
-                .filter_map(|item| item.payload.strip_prefix("assistant: "))
-                .collect::<String>();
-            let candidate = if prior_assistant.contains("```COORDY_TASK_PLAN_V1") {
-                format!("{prior_assistant}{content}")
-            } else {
-                content.clone()
-            };
+            let prior_assistant = assistant_run_text(world, &run.id);
+            let candidate = format!("{prior_assistant}{content}");
             let ParsedTaskPlanArtifact {
-                draft,
-                error,
+                mut draft,
+                mut error,
                 mut display,
             } = parse_task_plan_artifact(&candidate);
+            let already_has_plan = world
+                .task_plan_proposals
+                .iter()
+                .any(|proposal| proposal.draft.source_run_id == run.id);
+            if already_has_plan && candidate.contains("```COORDY_TASK_PLAN_V1") {
+                draft = None;
+                error = Some(
+                    "任务方案解析失败：每次回复只能包含一个 COORDY_TASK_PLAN_V1 代码块。".into(),
+                );
+                display = candidate.clone();
+            }
+            if draft.is_none() && error.is_none() && !prior_assistant.is_empty() {
+                // Each ACP assistant event is a stream chunk. Keep one exact
+                // cumulative message so a fence or JSON token may span any
+                // event boundary without duplicating earlier chunks.
+                remove_superseded_task_plan_chunks(world, &run.id);
+                display = candidate.clone();
+            }
             if let Some(error) = error {
                 let chat_id = run.chat_id.clone().expect("chat run");
                 world
@@ -3927,6 +3933,15 @@ fn remove_superseded_task_plan_chunks(world: &mut World, run_id: &str) {
     });
 }
 
+fn assistant_run_text(world: &World, run_id: &str) -> String {
+    world
+        .run_events
+        .iter()
+        .filter(|event| event.run_id == run_id && event.kind == "message")
+        .filter_map(|event| event.payload.strip_prefix("assistant: "))
+        .collect::<String>()
+}
+
 fn finalize_task_plan_artifact(world: &mut World, run_id: &str) {
     let Some(run) = world.run(run_id).cloned() else {
         return;
@@ -3935,27 +3950,26 @@ fn finalize_task_plan_artifact(world: &mut World, run_id: &str) {
         return;
     };
     if world
-        .task_plan_proposals
+        .task_plan_artifact_errors
         .iter()
-        .any(|proposal| proposal.draft.source_run_id == run_id)
-        || world
-            .task_plan_artifact_errors
-            .iter()
-            .any(|error| error.run_id == run_id)
+        .any(|error| error.run_id == run_id)
     {
         return;
     }
-    let assistant = world
-        .run_events
-        .iter()
-        .filter(|event| event.run_id == run_id && event.kind == "message")
-        .filter_map(|event| event.payload.strip_prefix("assistant: "))
-        .collect::<String>();
+    let assistant = assistant_run_text(world, run_id);
     if assistant.contains("```COORDY_TASK_PLAN_V1") {
+        let already_has_plan = world
+            .task_plan_proposals
+            .iter()
+            .any(|proposal| proposal.draft.source_run_id == run_id);
         world.task_plan_artifact_errors.push(TaskPlanArtifactError {
             chat_id,
             run_id: run_id.to_string(),
-            message: "任务方案解析失败：COORDY_TASK_PLAN_V1 代码块不完整。".into(),
+            message: if already_has_plan {
+                "任务方案解析失败：每次回复只能包含一个 COORDY_TASK_PLAN_V1 代码块。".into()
+            } else {
+                "任务方案解析失败：COORDY_TASK_PLAN_V1 代码块不完整。".into()
+            },
         });
     }
 }

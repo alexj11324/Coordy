@@ -855,6 +855,7 @@ fn save_task_plan(
     expected_revision: Option<u64>,
     draft: TaskPlanDraft,
 ) -> Result<Outcome, CoordyError> {
+    reject_if_task_plan_source_invalid(world, &draft.source_run_id)?;
     validate_task_plan(world, actor, &draft)?;
     let (proposal_id, revision) = match proposal_id {
         Some(proposal_id) => {
@@ -912,6 +913,17 @@ fn save_task_plan(
     ))
 }
 
+fn reject_if_task_plan_source_invalid(world: &World, run_id: &str) -> Result<(), CoordyError> {
+    if world
+        .task_plan_artifact_errors
+        .iter()
+        .any(|error| error.run_id == run_id)
+    {
+        return Err(CoordyError::invalid("task plan artifact is invalid"));
+    }
+    Ok(())
+}
+
 pub(crate) fn latest_applicable_task_plan_for_chat<'a>(
     world: &'a World,
     chat_id: &str,
@@ -921,6 +933,10 @@ pub(crate) fn latest_applicable_task_plan_for_chat<'a>(
             .task_plan_applications
             .iter()
             .any(|application| application.proposal_id == proposal.id)
+            && !world
+                .task_plan_artifact_errors
+                .iter()
+                .any(|error| error.run_id == proposal.draft.source_run_id)
             && latest_task_plan(world, &proposal.id)
                 .is_some_and(|latest| latest.revision == proposal.revision)
     })
@@ -1058,6 +1074,7 @@ fn apply_task_plan(
             }),
         ));
     }
+    reject_if_task_plan_source_invalid(world, &proposal.draft.source_run_id)?;
     if world
         .task_plan_applications
         .iter()

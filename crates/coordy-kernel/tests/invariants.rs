@@ -528,9 +528,22 @@ fn assistant_plan_artifact_creates_reviewable_revision_without_applying_tasks() 
     let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
     let baseline_task_count = h.kernel.export_world().tasks.len();
     let content = format!(
-        "我把工作分成两个阶段，请先检查依赖和负责人。\n```COORDY_TASK_PLAN_V1\n{}\n```",
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
         serde_json::to_string(&draft).unwrap()
     );
+
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: "我把工作分成两个阶段，请先检查依赖和负责人。".into(),
+                },
+            },
+        ))
+        .unwrap();
 
     h.kernel
         .submit_sync(cmd(
@@ -588,6 +601,263 @@ fn assistant_plan_artifact_creates_reviewable_revision_without_applying_tasks() 
     let world = h.kernel.export_world();
     assert_eq!(world.tasks.len(), baseline_task_count);
     assert!(world.task_plan_applications.is_empty());
+}
+
+#[test]
+fn streamed_plan_artifact_preserves_json_strings_across_arbitrary_chunk_boundaries() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    let content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&draft).unwrap()
+    );
+    let mut boundaries = vec![content.find("COORDY_TASK_PLAN_V1").unwrap() + 6];
+    boundaries.extend(
+        ["Design", "Define the interface", "Interface reviewed"]
+            .map(|value| content.find(value).unwrap() + value.len() / 2),
+    );
+    boundaries.sort_unstable();
+    let mut start = 0;
+    for end in boundaries.into_iter().chain(std::iter::once(content.len())) {
+        h.kernel
+            .submit_sync(cmd(
+                daemon(),
+                Command::IngestHarnessEvent {
+                    run_id: draft.source_run_id.clone(),
+                    event: HarnessEvent::Message {
+                        role: "assistant".into(),
+                        content: content[start..end].to_string(),
+                    },
+                },
+            ))
+            .unwrap();
+        start = end;
+    }
+
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: draft.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert!(task_plan.is_some(), "{task_plan_error:?}");
+            assert_eq!(task_plan.unwrap().draft, draft);
+            assert!(task_plan_error.is_none());
+        }
+        _ => panic!("chat"),
+    }
+}
+
+#[test]
+fn a_second_plan_artifact_from_the_same_run_invalidates_the_first() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let first = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    let first_content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&first).unwrap()
+    );
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: first.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: first_content,
+                },
+            },
+        ))
+        .unwrap();
+    let proposal = h.kernel.export_world().task_plan_proposals[0].clone();
+
+    let mut second = first.clone();
+    second.children[0].title = "Conflicting second design".into();
+    let second_content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&second).unwrap()
+    );
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: first.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: second_content,
+                },
+            },
+        ))
+        .unwrap();
+
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: first.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert!(task_plan.is_none());
+            assert!(task_plan_error.unwrap().contains("只能包含一个"));
+        }
+        _ => panic!("chat"),
+    }
+    let baseline = h.kernel.export_world();
+    assert_eq!(baseline.task_plan_proposals.len(), 1);
+
+    for command in [
+        Command::SaveTaskPlanProposal {
+            proposal_id: Some(proposal.id.clone()),
+            expected_revision: Some(proposal.revision),
+            draft: proposal.draft.clone(),
+        },
+        Command::SaveTaskPlanProposal {
+            proposal_id: None,
+            expected_revision: None,
+            draft: proposal.draft.clone(),
+        },
+        Command::ApplyTaskPlan {
+            proposal_id: proposal.id,
+            expected_revision: proposal.revision,
+            idempotency_key: "invalidated-artifact".into(),
+            mode: TaskPlanApplyMode::CreateOnly,
+        },
+    ] {
+        let error = h
+            .kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: h.alice.clone(),
+                },
+                command,
+            ))
+            .unwrap_err();
+        assert_eq!(error.code, "invalid");
+    }
+    let after = h.kernel.export_world();
+    assert_eq!(
+        after.task_plan_proposals.len(),
+        baseline.task_plan_proposals.len()
+    );
+    assert_eq!(
+        after.task_plan_applications.len(),
+        baseline.task_plan_applications.len()
+    );
+    assert_eq!(after.tasks.len(), baseline.tasks.len());
+    assert_eq!(
+        after.workspace(&h.workspace_id).unwrap().next_issue_number,
+        baseline
+            .workspace(&h.workspace_id)
+            .unwrap()
+            .next_issue_number
+    );
+}
+
+#[test]
+fn an_applied_plan_replays_idempotently_after_a_late_second_artifact() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let first = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    let first_content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&first).unwrap()
+    );
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: first.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: first_content,
+                },
+            },
+        ))
+        .unwrap();
+    let proposal = h.kernel.export_world().task_plan_proposals[0].clone();
+    let apply = || {
+        h.kernel.submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id: proposal.id.clone(),
+                expected_revision: proposal.revision,
+                idempotency_key: "late-second-artifact".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+    };
+    let applied = apply().unwrap();
+    let after_apply = h.kernel.export_world();
+
+    let mut second = first;
+    second.children[0].title = "Late conflicting design".into();
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: second.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: format!(
+                        "```COORDY_TASK_PLAN_V1\n{}\n```",
+                        serde_json::to_string(&second).unwrap()
+                    ),
+                },
+            },
+        ))
+        .unwrap();
+
+    let replayed = apply().unwrap();
+    assert_eq!(replayed.ids["proposal_id"], applied.ids["proposal_id"]);
+    assert_eq!(replayed.ids["revision"], applied.ids["revision"]);
+    assert_eq!(
+        replayed.ids["parent_task_id"],
+        applied.ids["parent_task_id"]
+    );
+    assert_eq!(
+        replayed.ids["child_task_ids"],
+        applied.ids["child_task_ids"]
+    );
+    let after_replay = h.kernel.export_world();
+    assert_eq!(after_replay.tasks.len(), after_apply.tasks.len());
+    assert_eq!(
+        after_replay.task_plan_applications.len(),
+        after_apply.task_plan_applications.len()
+    );
+    assert_eq!(
+        after_replay
+            .workspace(&h.workspace_id)
+            .unwrap()
+            .next_issue_number,
+        after_apply
+            .workspace(&h.workspace_id)
+            .unwrap()
+            .next_issue_number
+    );
 }
 
 #[test]
@@ -871,6 +1141,106 @@ fn incomplete_plan_artifact_errors_only_after_chat_run_finishes() {
         ))
         .unwrap();
     match after {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert!(task_plan.is_none());
+            assert!(task_plan_error.unwrap().contains("代码块不完整"));
+        }
+        _ => panic!("chat"),
+    }
+}
+
+#[test]
+fn stopping_chat_finalizes_an_incomplete_plan_artifact() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id,
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: "```COORDY_TASK_PLAN_V1\n{\"version\":".into(),
+                },
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::StopChat {
+                chat_id: draft.chat_id.clone(),
+            },
+        ))
+        .unwrap();
+
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.alice },
+            Query::Chat {
+                chat_id: draft.chat_id,
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert!(task_plan.is_none());
+            assert!(task_plan_error.unwrap().contains("代码块不完整"));
+        }
+        _ => panic!("chat"),
+    }
+}
+
+#[test]
+fn cancelling_a_chat_run_finalizes_an_incomplete_plan_artifact() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: "```COORDY_TASK_PLAN_V1\n{\"version\":".into(),
+                },
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CancelRun {
+                run_id: draft.source_run_id,
+            },
+        ))
+        .unwrap();
+
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.alice },
+            Query::Chat {
+                chat_id: draft.chat_id,
+            },
+        ))
+        .unwrap()
+    {
         View::Chat {
             task_plan,
             task_plan_error,
@@ -8454,6 +8824,174 @@ fn confirmed_task_plan_dispatches_parallel_stage_then_releases_once_and_rolls_up
         ))
         .unwrap_err();
     assert_eq!(error.code, "invalid");
+}
+
+#[test]
+fn managed_parent_waits_for_its_own_blockers_before_auto_completion() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Existing managed parent");
+    let blocker_id = issue_title(&h, "External prerequisite");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AddIssueBlocker {
+                task_id: parent_id.clone(),
+                blocker_id: blocker_id.clone(),
+            },
+        ))
+        .unwrap();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Existing {
+            task_id: parent_id.clone(),
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "blocked-parent".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    for child_id in child_ids {
+        h.kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: h.alice.clone(),
+                },
+                Command::SetTaskStatus {
+                    task_id: child_id,
+                    status: "done".into(),
+                },
+            ))
+            .unwrap();
+    }
+    let blocked = h.kernel.export_world();
+    assert_ne!(blocked.task(&parent_id).unwrap().status, "done");
+    assert!(!blocked
+        .task_plan_auto_completed_parent_ids
+        .contains(&parent_id));
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.alice },
+            Command::SetTaskStatus {
+                task_id: blocker_id,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let completed = h.kernel.export_world();
+    assert_eq!(completed.task(&parent_id).unwrap().status, "done");
+    assert!(completed
+        .task_plan_auto_completed_parent_ids
+        .contains(&parent_id));
+}
+
+#[test]
+fn changing_a_managed_parent_relationship_reconciles_rollup_immediately() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Managed parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "parent-relation".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
+    let child_ids = applied.ids["child_task_ids"].as_array().unwrap();
+    for child_id in child_ids {
+        h.kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: h.alice.clone(),
+                },
+                Command::SetTaskStatus {
+                    task_id: child_id.as_str().unwrap().to_string(),
+                    status: "done".into(),
+                },
+            ))
+            .unwrap();
+    }
+    assert_eq!(
+        h.kernel.export_world().task(&parent_id).unwrap().status,
+        "done"
+    );
+
+    let manual_child_id = issue_title(&h, "Late manual child");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AssignIssue {
+                task_id: manual_child_id.clone(),
+                agent_id: None,
+                principal_id: None,
+                squad_id: None,
+                project_id: None,
+                parent_id: Some(parent_id.clone()),
+                stage: None,
+            },
+        ))
+        .unwrap();
+    let reopened = h.kernel.export_world();
+    assert_eq!(reopened.task(&parent_id).unwrap().status, "open");
+    assert!(!reopened
+        .task_plan_auto_completed_parent_ids
+        .contains(&parent_id));
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.alice },
+            Command::AssignIssue {
+                task_id: manual_child_id,
+                agent_id: None,
+                principal_id: None,
+                squad_id: None,
+                project_id: None,
+                parent_id: Some(String::new()),
+                stage: None,
+            },
+        ))
+        .unwrap();
+    let recompleted = h.kernel.export_world();
+    assert_eq!(recompleted.task(&parent_id).unwrap().status, "done");
+    assert!(recompleted
+        .task_plan_auto_completed_parent_ids
+        .contains(&parent_id));
 }
 
 #[test]
