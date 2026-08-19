@@ -55,6 +55,75 @@ pub struct AuthorizedQuery {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeKind {
+    Task,
+    Agent,
+    Contract,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeRef {
+    pub kind: NodeKind,
+    pub id: String,
+}
+
+impl NodeRef {
+    pub fn task(id: impl Into<String>) -> Self {
+        Self {
+            kind: NodeKind::Task,
+            id: id.into(),
+        }
+    }
+
+    pub fn agent(id: impl Into<String>) -> Self {
+        Self {
+            kind: NodeKind::Agent,
+            id: id.into(),
+        }
+    }
+
+    pub fn contract(id: impl Into<String>) -> Self {
+        Self {
+            kind: NodeKind::Contract,
+            id: id.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphEdgeKind {
+    Precedence,
+    #[default]
+    Consumes,
+    AssignedTo,
+    Produces,
+    RequiresApproval,
+    Authority,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphEdgeState {
+    Active,
+    Stale,
+    PendingValidation,
+    Rejected,
+    Superseded,
+}
+
+impl GraphEdgeState {
+    pub fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+
+    pub fn blocks_consumer(&self) -> bool {
+        !matches!(self, Self::Active | Self::Superseded)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum Command {
     CreateWorkspace {
@@ -292,12 +361,29 @@ pub enum Command {
     },
     DeclareDependency {
         workspace_id: String,
+        #[serde(default)]
+        source: Option<NodeRef>,
+        #[serde(default)]
+        target: Option<NodeRef>,
+        /// Legacy consumer id (`target`); prefer `source` / `target`.
+        #[serde(default)]
         from_id: String,
+        /// Legacy producer id (`source`); prefer `source` / `target`.
+        #[serde(default)]
         to_id: String,
+        #[serde(default)]
+        kind: GraphEdgeKind,
         entity: String,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        origin_run_id: Option<String>,
+        #[serde(default)]
+        selector_path: Option<String>,
     },
     ReaffirmDependency {
         dependency_id: String,
+        expected_generation: u64,
     },
     RemoveDependency {
         dependency_id: String,
@@ -573,6 +659,7 @@ pub enum Query {
     Memory { workspace_id: String },
     Contracts { workspace_id: String },
     Dependencies { workspace_id: String },
+    GraphSnapshot { workspace_id: String },
     Conflicts { workspace_id: String },
     Runs { workspace_id: String },
     Run { run_id: String },
@@ -649,6 +736,15 @@ pub enum View {
     },
     Dependencies {
         items: Vec<DependencyView>,
+    },
+    GraphSnapshot {
+        workspace_id: String,
+        revision: u64,
+        event_cursor: u64,
+        nodes: Vec<GraphNodeView>,
+        edges: Vec<GraphEdgeView>,
+        materializations: Vec<NodeMaterializationView>,
+        health: GraphHealthView,
     },
     Conflicts {
         items: Vec<ConflictView>,
@@ -881,10 +977,92 @@ pub struct ContractView {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DependencyView {
     pub id: String,
-    pub from_id: String,
-    pub to_id: String,
+    pub source: NodeRef,
+    pub target: NodeRef,
     pub entity: String,
+    pub kind: GraphEdgeKind,
+    pub state: GraphEdgeState,
+    pub generation: u64,
+    #[serde(default)]
+    pub origin_run_id: Option<String>,
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub selector_path: Option<String>,
+    #[serde(default)]
+    pub observed_version: Option<u64>,
+    #[serde(default)]
+    pub current_version: Option<u64>,
+    /// Compatibility: consumer id (`target`).
+    pub from_id: String,
+    /// Compatibility: producer id (`source`).
+    pub to_id: String,
     pub valid: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphNodeView {
+    pub id: String,
+    pub kind: NodeKind,
+    pub title: String,
+    pub status: String,
+    pub workspace_id: String,
+    #[serde(default)]
+    pub subtitle: String,
+    #[serde(default)]
+    pub assignee_agent_id: Option<String>,
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
+    #[serde(default)]
+    pub replan: bool,
+    #[serde(default)]
+    pub harness: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphEdgeView {
+    pub id: String,
+    pub workspace_id: String,
+    pub source: NodeRef,
+    pub target: NodeRef,
+    pub kind: GraphEdgeKind,
+    pub entity: String,
+    pub state: GraphEdgeState,
+    pub generation: u64,
+    #[serde(default)]
+    pub origin_run_id: Option<String>,
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub source_event: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub selector_path: Option<String>,
+    #[serde(default)]
+    pub observed_version: Option<u64>,
+    #[serde(default)]
+    pub current_version: Option<u64>,
+    pub valid: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NodeMaterializationView {
+    pub node: NodeRef,
+    pub workspace_id: String,
+    pub state: GraphEdgeState,
+    pub artifact_revision: u64,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphHealthView {
+    pub consistent: bool,
+    pub lag: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

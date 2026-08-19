@@ -10,19 +10,21 @@ import {
 } from "../features/graph/graph-commands";
 
 describe("graph inspector commands", () => {
-  it("maps a selected stale dependency edge to ReaffirmDependency", () => {
+  it("maps a selected stale dependency edge to ReaffirmDependency with generation", () => {
     expect(
       reaffirmCommandForStaleEdge({
         edgeId: "dep:dep_1",
         stale: true,
+        generation: 2,
       }),
-    ).toEqual({ type: "ReaffirmDependency", dependency_id: "dep_1" });
+    ).toEqual({ type: "ReaffirmDependency", dependency_id: "dep_1", expected_generation: 2 });
   });
 
-  it("does not reaffirm assigned, blocker, or valid edges", () => {
-    expect(reaffirmCommandForStaleEdge({ edgeId: "dep:dep_1", stale: false })).toBeNull();
-    expect(reaffirmCommandForStaleEdge({ edgeId: "blocker:task_api:task_ui", stale: true })).toBeNull();
-    expect(reaffirmCommandForStaleEdge({ edgeId: "assigned:agent:task", stale: true })).toBeNull();
+  it("does not reaffirm assigned, blocker, valid, or generation-less edges", () => {
+    expect(reaffirmCommandForStaleEdge({ edgeId: "dep:dep_1", stale: false, generation: 2 })).toBeNull();
+    expect(reaffirmCommandForStaleEdge({ edgeId: "blocker:task_api:task_ui", stale: true, generation: 2 })).toBeNull();
+    expect(reaffirmCommandForStaleEdge({ edgeId: "assigned:agent:task", stale: true, generation: 2 })).toBeNull();
+    expect(reaffirmCommandForStaleEdge({ edgeId: "dep:dep_1", stale: true })).toBeNull();
   });
 
   it("removes only kernel dependency edges", () => {
@@ -34,12 +36,12 @@ describe("graph inspector commands", () => {
     expect(dependencyIdFromGraphEdgeId("dep:")).toBeNull();
   });
 
-  it("declares a dependency from the selected task", () => {
-    expect(declareDependencyCommand("ws_1", "task_ui", "task_api", "  ")).toEqual({
+  it("declares a dependency from upstream source to the selected target", () => {
+    expect(declareDependencyCommand("ws_1", "task_api", "task_ui", "  ")).toEqual({
       type: "DeclareDependency",
       workspace_id: "ws_1",
-      from_id: "task_ui",
-      to_id: "task_api",
+      source: { kind: "task", id: "task_api" },
+      target: { kind: "task", id: "task_ui" },
       entity: "repo",
     });
   });

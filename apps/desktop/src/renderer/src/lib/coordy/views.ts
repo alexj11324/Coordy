@@ -10,6 +10,7 @@ import type {
   ConflictView,
   ContractView,
   DependencyView,
+  GraphSnapshotView,
   GrantView,
   HealthView,
   InboxView,
@@ -65,6 +66,10 @@ export function asContracts(view: View | undefined): ContractView[] {
 
 export function asDependencies(view: View | undefined): DependencyView[] {
   return view?.type === "Dependencies" ? view.items : [];
+}
+
+export function asGraphSnapshot(view: View | undefined): GraphSnapshotView | null {
+  return view?.type === "GraphSnapshot" ? view : null;
 }
 
 export function asConflicts(view: View | undefined): ConflictView[] {

@@ -1,4 +1,4 @@
-import type { Command } from "@coordy/protocol";
+import type { Command, NodeKind } from "@coordy/protocol";
 
 export function dependencyIdFromGraphEdgeId(edgeId: string): string | null {
   if (!edgeId.startsWith("dep:")) return null;
@@ -9,11 +9,13 @@ export function dependencyIdFromGraphEdgeId(edgeId: string): string | null {
 export function reaffirmCommandForStaleEdge(input: {
   edgeId: string;
   stale?: boolean;
+  generation?: number;
 }): Command | null {
   if (!input.stale) return null;
   const dependency_id = dependencyIdFromGraphEdgeId(input.edgeId);
   if (!dependency_id) return null;
-  return { type: "ReaffirmDependency", dependency_id };
+  if (input.generation == null) return null;
+  return { type: "ReaffirmDependency", dependency_id, expected_generation: input.generation };
 }
 
 export function removeCommandForDependencyEdge(edgeId: string): Command | null {
@@ -24,15 +26,17 @@ export function removeCommandForDependencyEdge(edgeId: string): Command | null {
 
 export function declareDependencyCommand(
   workspaceId: string,
-  fromId: string,
-  toId: string,
+  sourceId: string,
+  targetId: string,
   entity: string,
+  sourceKind: NodeKind = "task",
+  targetKind: NodeKind = "task",
 ): Command {
   return {
     type: "DeclareDependency",
     workspace_id: workspaceId,
-    from_id: fromId,
-    to_id: toId,
+    source: { kind: sourceKind, id: sourceId },
+    target: { kind: targetKind, id: targetId },
     entity: entity.trim() || "repo",
   };
 }

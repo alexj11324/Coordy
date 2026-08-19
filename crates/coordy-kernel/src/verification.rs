@@ -1,5 +1,5 @@
 use coordy_advisor::{StateAssessment, StateDiffItem};
-use coordy_protocol::CoordyError;
+use coordy_protocol::{CoordyError, GraphEdgeKind, GraphEdgeState};
 
 use crate::world::{Commitment, World};
 
@@ -200,29 +200,58 @@ pub fn invalidate_dependencies(
     changed_entity: &str,
     changer_id: &str,
 ) -> Vec<String> {
+    let current_version = world.node_artifacts.get(changer_id).copied();
     let mut consumers = Vec::new();
     let mut conflicts = Vec::new();
+    let mut invalidated = Vec::new();
     for dep in world.dependencies.iter_mut() {
-        if dep.entity == changed_entity
-            && dep.to_id == changer_id
-            && dep.from_id != changer_id
-            && dep.valid
-        {
-            dep.valid = false;
-            consumers.push(dep.from_id.clone());
-            conflicts.push(crate::world::Conflict {
-                id: crate::ids::new("conflict"),
-                workspace_id: dep.workspace_id.clone(),
-                summary: format!("dependency {} invalidated by {}", dep.id, changer_id),
-                status: "open".into(),
-            });
+        if dep.kind != GraphEdgeKind::Consumes {
+            continue;
         }
+        if dep.source.id != changer_id {
+            continue;
+        }
+        if dep.state == GraphEdgeState::Superseded {
+            continue;
+        }
+        dep.state = GraphEdgeState::Stale;
+        dep.generation = dep.generation.saturating_add(1);
+        dep.current_version = current_version;
+        dep.source_event = Some(format!("invalidate:{changer_id}"));
+        consumers.push(dep.target.id.clone());
+        invalidated.push((
+            dep.id.clone(),
+            dep.workspace_id.clone(),
+            dep.target.id.clone(),
+            dep.generation,
+        ));
+        conflicts.push(crate::world::Conflict {
+            id: crate::ids::new("conflict"),
+            workspace_id: dep.workspace_id.clone(),
+            summary: format!("dependency {} invalidated by {}", dep.id, changer_id),
+            status: "open".into(),
+        });
     }
     world.conflicts.extend(conflicts);
+    for (edge_id, workspace_id, node_id, generation) in invalidated {
+        crate::product::record_graph_event(
+            world,
+            &workspace_id,
+            "invalidate",
+            Some(&edge_id),
+            Some(&node_id),
+            serde_json::json!({
+                "changer": changer_id,
+                "entity": changed_entity,
+                "generation": generation,
+            }),
+        );
+    }
     consumers.sort();
     consumers.dedup();
     for task_id in &consumers {
         crate::product::apply_stale_dependency_hold(world, task_id);
+        crate::product::stale_done_materialization(world, task_id);
     }
     consumers
 }
