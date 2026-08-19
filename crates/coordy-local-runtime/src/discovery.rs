@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use coordy_harness::discover;
+use coordy_harness::{canonical_harness_id, discover};
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, CoordyError, DiscoveredAgentView,
     ImportAgentsResult, Query, View,
@@ -124,7 +124,10 @@ pub async fn import_agents(
         }
     }
     for agent in wanted {
-        if existing.iter().any(|item| item.harness == agent.id) {
+        if existing
+            .iter()
+            .any(|item| canonical_harness_id(&item.harness) == canonical_harness_id(&agent.id))
+        {
             skipped.push(agent.id.clone());
             continue;
         }

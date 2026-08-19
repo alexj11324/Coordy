@@ -1182,6 +1182,9 @@ pub struct DiscoveredAgentView {
     pub command: String,
     pub source: String,
     pub version: Option<String>,
+    /// Native CLI family (`claude`, `codex`, …) or `acp` / `stub`.
+    #[serde(default)]
+    pub protocol_family: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

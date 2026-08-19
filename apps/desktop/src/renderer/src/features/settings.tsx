@@ -400,9 +400,9 @@ function SettingsPane({
       );
     case "mcp":
       return (
-        <Pane title="MCP" description="协议字段 agent.mcp_servers 可保存服务器名；当前 ACP session/new 的 mcpServers 固定为空数组，spawn 不会注入该字段。">
+        <Pane title="MCP" description="原生 CLI harness 读取各自的 MCP 配置。ACP 家族的 session/new 仍发送空的 mcpServers，Coordy 不注入、不托管 MCP。">
           <p className="text-sm text-muted-foreground">
-            因此本页不提供可保存的 MCP 配置。Claude Code、Codex 等 harness 仍按其原生配置加载 MCP。
+            因此本页不提供可保存的 MCP 配置。请在对应 CLI 的配置文件中管理服务器，例如 Claude Code 的 ~/.claude.json、Codex 的 ~/.codex/config.toml。
           </p>
         </Pane>
       );

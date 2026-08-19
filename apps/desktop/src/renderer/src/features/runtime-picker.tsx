@@ -1,6 +1,6 @@
 import { Badge } from "@coordy/ui";
 import type { DiscoveredAgentView } from "@coordy/protocol";
-import { presenceLabel, presenceLampTone } from "../lib/coordy/labels";
+import { presenceLabel, presenceLampTone, harnessIdsMatch, runtimeSubtitle } from "../lib/coordy/labels";
 import { ProviderLogo } from "./provider-logo";
 import { StatusLamp } from "./status-lamp";
 
@@ -23,7 +23,7 @@ export function RuntimePicker({
   return (
     <div className="grid gap-2">
       {items.map((item) => {
-        const selected = value === item.id;
+        const selected = harnessIdsMatch(value, item.id);
         const presence = item.installed ? "online" : "offline";
         return (
           <button
@@ -40,7 +40,7 @@ export function RuntimePicker({
                 <ProviderLogo provider={item.id} className="size-4" />
                 {item.name}
               </p>
-              <p className="truncate text-xs text-muted-foreground">本机</p>
+              <p className="truncate text-xs text-muted-foreground">{runtimeSubtitle(item)}</p>
             </div>
             <Badge variant={item.installed ? "outline" : "secondary"}>
               <StatusLamp tone={presenceLampTone(presence)} />

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use coordy_harness::{detect_on_path, spawn_command};
+use coordy_harness::{canonical_harness_id, detect_on_path, spawn_command};
 use coordy_kernel::{read_jsonl, Ports};
 use coordy_protocol::{CoordyError, HarnessEvent};
 
@@ -71,12 +71,16 @@ impl Ports for GitPorts {
         _run_id: &str,
         _model: &str,
     ) -> Result<(), CoordyError> {
-        if detect_on_path().iter().all(|d| d.kind != kind) {
+        let kind = canonical_harness_id(kind);
+        if detect_on_path()
+            .iter()
+            .all(|d| canonical_harness_id(&d.kind) != kind)
+        {
             return Err(CoordyError::unavailable(format!(
                 "{kind} is not installed; use JSONL replay or install the harness"
             )));
         }
-        let mut cmd = spawn_command(kind, worktree, prompt)?;
+        let mut cmd = spawn_command(kind, worktree, prompt, _model)?;
         let _child = cmd
             .spawn()
             .map_err(|e| CoordyError::unavailable(format!("spawn {kind}: {e}")))?;

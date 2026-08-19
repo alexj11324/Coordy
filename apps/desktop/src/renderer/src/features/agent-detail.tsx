@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { formatAgentAvatar } from "../lib/coordy/agent-avatar";
-import { agentDisplayName, listableAgents, pickerRuntimes } from "../lib/coordy/labels";
+import { agentDisplayName, canonicalHarnessId, listableAgents, pickerRuntimes } from "../lib/coordy/labels";
 import { asAgents } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { ModelDropdown } from "./create-agent/agent-create-form";
@@ -53,7 +53,7 @@ export function AgentDetailPage() {
     setName(agent.name);
     setDescription(agent.description ?? "");
     setInstructions(agent.instructions ?? "");
-    setHarness(agent.harness);
+    setHarness(canonicalHarnessId(agent.harness));
     setModel(agent.model ?? "");
     setAvatar(agent.avatar ?? "");
   }, [agent]);

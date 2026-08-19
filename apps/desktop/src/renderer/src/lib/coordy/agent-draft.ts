@@ -1,4 +1,5 @@
 import { newAgentAvatarRef } from "./agent-avatar";
+import { canonicalHarnessId } from "./labels";
 
 export const BUILDER_STARTER_PROMPTS = [
   "审查前端 Pull Request",
@@ -73,15 +74,13 @@ export function modelSelectValue(model: string): string {
 export type HarnessModelOption = { id: string; label: string };
 
 export function modelsForHarness(harness: string): HarnessModelOption[] {
-  switch (harness) {
-    case "claude-acp":
+  switch (canonicalHarnessId(harness)) {
     case "claude":
       return [
         { id: "claude-opus-4-6", label: "Opus 4.6" },
         { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
         { id: "claude-haiku-4-5", label: "Haiku 4.5" },
       ];
-    case "codex-acp":
     case "codex":
       return [
         { id: "gpt-5.4", label: "GPT-5.4" },

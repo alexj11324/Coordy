@@ -8,7 +8,7 @@ import {
   readManualDraft,
   writeManualDraft,
 } from "../../lib/coordy/builder-sessions";
-import { pickerRuntimes, runtimeChipLabel } from "../../lib/coordy/labels";
+import { catalogItemForHarness, harnessIdsMatch, pickerRuntimes, runtimeChipLabel } from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
 import { AgentConfigurationPanel, CreateAgentFooter } from "./agent-create-form";
@@ -33,17 +33,15 @@ export function ManualCreateAgentPage() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const runtimes = useMemo(() => pickerRuntimes(catalog.data, draft.harness), [catalog.data, draft.harness]);
-  const selected = runtimes.find((item) => item.id === draft.harness);
+  const selected = runtimes.find((item) => harnessIdsMatch(item.id, draft.harness));
 
   useEffect(() => {
     if (!workspaceId || hydrated || catalog.isLoading) return;
     const store = browserStore();
     const saved = store ? readManualDraft(workspaceId, store) : null;
     const first = pickerRuntimes(catalog.data)[0]?.id ?? "";
-    const harness =
-      saved?.harness && pickerRuntimes(catalog.data, saved.harness).some((item) => item.id === saved.harness)
-        ? saved.harness
-        : first;
+    const matched = saved?.harness ? catalogItemForHarness(catalog.data, saved.harness) : undefined;
+    const harness = matched?.id || first;
     const next = { ...(saved ?? emptyAgentDraft()), harness };
     if (!next.avatar) next.avatar = emptyAgentDraft().avatar;
     setDraft(next);

@@ -8,7 +8,7 @@ Electron renderer  →  preload bridge  →  Electron main  →  Unix socket / n
 
 The Python S0 research harness is archived at [`research/s0-validation/`](research/s0-validation/).
 
-Product path: rewrite Multica’s desktop experience on Coordy’s own kernel protocol (`submit` / `view` / `watch`) — do not clone Multica source. On launch, Coordy discovers ACP agents from PATH plus the [ACP Registry](https://agentclientprotocol.com/get-started/registry). Paste your own API key in Settings (BYOK, 0600 file, never SQLite). Gaps vs Multica: [`TODO.md`](TODO.md). If Codex/Claude is not installed, `coordy acp-stub` is the demo agent.
+Product path: rewrite Multica’s desktop experience on Coordy’s own kernel protocol (`submit` / `view` / `watch`) — do not clone Multica source. On launch, Coordy discovers installed CLIs from PATH and talks to each over **that CLI’s native headless protocol** (Claude `stream-json`, Codex `exec --json`, Copilot `-p`, Cursor `--print`, …). ACP is used only for `coordy acp-stub` and agents that exist solely in the [ACP Registry](https://agentclientprotocol.com/get-started/registry). Paste your own API key in Settings (BYOK, 0600 file, never SQLite). Gaps vs Multica: [`TODO.md`](TODO.md). If Codex/Claude is not installed, `coordy acp-stub` is the demo agent.
 
 ## Develop
 

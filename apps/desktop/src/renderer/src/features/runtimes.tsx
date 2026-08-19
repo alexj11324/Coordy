@@ -16,7 +16,7 @@ import {
 } from "@coordy/ui";
 import { Monitor, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { presenceLabel, presenceLampTone } from "../lib/coordy/labels";
+import { presenceLabel, presenceLampTone, runtimeSubtitle } from "../lib/coordy/labels";
 import { ProviderLogo } from "./provider-logo";
 import { StatusLamp } from "./status-lamp";
 
@@ -32,15 +32,7 @@ export function RuntimesPage() {
     queryFn: () => window.coordy.getAppInfo(),
   });
   const items = catalog.data ?? [];
-  const known = new Set([
-    "claude-acp",
-    "codex-acp",
-    "gemini",
-    "github-copilot-cli",
-    "opencode",
-    "cursor",
-    "coordy-stub",
-  ]);
+  const known = new Set(["claude", "codex", "gemini", "copilot", "opencode", "cursor", "coordy-stub"]);
   const installed = items.filter((item) => item.installed);
   const missing = items.filter((item) => !item.installed && known.has(item.id));
 
@@ -90,7 +82,7 @@ export function RuntimesPage() {
                 </Badge>
               </CardTitle>
               <CardDescription>
-                本机
+                {runtimeSubtitle(item)}
                 {item.version ? ` · ${item.version}` : ""}
               </CardDescription>
               <CardAction>
@@ -117,7 +109,7 @@ export function RuntimesPage() {
                     {presenceLabel("offline")}
                   </Badge>
                 </CardTitle>
-                <CardDescription>本机</CardDescription>
+                <CardDescription>{runtimeSubtitle(item)}</CardDescription>
               </CardHeader>
             </Card>
           ))}

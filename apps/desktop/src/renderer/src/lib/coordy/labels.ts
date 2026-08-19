@@ -26,17 +26,43 @@ export function createActionLabel(noun: string): string {
 }
 
 /** Map Coordy harness / ACP ids onto Multica-style provider keys. */
-export function providerKey(harness: string): string {
+export function canonicalHarnessId(harness: string): string {
   switch (harness) {
     case "claude-acp":
-    case "claude":
+    case "claude_code":
+    case "claude-code":
       return "claude";
     case "codex-acp":
+      return "codex";
+    case "github-copilot-cli":
+      return "copilot";
+    case "gemini-cli":
+      return "gemini";
+    default:
+      return harness;
+  }
+}
+
+export function harnessIdsMatch(a: string, b: string): boolean {
+  return canonicalHarnessId(a) === canonicalHarnessId(b);
+}
+
+export function catalogItemForHarness(
+  catalog: DiscoveredAgentView[] | undefined,
+  harness: string,
+): DiscoveredAgentView | undefined {
+  const want = canonicalHarnessId(harness);
+  return catalog?.find((item) => canonicalHarnessId(item.id) === want);
+}
+
+export function providerKey(harness: string): string {
+  switch (canonicalHarnessId(harness)) {
+    case "claude":
+      return "claude";
     case "codex":
       return "codex";
     case "gemini":
       return "gemini";
-    case "github-copilot-cli":
     case "copilot":
       return "copilot";
     case "opencode":
@@ -52,14 +78,14 @@ export function providerKey(harness: string): string {
 }
 
 export function harnessLabel(harness: string): string {
-  switch (harness) {
-    case "claude-acp":
+  switch (canonicalHarnessId(harness)) {
+    case "claude":
       return "Claude Code";
-    case "codex-acp":
+    case "codex":
       return "Codex";
     case "gemini":
       return "Gemini CLI";
-    case "github-copilot-cli":
+    case "copilot":
       return "GitHub Copilot";
     case "opencode":
       return "OpenCode";
@@ -75,6 +101,12 @@ export function harnessLabel(harness: string): string {
   }
 }
 
+export function protocolFamilyLabel(family?: string | null): string {
+  if (family === "acp" || family === "stub") return "ACP";
+  if (family) return "原生 CLI";
+  return "";
+}
+
 export function agentDisplayName(
   agent: { name: string; harness: string },
   catalog?: DiscoveredAgentView[],
@@ -82,7 +114,7 @@ export function agentDisplayName(
   if (agent.name.trim() && agent.name !== "助手" && agent.name !== "ACP") {
     return agent.name;
   }
-  const discovered = catalog?.find((item) => item.id === agent.harness);
+  const discovered = catalogItemForHarness(catalog, agent.harness);
   if (discovered?.name) return discovered.name;
   if (isPlaceholderHarness(agent.harness)) return harnessLabel(agent.harness);
   return harnessLabel(agent.harness);
@@ -93,7 +125,7 @@ export function agentSubtitle(
   catalog?: DiscoveredAgentView[],
 ): string {
   if (agent.description?.trim()) return agent.description.trim();
-  const discovered = catalog?.find((item) => item.id === agent.harness);
+  const discovered = catalogItemForHarness(catalog, agent.harness);
   if (isPlaceholderHarness(agent.harness)) {
     return "旧数据，无法对应具体工具";
   }
@@ -110,7 +142,7 @@ export function agentPresence(
 ): AgentPresence {
   if (isPlaceholderHarness(agent.harness)) return "unknown";
   if (agent.harness === "coordy-stub") return "demo";
-  const item = catalog?.find((entry) => entry.id === agent.harness);
+  const item = catalogItemForHarness(catalog, agent.harness);
   if (item?.installed) return "online";
   return "offline";
 }
@@ -141,8 +173,8 @@ export function pickerRuntimes(
   selectedId?: string,
 ): DiscoveredAgentView[] {
   const installed = selectableRuntimes(catalog);
-  if (!selectedId || installed.some((item) => item.id === selectedId)) return installed;
-  const extra = catalog?.find((item) => item.id === selectedId);
+  if (!selectedId || installed.some((item) => harnessIdsMatch(item.id, selectedId))) return installed;
+  const extra = catalogItemForHarness(catalog, selectedId);
   return extra ? [extra, ...installed] : installed;
 }
 
@@ -160,8 +192,9 @@ export function runtimeChipLabel(item: { id: string; name: string }, os?: string
   return host ? `${name} (${host})` : name;
 }
 
-export function runtimeSubtitle(_item?: { command?: string }): string {
-  return "本机";
+export function runtimeSubtitle(item?: { command?: string; protocol_family?: string | null }): string {
+  const family = protocolFamilyLabel(item?.protocol_family);
+  return family ? `本机 · ${family}` : "本机";
 }
 
 export function healthLabel(status: string): string {

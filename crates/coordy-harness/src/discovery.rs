@@ -1,5 +1,5 @@
-//! Discover ACP agents from PATH plus an optional registry.json snapshot.
-//! Does not talk to the kernel. Network fetch lives in the local runtime.
+//! Discover native CLI harnesses from PATH, plus ACP-registry agents that are
+//! not covered by a builtin protocol family. Does not talk to the kernel.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use coordy_protocol::{CoordyError, DiscoveredAgentView};
+
+use crate::protocol::{
+    canonical_harness_id, display_args, is_builtin_id, ProtocolFamily, BUILTINS,
+};
 
 pub fn suggested_acp_stub_command() -> Option<String> {
     if let Ok(exe) = std::env::current_exe() {
@@ -27,22 +31,8 @@ pub fn split_command(raw: &str) -> Result<(String, Vec<String>), CoordyError> {
     let bin = parts
         .next()
         .ok_or_else(|| CoordyError::invalid("empty ACP command"))?;
-    Ok((bin.into(), parts.map(str::to_string).collect()))
+    Ok((bin.into(), parts.map(|s| s.to_string()).collect()))
 }
-
-const REGISTRY_ALIASES: &[(&str, &str, &[&str], &[&str])] = &[
-    ("claude-acp", "Claude", &["claude", "claude-code"], &["acp"]),
-    ("codex-acp", "Codex", &["codex"], &["acp"]),
-    ("gemini", "Gemini CLI", &["gemini"], &["--acp"]),
-    (
-        "github-copilot-cli",
-        "GitHub Copilot",
-        &["copilot"],
-        &["--acp"],
-    ),
-    ("opencode", "OpenCode", &["opencode"], &["acp"]),
-    ("cursor", "Cursor", &["cursor-agent", "agent"], &["acp"]),
-];
 
 #[derive(Debug, Deserialize)]
 struct RegistryFile {
@@ -137,37 +127,73 @@ pub fn which_bin(name: &str) -> Option<PathBuf> {
     None
 }
 
+fn view(
+    id: impl Into<String>,
+    name: impl Into<String>,
+    installed: bool,
+    command: impl Into<String>,
+    source: impl Into<String>,
+    version: Option<String>,
+    family: ProtocolFamily,
+) -> DiscoveredAgentView {
+    DiscoveredAgentView {
+        id: id.into(),
+        name: name.into(),
+        installed,
+        command: command.into(),
+        source: source.into(),
+        version,
+        protocol_family: family.as_str().to_string(),
+    }
+}
+
 pub fn discover(registry_json: Option<&str>) -> Vec<DiscoveredAgentView> {
     let mut by_id: BTreeMap<String, DiscoveredAgentView> = BTreeMap::new();
 
     if let Some(stub) = suggested_acp_stub_command() {
         by_id.insert(
             "coordy-stub".into(),
-            DiscoveredAgentView {
-                id: "coordy-stub".into(),
-                name: "Coordy 演示".into(),
-                installed: true,
-                command: stub,
-                source: "stub".into(),
-                version: None,
-            },
+            view(
+                "coordy-stub",
+                "Coordy 演示",
+                true,
+                stub,
+                "stub",
+                None,
+                ProtocolFamily::Stub,
+            ),
         );
     }
 
-    for (id, name, bins, args) in REGISTRY_ALIASES {
-        if let Some(bin) = bins.iter().find_map(|b| which_bin(b)) {
-            let mut parts = vec![bin.display().to_string()];
-            parts.extend(args.iter().map(|s| (*s).to_string()));
+    for spec in BUILTINS {
+        let command_tail = display_args(spec.family).join(" ");
+        if let Some(bin) = spec.bins.iter().find_map(|name| which_bin(name)) {
+            let command = if command_tail.is_empty() {
+                bin.display().to_string()
+            } else {
+                format!("{} {command_tail}", bin.display())
+            };
             by_id.insert(
-                (*id).into(),
-                DiscoveredAgentView {
-                    id: (*id).into(),
-                    name: (*name).into(),
-                    installed: true,
-                    command: parts.join(" "),
-                    source: "path".into(),
-                    version: None,
-                },
+                spec.id.into(),
+                view(spec.id, spec.name, true, command, "path", None, spec.family),
+            );
+        } else {
+            let hint = if command_tail.is_empty() {
+                spec.bins[0].to_string()
+            } else {
+                format!("{} {command_tail}", spec.bins[0])
+            };
+            by_id.insert(
+                spec.id.into(),
+                view(
+                    spec.id,
+                    spec.name,
+                    false,
+                    hint,
+                    "builtin",
+                    None,
+                    spec.family,
+                ),
             );
         }
     }
@@ -175,31 +201,48 @@ pub fn discover(registry_json: Option<&str>) -> Vec<DiscoveredAgentView> {
     if let Some(text) = registry_json {
         if let Ok(file) = serde_json::from_str::<RegistryFile>(text) {
             for agent in file.agents {
+                if is_builtin_id(&agent.id) {
+                    let canon = canonical_harness_id(&agent.id).to_string();
+                    if let Some(entry) = by_id.get_mut(&canon) {
+                        if !agent.name.is_empty()
+                            && entry.source != "path"
+                            && entry.source != "stub"
+                        {
+                            entry.name = agent.name;
+                        }
+                        entry.version = agent.version.or(entry.version.clone());
+                    }
+                    continue;
+                }
                 let fallback = registry_launch(&agent);
-                let entry = by_id
-                    .entry(agent.id.clone())
-                    .or_insert_with(|| DiscoveredAgentView {
-                        id: agent.id.clone(),
-                        name: if agent.name.is_empty() {
+                let entry = by_id.entry(agent.id.clone()).or_insert_with(|| {
+                    view(
+                        agent.id.clone(),
+                        if agent.name.is_empty() {
                             agent.id.clone()
                         } else {
                             agent.name.clone()
                         },
-                        installed: false,
-                        command: fallback.clone().unwrap_or_default(),
-                        source: "registry".into(),
-                        version: agent.version.clone(),
-                    });
-                if entry.name.is_empty() || entry.source == "path" || entry.source == "stub" {
-                    if !agent.name.is_empty() {
-                        entry.name = agent.name;
-                    }
+                        false,
+                        fallback.clone().unwrap_or_default(),
+                        "registry",
+                        agent.version.clone(),
+                        ProtocolFamily::Acp,
+                    )
+                });
+                if !agent.name.is_empty()
+                    && entry.source != "path"
+                    && entry.source != "stub"
+                    && entry.source != "builtin"
+                {
+                    entry.name = agent.name;
                 }
                 entry.version = agent.version.or(entry.version.clone());
                 if !entry.installed {
                     if let Some(cmd) = fallback {
                         entry.command = cmd;
                         entry.source = "registry".into();
+                        entry.protocol_family = ProtocolFamily::Acp.as_str().to_string();
                     }
                 }
             }
@@ -263,7 +306,7 @@ pub fn resolve_launch(
     kind: &str,
     configured: Option<&str>,
     registry_json: Option<&str>,
-) -> Result<(String, Vec<String>), coordy_protocol::CoordyError> {
+) -> Result<(String, Vec<String>), CoordyError> {
     let kind = kind.trim();
     if (kind.is_empty() || kind == "acp")
         && configured
@@ -274,8 +317,12 @@ pub fn resolve_launch(
         return split_command(configured.unwrap());
     }
     let catalog = discover(registry_json);
+    let want = canonical_harness_id(kind);
     if !kind.is_empty() && kind != "acp" {
-        if let Some(agent) = catalog.iter().find(|a| a.id == kind) {
+        if let Some(agent) = catalog
+            .iter()
+            .find(|a| a.id == kind || canonical_harness_id(&a.id) == want)
+        {
             return split_command(&agent.command);
         }
         return Err(CoordyError::unavailable(format!(
@@ -294,7 +341,7 @@ pub fn resolve_launch(
     if let Some(raw) = configured.map(str::trim).filter(|s| !s.is_empty()) {
         return split_command(raw);
     }
-    Err(coordy_protocol::CoordyError::unavailable(
-        "no ACP agent discovered on PATH and no registry launch command available",
+    Err(CoordyError::unavailable(
+        "no harness discovered on PATH and no registry launch command available",
     ))
 }

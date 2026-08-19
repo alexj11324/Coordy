@@ -3,6 +3,8 @@
 mod acp;
 mod children;
 mod discovery;
+mod native;
+mod protocol;
 
 pub use acp::{
     drive_session, map_session_update, resolve_acp_command, serve_fake_acp, spawn_acp_session,
@@ -12,9 +14,16 @@ pub use children::{kill_child, register_child, unregister_child};
 pub use discovery::{
     discover, extra_bin_dirs, resolve_launch, suggested_acp_stub_command, which_bin,
 };
+pub use native::{parse_native_line, spawn_native_session};
+pub use protocol::{
+    builtin, canonical_harness_id, display_args, native_launch_args, protocol_family,
+    BuiltinHarness, ProtocolFamily, BUILTINS,
+};
 
 use coordy_protocol::{CoordyError, HarnessEvent, RunSource};
 use serde::Deserialize;
+
+use crate::protocol::resolve_builtin_bin;
 
 #[derive(Clone, Debug, Default)]
 pub struct SecretEnv {
@@ -50,53 +59,35 @@ pub struct DetectedHarness {
 
 pub fn detect_on_path() -> Vec<DetectedHarness> {
     let mut found = Vec::new();
-    for (kind, names) in [
-        ("acp", &["codex", "claude", "gemini", "copilot"][..]),
-        ("codex", &["codex"][..]),
-        ("claude_code", &["claude", "claude-code"][..]),
-        ("opencode", &["opencode"][..]),
-    ] {
-        for name in names {
-            if which(name) {
-                found.push(DetectedHarness {
-                    kind: kind.into(),
-                    binary: name.to_string(),
-                });
-                break;
-            }
+    for spec in BUILTINS {
+        if let Some(path) = spec.bins.iter().find_map(|name| which_bin(name)) {
+            found.push(DetectedHarness {
+                kind: spec.id.into(),
+                binary: path.display().to_string(),
+            });
         }
     }
     found
-}
-
-fn which(name: &str) -> bool {
-    crate::which_bin(name).is_some()
 }
 
 pub fn spawn_command(
     kind: &str,
     worktree: &str,
     prompt: &str,
+    model: &str,
 ) -> Result<std::process::Command, CoordyError> {
-    let detected = detect_on_path();
-    let bin = detected
-        .iter()
-        .find(|d| d.kind == kind)
-        .ok_or_else(|| CoordyError::unavailable(format!("{kind} is not installed")))?;
-    let mut cmd = std::process::Command::new(&bin.binary);
-    cmd.current_dir(worktree);
-    match kind {
-        "codex" => {
-            cmd.args(["exec", "--json", prompt]);
-        }
-        "claude_code" => {
-            cmd.args(["-p", prompt]);
-        }
-        "opencode" => {
-            cmd.args(["run", prompt]);
-        }
-        _ => return Err(CoordyError::invalid(format!("unknown harness {kind}"))),
+    let family = protocol_family(kind);
+    if family.uses_acp() {
+        return Err(CoordyError::invalid(format!(
+            "unknown native harness {kind}"
+        )));
     }
+    let bin = resolve_builtin_bin(kind).ok_or_else(|| {
+        CoordyError::unavailable(format!("{} is not installed", canonical_harness_id(kind)))
+    })?;
+    let mut cmd = std::process::Command::new(bin);
+    cmd.current_dir(worktree);
+    cmd.args(native_launch_args(family, prompt, model));
     Ok(cmd)
 }
 
@@ -148,7 +139,7 @@ pub fn source_kind(source: &RunSource) -> &'static str {
     match source {
         RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl",
         RunSource::Codex { .. } => "codex",
-        RunSource::ClaudeCode { .. } => "claude_code",
+        RunSource::ClaudeCode { .. } => "claude",
         RunSource::OpenCode { .. } => "opencode",
         RunSource::Acp { .. } => "acp",
     }

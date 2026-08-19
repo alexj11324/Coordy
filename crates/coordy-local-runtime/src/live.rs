@@ -3,8 +3,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 use coordy_harness::{
-    kill_child, parse_codex_jsonl_line, register_child, resolve_launch, spawn_acp_session,
-    spawn_command, unregister_child, SecretEnv,
+    kill_child, protocol_family, resolve_launch, spawn_acp_session, spawn_native_session, SecretEnv,
 };
 use coordy_kernel::Ports;
 use coordy_protocol::{CoordyError, HarnessEvent};
@@ -111,54 +110,20 @@ fn run_kind(
     run_id: &str,
     secrets: &SecretEnv,
     registry_json: Option<&str>,
-    mut emit: impl FnMut(HarnessEvent),
+    emit: impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
-    match kind {
-        "codex" | "claude_code" => {
-            let mut cmd = spawn_command(kind, worktree, prompt)?;
-            for (key, value) in secrets.env_pairs() {
-                cmd.env(key, value);
-            }
-            let child = cmd
-                .spawn()
-                .map_err(|e| CoordyError::unavailable(format!("run {kind}: {e}")))?;
-            register_child(run_id, child.id());
-            let output = child
-                .wait_with_output()
-                .map_err(|e| CoordyError::unavailable(format!("run {kind}: {e}")))?;
-            unregister_child(run_id);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut any = false;
-            for line in stdout.lines() {
-                if let Some(event) = parse_codex_jsonl_line(line) {
-                    any = true;
-                    emit(event);
-                }
-            }
-            if !any {
-                let text = if stdout.trim().is_empty() {
-                    String::from_utf8_lossy(&output.stderr).into_owned()
-                } else {
-                    stdout.into_owned()
-                };
-                if !text.trim().is_empty() {
-                    emit(HarnessEvent::Message {
-                        role: "assistant".into(),
-                        content: text,
-                    });
-                }
-            }
-            if !output.status.success() {
-                return Err(CoordyError::unavailable(format!(
-                    "{kind} exited {}",
-                    output.status
-                )));
-            }
-            Ok(())
-        }
-        _ => {
-            let (bin, args) = resolve_launch(kind, secrets.acp_command.as_deref(), registry_json)?;
-            spawn_acp_session(&bin, &args, worktree, prompt, model, secrets, Some(run_id), emit)
-        }
+    if protocol_family(kind).uses_acp() {
+        let (bin, args) = resolve_launch(kind, secrets.acp_command.as_deref(), registry_json)?;
+        return spawn_acp_session(
+            &bin,
+            &args,
+            worktree,
+            prompt,
+            model,
+            secrets,
+            Some(run_id),
+            emit,
+        );
     }
+    spawn_native_session(kind, worktree, prompt, model, secrets, Some(run_id), emit)
 }

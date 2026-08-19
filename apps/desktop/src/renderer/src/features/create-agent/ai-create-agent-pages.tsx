@@ -23,7 +23,7 @@ import {
   upsertBuilderSession,
   type BuilderSession,
 } from "../../lib/coordy/builder-sessions";
-import { pickerRuntimes, runtimeChipLabel, selectableRuntimes } from "../../lib/coordy/labels";
+import { pickerRuntimes, runtimeChipLabel, selectableRuntimes, harnessIdsMatch } from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
 import { AgentConfigurationPanel, CreateAgentFooter, HarnessDropdown, ModelDropdown } from "./agent-create-form";
@@ -47,7 +47,7 @@ export function AiCreateAgentPage() {
   const [error, setError] = useState<string | null>(null);
   const online = useMemo(() => selectableRuntimes(catalog.data), [catalog.data]);
   const runtimes = useMemo(() => pickerRuntimes(catalog.data, draft.harness), [catalog.data, draft.harness]);
-  const selected = runtimes.find((item) => item.id === draft.harness) ?? null;
+  const selected = runtimes.find((item) => harnessIdsMatch(item.id, draft.harness)) ?? null;
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -163,7 +163,7 @@ export function AiBuilderSessionPage() {
     () => pickerRuntimes(catalog.data, session?.draft.harness),
     [catalog.data, session?.draft.harness],
   );
-  const selected = runtimes.find((item) => item.id === session?.draft.harness);
+  const selected = runtimes.find((item) => harnessIdsMatch(item.id, session?.draft.harness ?? ""));
   const runtimeOnline = Boolean(selected?.installed);
 
   useEffect(() => {

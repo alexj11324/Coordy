@@ -495,6 +495,7 @@ export type DiscoveredAgentView = {
   command: string;
   source: string;
   version?: string | null;
+  protocol_family?: string | null;
 };
 export type ImportAgentsResult = { imported: string[]; skipped: string[] };
 export type DetectedHarnessView = { kind: string; binary: string };

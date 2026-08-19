@@ -21,7 +21,14 @@ import {
   readManualDraft,
   type BuilderSession,
 } from "../lib/coordy/builder-sessions";
-import { osShortLabel, runtimeChipLabel, runtimeSubtitle } from "../lib/coordy/labels";
+import {
+  catalogItemForHarness,
+  harnessIdsMatch,
+  osShortLabel,
+  pickerRuntimes,
+  runtimeChipLabel,
+  runtimeSubtitle,
+} from "../lib/coordy/labels";
 
 function session(partial: Partial<BuilderSession> & Pick<BuilderSession, "id">): BuilderSession {
   return {
@@ -114,12 +121,41 @@ describe("agent creation studio helpers", () => {
   it("labels a harness chip with the host OS and hides the binary path", () => {
     expect(osShortLabel("darwin")).toBe("Mac");
     expect(runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin")).toBe("Claude Code (Mac)");
-    expect(runtimeSubtitle({ command: "/usr/local/bin/claude acp" })).toBe("本机");
+    expect(runtimeSubtitle({ command: "/usr/local/bin/claude -p --output-format stream-json" })).toBe("本机");
+    expect(runtimeSubtitle({ command: "claude -p", protocol_family: "claude" })).toBe("本机 · 原生 CLI");
+    expect(runtimeSubtitle({ command: "coordy acp-stub", protocol_family: "stub" })).toBe("本机 · ACP");
+    expect(runtimeSubtitle({ command: "npx -y made-up --acp", protocol_family: "acp" })).toBe("本机 · ACP");
   });
 
   it("offers models for Claude and Codex harnesses", () => {
     expect(modelsForHarness("claude-acp").map((item) => item.id)).toContain("claude-opus-4-6");
+    expect(modelsForHarness("claude").map((item) => item.id)).toContain("claude-opus-4-6");
     expect(modelsForHarness("codex-acp").map((item) => item.id)).toContain("gpt-5.4");
+    expect(modelsForHarness("gemini-cli").map((item) => item.id)).toContain("gemini-2.5-pro");
     expect(modelsForHarness("coordy-stub")).toEqual([]);
+  });
+
+  it("matches leftover ACP-era harness ids onto the native catalog", () => {
+    const catalog = [
+      {
+        id: "claude",
+        name: "Claude Code",
+        installed: true,
+        command: "claude -p --output-format stream-json",
+        source: "path",
+        protocol_family: "claude",
+      },
+      {
+        id: "made-up-acp",
+        name: "Made Up",
+        installed: false,
+        command: "npx -y made-up --acp",
+        source: "registry",
+        protocol_family: "acp",
+      },
+    ];
+    expect(harnessIdsMatch("claude-acp", "claude")).toBe(true);
+    expect(catalogItemForHarness(catalog, "claude-acp")?.id).toBe("claude");
+    expect(pickerRuntimes(catalog, "claude-acp").map((item) => item.id)).toEqual(["claude"]);
   });
 });

@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { acpRunSource, chatTurnCommands } from "../lib/coordy/start-task";
 import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
-import { agentDisplayName, createActionLabel, emptyCreateHint, listableAgents, providerKey, selectableRuntimes, taskStatusLabel } from "../lib/coordy/labels";
+import {
+  agentDisplayName,
+  catalogItemForHarness,
+  createActionLabel,
+  emptyCreateHint,
+  listableAgents,
+  pickerRuntimes,
+  providerKey,
+  selectableRuntimes,
+  taskStatusLabel,
+} from "../lib/coordy/labels";
 import { boardIssues, isChatIssue, tasksAssignedToMe } from "../lib/coordy/issues";
 import { asTasks, boardColumn, isPlaceholderHarness, latestRunForTask, outcomeId } from "../lib/coordy/views";
 import type { AgentView, RunView, TaskView, View } from "@coordy/protocol";
@@ -63,18 +73,33 @@ describe("board view helpers", () => {
     expect(
       agentDisplayName(
         { name: "助手", harness: "claude-acp" },
-        [{ id: "claude-acp", name: "Claude Code", installed: true, command: "claude acp", source: "path" }],
+        [{ id: "claude", name: "Claude Code", installed: true, command: "claude -p --output-format stream-json", source: "path", protocol_family: "claude" }],
       ),
     ).toBe("Claude Code");
+    expect(
+      catalogItemForHarness(
+        [{ id: "claude", name: "Claude Code", installed: true, command: "claude -p", source: "path" }],
+        "claude-acp",
+      )?.id,
+    ).toBe("claude");
   });
 
   it("only offers installed tools as selectable harnesses", () => {
     expect(
       selectableRuntimes([
-        { id: "claude-acp", name: "Claude Code", installed: true, command: "claude acp", source: "path" },
+        { id: "claude", name: "Claude Code", installed: true, command: "claude -p --output-format stream-json", source: "path" },
         { id: "made-up", name: "Made Up", installed: false, command: "npx -y made-up", source: "registry" },
       ]).map((item) => item.id),
-    ).toEqual(["claude-acp"]);
+    ).toEqual(["claude"]);
+    expect(
+      pickerRuntimes(
+        [
+          { id: "claude", name: "Claude Code", installed: true, command: "claude -p", source: "path" },
+          { id: "codex", name: "Codex", installed: true, command: "codex exec --json", source: "path" },
+        ],
+        "claude-acp",
+      ).map((item) => item.id),
+    ).toEqual(["claude", "codex"]);
   });
 
   it("drafts 智能体 fields from a goal description", () => {

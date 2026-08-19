@@ -22,7 +22,7 @@ import {
   type AgentAccess,
   type AgentDraft,
 } from "../../lib/coordy/agent-draft";
-import { runtimeChipLabel, runtimeSubtitle } from "../../lib/coordy/labels";
+import { harnessIdsMatch, runtimeChipLabel, runtimeSubtitle } from "../../lib/coordy/labels";
 import { AgentAvatarField } from "../agent-avatar";
 import { ProviderLogo } from "../provider-logo";
 
@@ -99,7 +99,7 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择启动运行时使用的 harness 和模型。模型写入智能体记录，启动时通过 ACP session/set_model 下发。"
+        description="选择启动运行时使用的 harness 和模型。原生 CLI 通过对应命令行参数下发模型；ACP 家族通过 session/set_model 下发。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
           <HarnessDropdown
@@ -170,7 +170,8 @@ export function HarnessDropdown({
   os?: string | null;
   disabled?: boolean;
 }) {
-  const selected = items.find((item) => item.id === value);
+  const selected = items.find((item) => harnessIdsMatch(item.id, value));
+  const resolved = selected?.id ?? value;
   const itemMap = Object.fromEntries(items.map((item) => [item.id, runtimeChipLabel(item, os)]));
   return (
     <div className="min-w-0 space-y-1.5">
@@ -180,7 +181,7 @@ export function HarnessDropdown({
           {loading ? "正在读取 harness…" : "暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。"}
         </p>
       ) : (
-        <Select value={value || undefined} items={itemMap} onValueChange={(next) => next && onChange(next)} disabled={disabled}>
+        <Select value={resolved || undefined} items={itemMap} onValueChange={(next) => next && onChange(next)} disabled={disabled}>
           <SelectTrigger className="h-auto min-h-10 py-1.5">
             <SelectValue placeholder="选择 harness">
               {selected ? (

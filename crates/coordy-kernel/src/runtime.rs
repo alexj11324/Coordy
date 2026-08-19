@@ -1106,7 +1106,7 @@ impl Kernel {
                 let harness: String = match &source {
                     RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl".into(),
                     RunSource::Codex { .. } => "codex".into(),
-                    RunSource::ClaudeCode { .. } => "claude_code".into(),
+                    RunSource::ClaudeCode { .. } => "claude".into(),
                     RunSource::OpenCode { .. } => "opencode".into(),
                     RunSource::Acp { .. } => {
                         let h = agent.harness.trim();
