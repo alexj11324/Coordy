@@ -93,10 +93,9 @@ export function IssueCreateDialog({ os }: { os?: string }) {
           expanded ? "h-[min(46rem,86vh)] max-w-4xl" : mode === "agent" ? "max-w-xl" : "max-w-2xl",
         )}
       >
-        <div hidden={mode !== "manual"} className={mode === "manual" ? "flex min-h-0 flex-1 flex-col" : undefined}>
+        {mode === "manual" ? (
           <ManualCreatePanel
             key={`manual-${session}`}
-            active={mode === "manual"}
             os={os}
             statusSeed={statusSeed}
             expanded={expanded}
@@ -109,11 +108,9 @@ export function IssueCreateDialog({ os }: { os?: string }) {
               setMode("agent");
             }}
           />
-        </div>
-        <div hidden={mode !== "agent"} className={mode === "agent" ? "flex min-h-0 flex-1 flex-col" : undefined}>
+        ) : (
           <AgentCreatePanel
             key={`agent-${session}`}
-            active={mode === "agent"}
             os={os}
             expanded={expanded}
             setExpanded={setExpanded}
@@ -125,7 +122,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
               setMode("manual");
             }}
           />
-        </div>
+        )}
       </div>
     </div>,
     document.body,
@@ -133,7 +130,6 @@ export function IssueCreateDialog({ os }: { os?: string }) {
 }
 
 function ManualCreatePanel({
-  active,
   os,
   statusSeed,
   expanded,
@@ -142,7 +138,6 @@ function ManualCreatePanel({
   onClose,
   onSwitchToAgent,
 }: {
-  active: boolean;
   os?: string;
   statusSeed: string;
   expanded: boolean;
@@ -205,11 +200,10 @@ function ManualCreatePanel({
   }, [seed]);
 
   useEffect(() => {
-    if (!active) return;
     useLayoutStore.getState().consumePendingFocus();
     const timer = window.setTimeout(() => document.getElementById("issue-create-title")?.focus(), 20);
     return () => window.clearTimeout(timer);
-  }, [active]);
+  }, []);
 
   const agentItems = useMemo(
     () =>
@@ -294,17 +288,17 @@ function ManualCreatePanel({
 
   return (
     <form
-      className="flex min-h-0 flex-1 flex-col"
+      className={cn("flex flex-col", expanded && "h-full min-h-0")}
       onSubmit={(event) => {
         event.preventDefault();
-        if (active) create.mutate();
+        create.mutate();
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           onClose();
         }
-        if (active && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           create.mutate();
         }
@@ -331,7 +325,7 @@ function ManualCreatePanel({
           </Button>
         </div>
       </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-3">
+      <div className={cn("space-y-3 overflow-y-auto px-5 pb-3", expanded ? "min-h-0 flex-1" : "")}>
         <Input
           id="issue-create-title"
           value={title}
@@ -490,7 +484,6 @@ function ManualCreatePanel({
 }
 
 function AgentCreatePanel({
-  active,
   os,
   expanded,
   setExpanded,
@@ -498,7 +491,6 @@ function AgentCreatePanel({
   onClose,
   onSwitchToManual,
 }: {
-  active: boolean;
   os?: string;
   expanded: boolean;
   setExpanded: (value: boolean | ((current: boolean) => boolean)) => void;
@@ -562,15 +554,10 @@ function AgentCreatePanel({
   }, [agentId, agentList]);
 
   useEffect(() => {
-    if (!active) return;
     const timer = window.setTimeout(() => document.getElementById("issue-create-prompt")?.focus(), 20);
     return () => window.clearTimeout(timer);
-  }, [active]);
+  }, []);
 
-  const agentItems = useMemo(
-    () => Object.fromEntries(agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)])),
-    [agentList, catalog.data],
-  );
   const projectItems = useMemo(
     () => Object.fromEntries([["none", "无项目"], ...projectList.map((project) => [project.id, project.name])]),
     [projectList],
@@ -634,17 +621,17 @@ function AgentCreatePanel({
 
   return (
     <form
-      className="flex min-h-0 flex-1 flex-col"
+      className={cn("flex flex-col", expanded && "h-full min-h-0")}
       onSubmit={(event) => {
         event.preventDefault();
-        if (active) create.mutate();
+        create.mutate();
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           onClose();
         }
-        if (active && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           create.mutate();
         }
@@ -671,7 +658,7 @@ function AgentCreatePanel({
           </Button>
         </div>
       </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 pb-3">
+      <div className={cn("space-y-3 overflow-y-auto px-5 pb-3", expanded ? "min-h-0 flex-1" : "")}>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>创建者</span>
           {agentList.length === 0 ? (
@@ -686,19 +673,32 @@ function AgentCreatePanel({
               请先创建智能体
             </button>
           ) : (
-            <Select value={agentId === "none" ? undefined : agentId} items={agentItems} onValueChange={(value) => value && setAgentId(value)}>
-              <SelectTrigger type="button" size="sm" className={pillTrigger}>
-                {selectedAgent ? <AgentAvatar agent={selectedAgent} className="size-3.5" /> : <UserRound className="size-3.5" />}
-                <SelectValue>{selectedAgent ? agentDisplayName(selectedAgent, catalog.data) : "选择智能体"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent className="min-w-48">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    className="inline-flex max-w-52 items-center gap-1.5 rounded-md px-1.5 py-1 text-foreground hover:bg-muted"
+                  />
+                }
+              >
+                {selectedAgent ? (
+                  <AgentAvatar agent={selectedAgent} className="size-4" />
+                ) : (
+                  <UserRound className="size-4" />
+                )}
+                <span className="truncate">
+                  {selectedAgent ? agentDisplayName(selectedAgent, catalog.data) : "选择智能体"}
+                </span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-48">
                 {agentList.map((agent) => (
-                  <SelectItem key={agent.id} value={agent.id}>
-                    <NamedAgent agent={agent} catalog={catalog.data} />
-                  </SelectItem>
+                  <DropdownMenuItem key={agent.id} onClick={() => setAgentId(agent.id)}>
+                    <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />
+                  </DropdownMenuItem>
                 ))}
-              </SelectContent>
-            </Select>
+              </DropdownMenuContent>
+            </DropdownMenu>
           )}
         </div>
         <Textarea
