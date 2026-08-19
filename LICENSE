@@ -1,3 +1,130 @@
+# Coordy License
+
+Coordy is provided under the terms of the Apache License, Version 2.0 —
+the complete, unmodified text of which is reproduced in Part II of this
+file — subject to the additional conditions in Part I.
+
+Part I and Part II together constitute the "Coordy License". Neither part
+grants any rights on its own. Condition 3 states how the two parts fit
+together and what must be delivered when you redistribute.
+
+------------------------------------------------------------------------
+                       Part I — Additional Conditions
+
+1. Coordy may be utilized commercially, including as a backend service for
+   other applications or as a task management platform for enterprises,
+   subject to the following conditions:
+
+   a. Hosted or embedded service: Unless you have obtained a commercial
+      license from the producer, you may not use the Coordy source code
+      to provide a hosted service to third parties, or embed Coordy as a
+      component of a product or service that is sold, licensed, or
+      otherwise commercially distributed to third parties.
+
+      - This restriction applies to offering Coordy (in whole or in
+        substantial part) as a SaaS platform, a managed service, or as
+        an integrated component within another commercial offering.
+
+      - Providing a hosted service to third parties is restricted whether
+        or not you charge for it. A publicly accessible instance operated
+        for users outside your own organization requires a commercial
+        license even when it is offered free of charge, carries no
+        advertising, and sells no paid tier.
+
+      - Internal use within a single organization (including multiple
+        workspaces) does not require a commercial license.
+
+      - Making the source code available, including publishing the source
+        code of a fork in a public repository, is not itself a hosted
+        service and does not require a commercial license. Any such
+        distribution remains subject to all applicable terms of this
+        Coordy License, including conditions (b) and (c) below and
+        condition 3. Source distribution does not grant recipients the
+        right to operate a hosted service; each operator must obtain its
+        own commercial license.
+
+   b. Branding and copyright information: Unless the producer has granted
+      you a written branding waiver, you may not remove or modify the
+      Coordy LOGO, the Coordy product name, or the copyright and
+      attribution information displayed by a Coordy user interface.
+
+      - User Interface Definition: For the purposes of this license, a
+        "Coordy user interface" means any user interface derived, in whole
+        or in substantial part, from the user interface code in this
+        repository. This includes components located in the
+        `apps/desktop/` and `packages/ui/` directories when running Coordy
+        from raw source code and any compiled desktop application built
+        from that code. That enumeration is illustrative rather than
+        exhaustive: user interface code remains covered when it is
+        modified, moved, renamed, or extracted into another package or
+        repository.
+
+      - This restriction is inapplicable to uses of Coordy that do not
+        involve a Coordy user interface, such as running only the server,
+        daemon, or CLI without redistributing or operating any Coordy user
+        interface. Such uses remain subject to condition (c) below.
+
+   c. Attribution for non-interface use: If you redistribute or operate a
+      product or service built on Coordy's server, daemon, or CLI without
+      a Coordy user interface, you must retain all copyright, patent,
+      trademark, and attribution notices present in the source code and
+      in the NOTICE file, and state in your user-facing documentation that
+      the product is built on Coordy, including a link to
+      https://github.com/alexj11324/Coordy.
+
+   d. Relationship between grants: A branding waiver is not a commercial
+      license and does not permit any use restricted by condition (a). A
+      commercial license does not by itself waive condition (b) or
+      condition (c). Each grant must be obtained from the producer
+      expressly and separately, and neither may be inferred from the other
+      or from the producer's silence, review, or acceptance of your
+      contributions.
+
+2. Contributions: By submitting a contribution to Coordy, you agree that:
+
+   a. The producer can adjust this Coordy License to be more strict or
+      relaxed as deemed necessary.
+
+   b. Your contributed code may be used for commercial purposes, including
+      but not limited to cloud business operations.
+
+   c. Your contribution is submitted under this Coordy License as a whole,
+      as described in condition 3, and not under Part II alone.
+
+3. Composition, precedence, and redistribution:
+
+   a. This entire file is the Coordy License. Part I (these additional
+      conditions) and Part II (the incorporated Apache License, Version
+      2.0) together form a single set of terms. Apart from the conditions
+      stated in Part I, all other rights and restrictions follow Part II.
+
+   b. Wherever Part II refers to "this License", that reference means the
+      Coordy License as a whole — Part I and Part II together — and not
+      Part II in isolation. This includes the copy of the License that
+      section 4(a) of Part II requires you to give to recipients, and the
+      terms under which section 5 of Part II treats a contribution as
+      submitted.
+
+   c. If Part I and Part II conflict, Part I controls.
+
+   d. If you redistribute Coordy or a derivative work of it, you must
+      deliver this complete file. Delivering Part II alone does not
+      satisfy the Coordy License or section 4(a) of Part II.
+
+For commercial licenses and branding waivers, contact the producer through
+https://github.com/alexj11324/Coordy.
+
+Copyright 2026 Zhixuan Jiang
+
+------------------------------------------------------------------------
+
+               Part II — Incorporated Apache License 2.0 Text
+The text below is reproduced verbatim and unmodified from
+https://www.apache.org/licenses/LICENSE-2.0.txt. It is incorporated into
+the Coordy License as described in condition 3 above.
+
+------------------------------------------------------------------------
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
