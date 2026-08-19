@@ -171,3 +171,7 @@ research/s0-validation/       Archived task-drift research
 ```
 
 See [`TODO.md`](TODO.md) for the product roadmap and [`docs/adr/`](docs/adr/) for the architectural decisions behind Coordy.
+
+## License
+
+See the [Coordy License](LICENSE).

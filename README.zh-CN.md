@@ -171,3 +171,7 @@ research/s0-validation/       已归档的任务漂移研究
 ```
 
 产品路线见 [`TODO.md`](TODO.md)，架构设计见 [`docs/adr/`](docs/adr/)。
+
+## 许可证
+
+详见 [Coordy License](LICENSE)。
