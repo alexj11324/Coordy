@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/08-19-conversation-task-decomposition/prd.md","reason":"Verify every user-requested decomposition and orchestration outcome against frozen acceptance criteria."}
+{"file":".trellis/tasks/08-19-conversation-task-decomposition/design.md","reason":"Verify authority, atomicity, provenance, compatibility, and rollup boundaries."}
+{"file":".trellis/tasks/08-19-conversation-task-decomposition/research/multica-conversation-decomposition.md","reason":"Ensure parity claims stay behavioral and no Multica source or protocol is copied."}
