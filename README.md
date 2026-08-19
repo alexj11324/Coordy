@@ -62,9 +62,11 @@ No agent CLI installed yet? Start the built-in ACP demo in another terminal:
 cargo run -p coordy -- acp-stub
 ```
 
-## Supported coding agents
+## Agent integrations
 
-Coordy launches each tool through its native headless interface instead of forcing every agent through one adapter.
+Coordy includes six native CLI adapters. These integrations use each tool's own headless interface and provide tool-specific launch flags, permissions, and event parsing.
+
+### Built-in native adapters
 
 | CLI on `PATH`            | Integration                    |
 | ------------------------ | ------------------------------ |
@@ -75,7 +77,11 @@ Coordy launches each tool through its native headless interface instead of forci
 | `opencode`               | OpenCode `run`                 |
 | `cursor-agent` / `agent` | Cursor print / stream mode     |
 
-Agents found only in the [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry) can use ACP. You can configure model access in Settings with your own provider key.
+### ACP agents
+
+The table above is not the full catalog. Coordy also reads the live [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry) and can import agents that provide an `npx`, `uvx`, or platform binary launch command. Registry agents use ACP and appear alongside the built-in adapters in the Harness catalog.
+
+The registry changes over time, so Coordy does not hard-code its agent list in this README. Running a registry agent may require its package runtime, account, or provider credentials. You can configure model access in Settings with your own provider key.
 
 ## Local by design
 

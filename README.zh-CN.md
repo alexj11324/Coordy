@@ -62,9 +62,11 @@ bash scripts/dev.sh
 cargo run -p coordy -- acp-stub
 ```
 
-## 支持的编码智能体
+## 智能体接入
 
-Coordy 直接使用每款工具自己的无头接口，不要求所有智能体都经过同一个适配层。
+Coordy 内置了 6 个原生 CLI 适配器。它们直接使用各工具自己的无头接口，并提供对应的启动参数、权限控制和事件解析。
+
+### 内置原生适配器
 
 | `PATH` 中的 CLI          | 接入方式                       |
 | ------------------------ | ------------------------------ |
@@ -75,7 +77,11 @@ Coordy 直接使用每款工具自己的无头接口，不要求所有智能体�
 | `opencode`               | OpenCode `run`                 |
 | `cursor-agent` / `agent` | Cursor print / stream mode     |
 
-只存在于 [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry) 的智能体可以通过 ACP 接入。模型访问可以在设置中使用你自己的服务商密钥进行配置。
+### ACP 智能体
+
+上面的表格不是完整目录。Coordy 还会读取实时的 [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry)，并可导入提供 `npx`、`uvx` 或平台二进制启动命令的智能体。Registry 智能体通过 ACP 运行，并与内置适配器一起显示在 Harness 目录中。
+
+Registry 会持续更新，因此 README 不硬编码完整智能体名单。运行其中的智能体可能需要对应的包运行时、账号或服务商凭据；模型访问可以在设置中使用你自己的服务商密钥进行配置。
 
 ## 本机优先
 
