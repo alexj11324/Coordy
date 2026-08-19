@@ -1149,7 +1149,7 @@ impl std::error::Error for CoordyError {}
 pub enum RpcRequest {
     Submit {
         id: String,
-        command: AuthenticatedCommand,
+        command: Box<AuthenticatedCommand>,
     },
     View {
         id: String,

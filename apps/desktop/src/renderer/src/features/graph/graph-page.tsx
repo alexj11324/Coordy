@@ -372,9 +372,10 @@ function GraphInspector({
   }
   const task = tasks.find((item) => item.id === selected.id);
   const assignee = agents.find((item) => item.id === task?.assignee_agent_id);
-  const blockers = (task?.blocker_ids ?? [])
-    .map((id) => tasks.find((item) => item.id === id) ?? nodes.find((node) => node.id === id))
-    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  const blockers = (task?.blocker_ids ?? []).map((id) => ({
+    id,
+    label: tasks.find((item) => item.id === id)?.title ?? nodeLabel(nodes, id),
+  }));
   const outgoing = dependencies.filter((dep) => dep.from_id === selected.id);
 
   return (
@@ -396,8 +397,8 @@ function GraphInspector({
               <p className="text-sm text-muted-foreground">无前置事项</p>
             ) : (
               blockers.map((blocker) => (
-                <div key={"id" in blocker ? blocker.id : blocker.label} className="rounded-md border border-border px-2 py-1.5 text-sm">
-                  {"title" in blocker ? blocker.title : blocker.label}
+                <div key={blocker.id} className="rounded-md border border-border px-2 py-1.5 text-sm">
+                  {blocker.label}
                 </div>
               ))
             )}
