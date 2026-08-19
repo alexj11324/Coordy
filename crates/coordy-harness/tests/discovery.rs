@@ -97,6 +97,18 @@ fn execution_transport_follows_the_discovered_registry_fallback() {
         protocol_family: "opencode".into(),
     };
     assert!(!launch_uses_acp("opencode", &[native]));
+
+    let stub = DiscoveredAgentView {
+        id: "coordy-stub".into(),
+        name: "Coordy demo".into(),
+        installed: true,
+        launch_state: "ready".into(),
+        command: "coordy acp-stub".into(),
+        source: "stub".into(),
+        version: None,
+        protocol_family: "stub".into(),
+    };
+    assert!(launch_uses_acp("coordy-stub", &[stub]));
 }
 
 #[test]
