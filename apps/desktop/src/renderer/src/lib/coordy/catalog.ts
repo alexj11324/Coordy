@@ -123,9 +123,9 @@ export function formatRelativeTime(iso: string | null | undefined, now = Date.no
   if (!iso?.trim()) return "从未运行";
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return iso;
-  const delta = now - ms;
-  const minutes = Math.round(Math.abs(delta) / 60_000);
-  if (minutes < 1) return "刚刚";
+  const delta = Math.abs(now - ms);
+  if (delta < 60_000) return "刚刚";
+  const minutes = Math.round(delta / 60_000);
   if (minutes < 60) return `${minutes} 分钟前`;
   const hours = Math.round(minutes / 60);
   if (hours < 24) return `${hours} 小时前`;
