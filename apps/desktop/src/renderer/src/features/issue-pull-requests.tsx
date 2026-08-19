@@ -1,8 +1,4 @@
-import {
-  Button,
-  Input,
-  cn,
-} from "@coordy/ui";
+import { cn } from "@coordy/ui";
 import {
   CheckCircle2,
   Circle,
@@ -14,7 +10,7 @@ import {
   TriangleAlert,
   XCircle,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import type { GithubView, PullRequestView } from "@coordy/protocol";
 import { submit } from "../lib/coordy/client";
 import {
@@ -23,7 +19,7 @@ import {
   deriveMergeStatus,
   isTerminalPullRequest,
   mergeStatusLabel,
-  pullRequestStateLabel,
+  pullRequestHeadline,
   shouldShowPullRequestStats,
   type ChecksStatus,
   type MergeStatus,
@@ -43,28 +39,18 @@ export function IssuePullRequests({
   onChanged: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [number, setNumber] = useState("");
   const sidebarOn = github?.pr_sidebar !== false;
   if (!sidebarOn) return null;
   const useCollapse = pullRequests.length >= PR_LIMIT_BEFORE_COLLAPSE;
   const head = useCollapse ? pullRequests.slice(0, PR_LIMIT_BEFORE_COLLAPSE - 1) : pullRequests;
   const tail = useCollapse ? pullRequests.slice(PR_LIMIT_BEFORE_COLLAPSE - 1) : [];
 
-  async function linkPr(event: FormEvent) {
-    event.preventDefault();
-    const parsed = Number.parseInt(number.trim().replace(/^#/, ""), 10);
-    if (!Number.isFinite(parsed) || parsed <= 0) return;
-    await submit({ type: "LinkPullRequest", task_id: taskId, number: parsed });
-    setNumber("");
-    onChanged();
-  }
-
   return (
     <section>
       <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">Pull requests</h2>
       {pullRequests.length === 0 ? (
         <p className="px-1.5 text-muted-foreground">
-          尚未关联。把事项编号写进分支名或标题，或在下方填写 PR 号。
+          尚未关联。把事项编号写进分支名或标题后会自动出现。
         </p>
       ) : null}
       <div className="space-y-1">
@@ -73,9 +59,16 @@ export function IssuePullRequests({
         ))}
         {useCollapse ? (
           <div className="space-y-1">
-            {expanded ? tail.map((pr) => (
-              <PullRequestRow key={`${pr.repo ?? ""}#${pr.number}`} pr={pr} taskId={taskId} onChanged={onChanged} />
-            )) : null}
+            {expanded
+              ? tail.map((pr) => (
+                  <PullRequestRow
+                    key={`${pr.repo ?? ""}#${pr.number}`}
+                    pr={pr}
+                    taskId={taskId}
+                    onChanged={onChanged}
+                  />
+                ))
+              : null}
             <button
               type="button"
               className="block w-full rounded-md px-1.5 py-1 text-left text-[12px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
@@ -86,18 +79,6 @@ export function IssuePullRequests({
           </div>
         ) : null}
       </div>
-      <form className="mt-2 flex items-center gap-1 px-1.5" onSubmit={(event) => void linkPr(event)}>
-        <Input
-          value={number}
-          onChange={(event) => setNumber(event.target.value)}
-          placeholder="PR 号"
-          className="h-7"
-          inputMode="numeric"
-        />
-        <Button type="submit" size="sm" variant="secondary" disabled={!number.trim()}>
-          关联
-        </Button>
-      </form>
     </section>
   );
 }
@@ -127,11 +108,7 @@ function PullRequestRow({
     <>
       <StateIcon className={cn("mt-0.5 size-3.5 shrink-0", stateClass)} />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium leading-snug">{pr.title || `Pull request #${pr.number}`}</p>
-        <p className="truncate text-[12px] text-muted-foreground">
-          {pr.repo ? `${pr.repo}#${pr.number}` : `#${pr.number}`} · {pullRequestStateLabel(pr.state)}
-          {pr.author ? ` · @${pr.author}` : ""}
-        </p>
+        <p className="truncate font-medium leading-snug">{pullRequestHeadline(pr)}</p>
         <PullRequestDetails pr={pr} />
       </div>
     </>

@@ -62,6 +62,11 @@ export function isTerminalPullRequest(pr: PullRequestView): boolean {
   return state === "merged" || state === "closed";
 }
 
+export function pullRequestHeadline(pr: PullRequestView): string {
+  const title = (pr.title ?? "").trim();
+  return title ? `PR #${pr.number}: ${title}` : `PR #${pr.number}`;
+}
+
 export function pullRequestStateLabel(state: string | undefined): string {
   switch ((state ?? "").toLowerCase()) {
     case "open":

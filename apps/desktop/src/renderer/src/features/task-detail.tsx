@@ -16,6 +16,7 @@ import {
 } from "@coordy/ui";
 import {
   ArrowUp,
+  Bot,
   CalendarDays,
   ChevronRight,
   Copy,
@@ -213,12 +214,12 @@ export function TaskDetailPage() {
   const assignee = task.assignee_agent_id || "";
   const assignedAgent = agentList.find((item) => item.id === assignee);
   const agentItems = Object.fromEntries([
-    ["none", "未指派"],
+    ["none", "未指派智能体"],
     ...agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)]),
   ]);
   const projectItems = Object.fromEntries([["none", "无项目"], ...projectList.map((project) => [project.id, project.name])]);
-  const squadItems = Object.fromEntries([["none", "未指派"], ...squadList.map((squad) => [squad.id, squad.name])]);
-  const peopleItems = Object.fromEntries([["none", "未指派"], ...people.map((person) => [person.id, person.name])]);
+  const squadItems = Object.fromEntries([["none", "未指派小队"], ...squadList.map((squad) => [squad.id, squad.name])]);
+  const peopleItems = Object.fromEntries([["none", "未指派成员"], ...people.map((person) => [person.id, person.name])]);
   const blockers = (task.blocker_ids ?? [])
     .map((id) => tasks.find((item) => item.id === id))
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -822,7 +823,7 @@ export function TaskDetailPage() {
                 assignedAgent ? (
                   <AgentAvatar agent={assignedAgent} className="size-4" />
                 ) : (
-                  <UserRound />
+                  <Bot />
                 )
               }
             >
@@ -844,7 +845,7 @@ export function TaskDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派</FieldItem>
+                  <FieldItem value="none">未指派智能体</FieldItem>
                   {agentList.map((agent) => (
                     <FieldItem key={agent.id} value={agent.id}>
                       <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />
@@ -872,7 +873,7 @@ export function TaskDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派</FieldItem>
+                  <FieldItem value="none">未指派成员</FieldItem>
                   {people.map((person) => (
                     <FieldItem key={person.id} value={person.id}>
                       {person.name}
@@ -881,6 +882,7 @@ export function TaskDetailPage() {
                 </SelectContent>
               </Select>
             </PropertyRow>
+            {squadList.length > 0 ? (
             <PropertyRow icon={<Users />}>
               <Select
                 value={task.assignee_squad_id || "none"}
@@ -905,7 +907,7 @@ export function TaskDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派</FieldItem>
+                  <FieldItem value="none">未指派小队</FieldItem>
                   {squadList.map((squad) => (
                     <FieldItem key={squad.id} value={squad.id}>
                       {squad.name}
@@ -914,6 +916,7 @@ export function TaskDetailPage() {
                 </SelectContent>
               </Select>
             </PropertyRow>
+            ) : null}
             <PropertyRow icon={<Play />}>
               <p className="text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
             </PropertyRow>

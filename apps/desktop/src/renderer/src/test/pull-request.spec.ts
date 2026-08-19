@@ -5,6 +5,7 @@ import {
   deriveMergeStatus,
   checksStatusLabel,
   shouldShowPullRequestStats,
+  pullRequestHeadline,
 } from "../lib/coordy/pull-request";
 
 function pr(partial: Partial<PullRequestView> & Pick<PullRequestView, "number">): PullRequestView {
@@ -44,5 +45,12 @@ describe("pull request CI and mergeability", () => {
     ).toEqual({ kind: "ready" });
     expect(shouldShowPullRequestStats(pr({ number: 6, additions: 0, deletions: 0, changed_files: 0 }))).toBe(false);
     expect(shouldShowPullRequestStats(pr({ number: 7, additions: 3 }))).toBe(true);
+  });
+
+  it("writes the sidebar line as PR #<number>: title", () => {
+    expect(pullRequestHeadline(pr({ number: 7, title: "feat: 通过本机 GitHub CLI 同步 PR 与 CI" }))).toBe(
+      "PR #7: feat: 通过本机 GitHub CLI 同步 PR 与 CI",
+    );
+    expect(pullRequestHeadline(pr({ number: 7 }))).toBe("PR #7");
   });
 });
