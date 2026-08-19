@@ -1,10 +1,17 @@
 import { create } from "zustand";
+import type { IssueCreateMode } from "../lib/coordy/issue-create";
 
 const STORAGE_KEY = "coordy.sidebar-collapsed";
+const CREATE_MODE_KEY = "coordy.create-mode";
 
 function readCollapsed(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(STORAGE_KEY) === "1";
+}
+
+function readLastCreateMode(): IssueCreateMode {
+  if (typeof window === "undefined") return "agent";
+  return window.localStorage.getItem(CREATE_MODE_KEY) === "manual" ? "manual" : "agent";
 }
 
 export type PendingFocus =
@@ -23,6 +30,8 @@ type LayoutState = {
   pendingFocus: PendingFocus | null;
   issueComposerOpen: boolean;
   issueComposerStatus: string;
+  issueComposerForceManual: boolean;
+  lastCreateMode: IssueCreateMode;
   chatDock: ChatDock;
   chatExpanded: boolean;
   activeChatId: string | null;
@@ -32,6 +41,7 @@ type LayoutState = {
   requestNewTaskFocus: () => void;
   openIssueComposer: (status?: string) => void;
   closeIssueComposer: () => void;
+  setLastCreateMode: (mode: IssueCreateMode) => void;
   requestFocus: (focus: PendingFocus) => void;
   consumePendingFocus: () => PendingFocus | null;
   openChatDock: (chatId?: string | null) => void;
@@ -48,6 +58,8 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   pendingFocus: null,
   issueComposerOpen: false,
   issueComposerStatus: "open",
+  issueComposerForceManual: false,
+  lastCreateMode: readLastCreateMode(),
   chatDock: "closed",
   chatExpanded: false,
   activeChatId: null,
@@ -60,13 +72,33 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   toggleSidebar: () => get().setSidebarCollapsed(!get().sidebarCollapsed),
   setPaletteOpen: (open) => set({ paletteOpen: open }),
   requestNewTaskFocus: () =>
-    set({ pendingFocus: "new-task", issueComposerOpen: true, issueComposerStatus: "open" }),
-  openIssueComposer: (status) =>
-    set({ issueComposerOpen: true, issueComposerStatus: status?.trim() || "open" }),
-  closeIssueComposer: () => set({ issueComposerOpen: false }),
+    set({
+      pendingFocus: "new-task",
+      issueComposerOpen: true,
+      issueComposerStatus: "open",
+      issueComposerForceManual: false,
+    }),
+  openIssueComposer: (status) => {
+    const seeded = status?.trim() ?? "";
+    set({
+      issueComposerOpen: true,
+      issueComposerStatus: seeded || "open",
+      issueComposerForceManual: Boolean(seeded),
+    });
+  },
+  closeIssueComposer: () => set({ issueComposerOpen: false, issueComposerForceManual: false }),
+  setLastCreateMode: (mode) => {
+    if (typeof window !== "undefined") window.localStorage.setItem(CREATE_MODE_KEY, mode);
+    set({ lastCreateMode: mode });
+  },
   requestFocus: (focus) => {
     if (focus === "new-task") {
-      set({ pendingFocus: focus, issueComposerOpen: true, issueComposerStatus: "open" });
+      set({
+        pendingFocus: focus,
+        issueComposerOpen: true,
+        issueComposerStatus: "open",
+        issueComposerForceManual: false,
+      });
       return;
     }
     if (focus === "new-chat") {
