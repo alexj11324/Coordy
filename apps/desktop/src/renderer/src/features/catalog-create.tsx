@@ -11,6 +11,7 @@ import {
   Textarea,
 } from "@coordy/ui";
 import { Clock, UserRound } from "lucide-react";
+import { DatePickerField } from "./date-picker-field";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
@@ -192,19 +193,19 @@ export function ProjectCreateDialog({ open, onClose }: { open: boolean; onClose:
             ))}
           </SelectContent>
         </Select>
-        <Input
-          type="date"
+        <DatePickerField
           value={dueDate}
+          placeholder="截止日期"
           aria-label="截止日期"
-          className="h-7 w-36"
-          onChange={(event) => setDueDate(event.target.value)}
+          className="h-7 w-36 rounded-md border border-border px-2 text-xs"
+          onChange={setDueDate}
         />
-        <Input
-          type="date"
+        <DatePickerField
           value={startDate}
+          placeholder="开始日期"
           aria-label="开始日期"
-          className="h-7 w-36"
-          onChange={(event) => setStartDate(event.target.value)}
+          className="h-7 w-36 rounded-md border border-border px-2 text-xs"
+          onChange={setStartDate}
         />
       </div>
       {error ? <p className="text-sm text-destructive">{error}</p> : null}

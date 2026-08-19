@@ -1,10 +1,10 @@
 use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
-    CommentView, ComputerView, CoordyError, DependencyView, Effect, GraphEdgeKind, GraphEdgeState,
-    GraphEdgeView, GraphHealthView, GraphNodeView, InboxView, LabelView, Mention, NodeKind,
-    NodeMaterializationView, NodeRef, Outcome, ProjectView, ReviewPacket, RunRole, SkillView,
-    SquadView, StatsView, TaskView, ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON,
-    STALE_DEPENDENCY_REASON,
+    CommentView, ComputerView, CoordyError, DependencyView, Effect, GithubPullRequestItem,
+    GithubView, GraphEdgeKind, GraphEdgeState, GraphEdgeView, GraphHealthView, GraphNodeView,
+    InboxView, LabelView, Mention, NodeKind, NodeMaterializationView, NodeRef, Outcome,
+    ProjectView, PullRequestView, ReviewPacket, RunRole, SkillView, SquadView, StatsView, TaskView,
+    ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
@@ -238,6 +238,265 @@ fn emit_changed(world: &mut World, workspace_id: String) {
     crate::runtime::Kernel::emit_effect(world, Effect::StateChanged { workspace_id });
 }
 
+pub fn github_flag(world: &World, workspace_id: &str, kind: &str) -> bool {
+    world
+        .integrations
+        .iter()
+        .find(|row| row.workspace_id == workspace_id && row.kind == kind)
+        .map(|row| row.enabled)
+        .unwrap_or(true)
+}
+
+pub fn github_view(world: &World, workspace_id: &str) -> GithubView {
+    let state = world
+        .github
+        .iter()
+        .find(|row| row.workspace_id == workspace_id);
+    GithubView {
+        enabled: github_flag(world, workspace_id, "github"),
+        pr_sidebar: github_flag(world, workspace_id, "github_pr_sidebar"),
+        auto_link: github_flag(world, workspace_id, "github_auto_link"),
+        cli_available: state.map(|row| row.cli_available).unwrap_or(false),
+        authenticated: state.map(|row| row.authenticated).unwrap_or(false),
+        account: state.map(|row| row.account.clone()).unwrap_or_default(),
+        last_error: state.map(|row| row.last_error.clone()).unwrap_or_default(),
+        last_synced_at: state
+            .map(|row| row.last_synced_at.clone())
+            .unwrap_or_default(),
+    }
+}
+
+fn upsert_github_state(
+    world: &mut World,
+    workspace_id: &str,
+    cli_available: bool,
+    authenticated: bool,
+    account: String,
+    error: String,
+    fetched_at: String,
+) {
+    if let Some(row) = world
+        .github
+        .iter_mut()
+        .find(|row| row.workspace_id == workspace_id)
+    {
+        row.cli_available = cli_available;
+        row.authenticated = authenticated;
+        row.account = account;
+        row.last_error = error;
+        row.last_synced_at = fetched_at;
+        return;
+    }
+    world.github.push(crate::world::GithubState {
+        workspace_id: workspace_id.into(),
+        cli_available,
+        authenticated,
+        account,
+        last_error: error,
+        last_synced_at: fetched_at,
+    });
+}
+
+fn apply_pr_snapshot(
+    existing: Option<&PullRequestView>,
+    item: &GithubPullRequestItem,
+    linked_by: &str,
+    close_intent: bool,
+    fetched_at: &str,
+    stale: bool,
+) -> PullRequestView {
+    PullRequestView {
+        number: item.number,
+        url: if item.url.is_empty() {
+            existing.map(|row| row.url.clone()).unwrap_or_default()
+        } else {
+            item.url.clone()
+        },
+        title: item.title.clone(),
+        state: item.state.clone(),
+        repo: item.repo.clone(),
+        branch: item.branch.clone(),
+        author: item.author.clone(),
+        additions: item.additions,
+        deletions: item.deletions,
+        changed_files: item.changed_files,
+        mergeable: item.mergeable.clone(),
+        merge_state: item.merge_state.clone(),
+        checks_rollup: item.checks_rollup.clone(),
+        checks_total: item.checks_total,
+        checks_passed: item.checks_passed,
+        checks_failed: item.checks_failed,
+        checks_running: item.checks_running,
+        failed_check_names: item.failed_check_names.clone(),
+        snapshot_available: item.snapshot_available,
+        snapshot_stale: stale,
+        snapshot_fetched_at: fetched_at.into(),
+        linked_by: linked_by.into(),
+        close_intent,
+    }
+}
+
+fn sync_github_pull_requests(
+    world: &mut World,
+    workspace_id: &str,
+    items: &[GithubPullRequestItem],
+    fetched_at: &str,
+    stale: bool,
+) -> (u32, Vec<String>, Vec<String>) {
+    let enabled = github_flag(world, workspace_id, "github");
+    let auto_link = enabled && github_flag(world, workspace_id, "github_auto_link");
+    let prefix = world
+        .workspace(workspace_id)
+        .map(|ws| {
+            if ws.issue_prefix.is_empty() {
+                "COOR".into()
+            } else {
+                ws.issue_prefix.clone()
+            }
+        })
+        .unwrap_or_else(|| "COOR".into());
+    let mut linked = 0u32;
+    if enabled && !stale {
+        let by_number: std::collections::BTreeMap<u32, &GithubPullRequestItem> =
+            items.iter().map(|item| (item.number, item)).collect();
+        for task in world
+            .tasks
+            .iter_mut()
+            .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+        {
+            let identifier = task.identifier.clone();
+            for pr in task.pull_requests.iter_mut() {
+                if let Some(item) = by_number.get(&pr.number) {
+                    let linked_by = if pr.linked_by.is_empty() {
+                        "manual".to_string()
+                    } else {
+                        pr.linked_by.clone()
+                    };
+                    let close_intent =
+                        crate::github::issue_links(&prefix, &item.branch, &item.title, &item.body)
+                            .iter()
+                            .any(|link| link.identifier == identifier && link.close_intent);
+                    let current = pr.clone();
+                    *pr = apply_pr_snapshot(
+                        Some(&current),
+                        item,
+                        &linked_by,
+                        close_intent,
+                        fetched_at,
+                        false,
+                    );
+                    linked += 1;
+                }
+            }
+        }
+        if auto_link {
+            let mut additions: Vec<(String, PullRequestView)> = Vec::new();
+            for item in items {
+                let matches =
+                    crate::github::issue_links(&prefix, &item.branch, &item.title, &item.body);
+                for link in matches {
+                    if let Some(task) = world.tasks.iter().find(|task| {
+                        task.workspace_id == workspace_id
+                            && !task.deleted
+                            && task.identifier.eq_ignore_ascii_case(&link.identifier)
+                    }) {
+                        if task.pull_requests.iter().any(|pr| pr.number == item.number) {
+                            continue;
+                        }
+                        additions.push((
+                            task.id.clone(),
+                            apply_pr_snapshot(
+                                None,
+                                item,
+                                "auto",
+                                link.close_intent,
+                                fetched_at,
+                                false,
+                            ),
+                        ));
+                    }
+                }
+            }
+            for (task_id, pr) in additions {
+                if let Some(task) = world.task_mut(&task_id) {
+                    task.pull_requests.retain(|row| row.number != pr.number);
+                    task.pull_requests.push(pr);
+                    linked += 1;
+                }
+            }
+            for task in world
+                .tasks
+                .iter_mut()
+                .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+            {
+                task.pull_requests.retain(|pr| {
+                    pr.linked_by != "auto" || items.iter().any(|item| item.number == pr.number)
+                });
+            }
+        }
+    } else if stale {
+        for task in world
+            .tasks
+            .iter_mut()
+            .filter(|task| task.workspace_id == workspace_id && !task.deleted)
+        {
+            for pr in &mut task.pull_requests {
+                if pr.snapshot_available {
+                    pr.snapshot_stale = true;
+                }
+            }
+        }
+    }
+    let (completed, released) = complete_issues_from_merged_prs(world, workspace_id);
+    (linked, completed, released)
+}
+
+fn complete_issues_from_merged_prs(
+    world: &mut World,
+    workspace_id: &str,
+) -> (Vec<String>, Vec<String>) {
+    let candidates: Vec<(String, String)> = world
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.workspace_id == workspace_id
+                && !task.deleted
+                && !matches!(task.status.as_str(), "done" | "cancelled")
+                && task
+                    .pull_requests
+                    .iter()
+                    .any(|pr| crate::github::is_merged_state(&pr.state) && pr.close_intent)
+                && !task
+                    .pull_requests
+                    .iter()
+                    .any(|pr| crate::github::is_working_state(&pr.state))
+        })
+        .map(|task| (task.id.clone(), task.title.clone()))
+        .collect();
+    let mut completed = Vec::new();
+    let mut released_all = Vec::new();
+    for (task_id, title) in candidates {
+        if reject_if_unresolved_blockers(world, &task_id).is_err() {
+            continue;
+        }
+        if let Some(task) = world.task_mut(&task_id) {
+            task.status = "done".into();
+            task.blocked_reason = None;
+        }
+        released_all.extend(refresh_issue_blocker_dependents(world, &task_id));
+        push_notice(
+            world,
+            workspace_id,
+            "status",
+            "PR 已合并，事项完成",
+            &title,
+            Some(task_id.clone()),
+        );
+        completed.push(task_id);
+    }
+    (completed, released_all)
+}
+
 pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outcome, CoordyError> {
     match command {
         Command::UpdateWorkspace {
@@ -248,9 +507,25 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             context,
             slug,
             issue_prefix,
+            conductor_agent_id,
         } => {
             require_not_agent(actor)?;
             require_member(world, actor, &workspace_id)?;
+            if let Some(conductor_id) = conductor_agent_id.as_ref().filter(|id| !id.is_empty()) {
+                let agent = world
+                    .agent(conductor_id)
+                    .ok_or_else(|| CoordyError::not_found("agent"))?;
+                if agent.workspace_id != workspace_id {
+                    return Err(CoordyError::invalid(
+                        "conductor must belong to this workspace",
+                    ));
+                }
+                if agent.archived {
+                    return Err(CoordyError::invalid(
+                        "conductor cannot be an archived agent",
+                    ));
+                }
+            }
             if let Some(slug) = slug.as_ref().map(|s| slugify(s)) {
                 ensure_unique_slug(world, &workspace_id, &slug)?;
                 if let Some(ws) = world.workspaces.iter_mut().find(|w| w.id == workspace_id) {
@@ -281,6 +556,13 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                     return Err(CoordyError::invalid("issue prefix must be alphanumeric"));
                 }
                 ws.issue_prefix = prefix;
+            }
+            if let Some(conductor_id) = conductor_agent_id {
+                ws.conductor_agent_id = if conductor_id.is_empty() {
+                    None
+                } else {
+                    Some(conductor_id)
+                };
             }
             emit_changed(world, workspace_id.clone());
             Ok(Outcome::ok(
@@ -1410,13 +1692,72 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_member(world, actor, &task.workspace_id)?;
             if let Some(row) = world.task_mut(&task_id) {
                 row.pull_requests.retain(|p| p.number != number);
-                row.pull_requests
-                    .push(coordy_protocol::PullRequestView { number, url });
+                row.pull_requests.push(PullRequestView::manual(number, url));
             }
             emit_changed(world, task.workspace_id);
             Ok(Outcome::ok(
                 "pr linked",
                 json!({ "task_id": task_id, "number": number }),
+            ))
+        }
+        Command::UnlinkPullRequest { task_id, number } => {
+            require_not_agent(actor)?;
+            let task = world
+                .task(&task_id)
+                .cloned()
+                .ok_or_else(|| CoordyError::not_found("task"))?;
+            require_member(world, actor, &task.workspace_id)?;
+            if let Some(row) = world.task_mut(&task_id) {
+                row.pull_requests.retain(|p| p.number != number);
+            }
+            emit_changed(world, task.workspace_id);
+            Ok(Outcome::ok(
+                "pr unlinked",
+                json!({ "task_id": task_id, "number": number }),
+            ))
+        }
+        Command::SyncGithubPullRequests(sync) => {
+            if !matches!(actor, Actor::Daemon) {
+                return Err(CoordyError::denied(
+                    "only the daemon may submit GitHub snapshots",
+                ));
+            }
+            let fetched_at = if sync.fetched_at.is_empty() {
+                ids::now()
+            } else {
+                sync.fetched_at.clone()
+            };
+            let stale = !sync.error.is_empty();
+            upsert_github_state(
+                world,
+                &sync.workspace_id,
+                sync.cli_available,
+                sync.authenticated,
+                sync.account.clone(),
+                sync.error.clone(),
+                fetched_at.clone(),
+            );
+            let (linked, completed, released) = sync_github_pull_requests(
+                world,
+                &sync.workspace_id,
+                &sync.items,
+                &fetched_at,
+                stale,
+            );
+            let message = if sync.error.is_empty() {
+                "github synced"
+            } else {
+                "github sync failed"
+            };
+            emit_changed(world, sync.workspace_id.clone());
+            Ok(Outcome::ok(
+                message,
+                json!({
+                    "linked": linked,
+                    "completed": completed,
+                    "released_task_ids": released,
+                    "changed": linked > 0 || !completed.is_empty() || !sync.error.is_empty(),
+                }),
             ))
         }
         Command::SetIntegration {
@@ -2044,6 +2385,130 @@ pub(crate) fn blocker_release_prompt(task: &Task) -> String {
     }
 }
 
+pub(crate) fn workspace_conductor_id(world: &World, workspace_id: &str) -> Option<String> {
+    world
+        .workspace(workspace_id)
+        .and_then(|ws| ws.conductor_agent_id.clone())
+        .filter(|id| !id.is_empty())
+}
+
+pub(crate) fn is_conductor_review(
+    world: &World,
+    workspace_id: &str,
+    agent_id: &str,
+    trigger: &str,
+) -> bool {
+    trigger == "graph_review"
+        && workspace_conductor_id(world, workspace_id).as_deref() == Some(agent_id)
+}
+
+pub(crate) fn can_reaffirm_dependency(world: &World, actor: &Actor, workspace_id: &str) -> bool {
+    match actor {
+        Actor::Daemon => true,
+        Actor::Principal { .. } => actor_in_workspace(world, actor, workspace_id),
+        Actor::Agent { id, .. } => {
+            actor_in_workspace(world, actor, workspace_id)
+                && workspace_conductor_id(world, workspace_id).as_deref() == Some(id.as_str())
+        }
+    }
+}
+
+pub(crate) fn graph_ready_prompt(task: &Task) -> String {
+    blocker_release_prompt(task)
+}
+
+pub(crate) fn graph_replan_prompt(task: &Task) -> String {
+    let body = graph_ready_prompt(task);
+    format!("上游依赖刚被确认仍有效。请按当前事项重规划后再做，不要空跑上一轮 prompt。\n\n{body}")
+}
+
+pub(crate) fn conductor_review_prompt(
+    task: &Task,
+    changer_id: &str,
+    entity: &str,
+    edges: &[(String, String, String, u64)],
+) -> String {
+    let lines = edges
+        .iter()
+        .map(|(id, source_id, edge_entity, generation)| {
+            format!("- {id} @ generation {generation} → {source_id}（{edge_entity}）")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "工作区图总管：下游事项的依赖已失效，请决定是否放行。\n\n事项：{}（{}）\n打脏来源：{changer_id} 的 {entity} 变更。\n失效依赖：\n{lines}\n若批准下游继续，请用助手消息单独一行写出前缀 REAFFIRM、冒号和上列依赖 id。\n若应继续挡住，写出前缀 HOLD、冒号和依赖 id，或不批准。\n不要代替执行者改代码。",
+        task.title, task.id
+    )
+}
+
+pub(crate) fn task_ready_for_graph_dispatch(world: &World, task_id: &str) -> bool {
+    let Some(task) = world.task(task_id) else {
+        return false;
+    };
+    if task.deleted || matches!(task.status.as_str(), "backlog" | "done" | "cancelled") {
+        return false;
+    }
+    if task.status == "blocked" || task.blocked_reason.is_some() {
+        return false;
+    }
+    let has_agent = task
+        .assignee_agent_id
+        .as_deref()
+        .map(|id| !id.is_empty())
+        .unwrap_or(false);
+    let has_squad = task
+        .assignee_squad_id
+        .as_deref()
+        .map(|id| !id.is_empty())
+        .unwrap_or(false);
+    if !has_agent && !has_squad {
+        return false;
+    }
+    if !unresolved_blocker_ids(world, task_id).is_empty() {
+        return false;
+    }
+    if task_has_stale_dependency(world, task_id) {
+        return false;
+    }
+    !world.runs.iter().any(|run| {
+        run.task_id == task_id
+            && run.status == "running"
+            && !is_conductor_review(world, &task.workspace_id, &run.agent_id, &run.trigger)
+    })
+}
+
+pub(crate) fn graph_successor_task_ids(world: &World, task_id: &str) -> Vec<String> {
+    let mut ids = issue_blocking_ids(world, task_id);
+    for dep in &world.dependencies {
+        if dep.kind == GraphEdgeKind::Consumes
+            && dep.source.id == task_id
+            && dep.state != GraphEdgeState::Superseded
+        {
+            ids.push(dep.target.id.clone());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub(crate) fn should_review_stale_consumer(world: &World, task_id: &str) -> bool {
+    let Some(task) = world.task(task_id) else {
+        return false;
+    };
+    if task.deleted || matches!(task.status.as_str(), "backlog" | "done" | "cancelled") {
+        return false;
+    }
+    let graph_stale = task.blocked_reason.as_deref() == Some(STALE_DEPENDENCY_REASON);
+    if task.blocked_reason.is_some() && !graph_stale {
+        return false;
+    }
+    if task.status == "blocked" && !graph_stale {
+        return false;
+    }
+    workspace_conductor_id(world, &task.workspace_id).is_some()
+}
+
 fn sync_issue_blocker_hold(world: &mut World, task_id: &str) {
     let unresolved = unresolved_blocker_ids(world, task_id);
     let Some(task) = world.task_mut(task_id) else {
@@ -2552,8 +3017,10 @@ pub(crate) fn reaffirm_dependency(
         .find(|dep| dep.id == dependency_id)
         .cloned()
         .ok_or_else(|| CoordyError::not_found("dependency"))?;
-    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
-        return Err(CoordyError::denied("not in workspace"));
+    if !can_reaffirm_dependency(world, actor, &dep.workspace_id) {
+        return Err(CoordyError::denied(
+            "only a member, daemon, or workspace conductor may reaffirm",
+        ));
     }
     if dep.generation != expected_generation {
         record_graph_event(
@@ -2647,6 +3114,11 @@ pub(crate) fn set_workspace_conductor(
         if agent.workspace_id != workspace_id {
             return Err(CoordyError::invalid("agent/workspace mismatch"));
         }
+        if agent.archived {
+            return Err(CoordyError::invalid(
+                "conductor cannot be an archived agent",
+            ));
+        }
     }
     let Some(ws) = world.workspaces.iter_mut().find(|ws| ws.id == workspace_id) else {
         return Err(CoordyError::not_found("workspace"));
@@ -2705,10 +3177,11 @@ pub(crate) fn apply_validation_decision(
                 && attempt.node_id == dep.target.id
                 && attempt.role == run.role
                 && attempt.input_fingerprint == expected_fingerprint
+                && matches!(attempt.lease_status.as_str(), "claimed" | "running")
         });
         if !bound_attempt {
             return Err(CoordyError::denied(
-                "validator run is not bound to this dependency generation",
+                "validator run is not actively bound to this dependency generation",
             ));
         }
     } else if actor.is_agent() {
@@ -2721,6 +3194,23 @@ pub(crate) fn apply_validation_decision(
     }
     if dep.generation != expected_generation {
         return Err(CoordyError::invalid("dependency generation mismatch"));
+    }
+    if let Some(run_id) = validator_run_id.as_deref() {
+        if let Some(node_id) = crate::graph::schedule::complete_attempt_for_run(world, run_id, true)
+        {
+            record_graph_event(
+                world,
+                &dep.workspace_id,
+                "attempt_completed",
+                None,
+                Some(&node_id),
+                json!({
+                    "run_id": run_id,
+                    "ok": true,
+                    "reason": "validation_decision",
+                }),
+            );
+        }
     }
     record_graph_event(
         world,
@@ -2741,9 +3231,7 @@ pub(crate) fn apply_validation_decision(
         ValidationChoice::Reaffirm => {
             reaffirm_dependency(world, actor, dependency_id, expected_generation)
         }
-        ValidationChoice::Remove => {
-            remove_dependency(world, actor, dependency_id)
-        }
+        ValidationChoice::Remove => remove_dependency(world, actor, dependency_id),
         ValidationChoice::Hold | ValidationChoice::Replan => {
             let next_state = if decision == ValidationChoice::Hold {
                 GraphEdgeState::PendingValidation

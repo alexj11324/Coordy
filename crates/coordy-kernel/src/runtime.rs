@@ -27,6 +27,12 @@ use crate::world::{
 };
 use crate::{ids, memory};
 
+#[derive(Clone, Copy)]
+enum GraphPromptKind {
+    Ready,
+    Replan,
+}
+
 pub struct Kernel {
     world: Mutex<World>,
     ports: Arc<dyn Ports>,
@@ -84,7 +90,9 @@ impl Kernel {
             return Err(CoordyError::invalid("backlog issues are not queued"));
         }
         product::reject_if_unresolved_blockers(world, task_id)?;
-        if !matches!(trigger, "graph_review" | "graph_validate" | "graph_resume") {
+        if !matches!(trigger, "graph_validate" | "graph_resume")
+            && !product::is_conductor_review(world, &task.workspace_id, agent_id, trigger)
+        {
             product::reject_if_stale_dependencies(world, task_id)?;
         }
         if !can_command_agent(world, actor, agent_id) {
@@ -171,6 +179,7 @@ impl Kernel {
             &agent.thinking,
             &agent.speed,
             &agent.cli_args,
+            &agent.tool_access,
         ) {
             if let Some(run) = world.run_mut(&run_id) {
                 run.status = "failed".into();
@@ -182,8 +191,11 @@ impl Kernel {
     }
 
     fn reconcile_graph(&self, world: &mut World, workspace_id: &str) {
+        if product::workspace_conductor_id(world, workspace_id).is_some() {
+            self.dispatch_graph_reviews(world, workspace_id);
+            return;
+        }
         self.dispatch_graph_executors(world, workspace_id);
-        self.dispatch_graph_reviews(world, workspace_id);
     }
 
     fn dispatch_graph_executors(&self, world: &mut World, workspace_id: &str) {
@@ -225,6 +237,7 @@ impl Kernel {
                 continue;
             };
             let prompt = product::blocker_release_prompt(&task);
+            let run_count_before = world.runs.len();
             match self.start_prompt_on_task(
                 world,
                 &Actor::Daemon,
@@ -255,13 +268,11 @@ impl Kernel {
                     }
                 }
                 Err(_) => {
-                    if let Some(attempt) = world
-                        .node_attempts
-                        .iter_mut()
-                        .find(|attempt| attempt.id == attempt_id)
-                    {
-                        attempt.lease_status = "failed".into();
-                    }
+                    crate::graph::schedule::finish_attempt_start_error(
+                        world,
+                        &attempt_id,
+                        run_count_before,
+                    );
                 }
             }
         }
@@ -275,7 +286,6 @@ impl Kernel {
         let Some(conductor_id) = conductor_id else {
             return;
         };
-        let eval = crate::graph::evaluate_world(world, workspace_id);
         let stale_edges: Vec<(String, String, u64)> = world
             .dependencies
             .iter()
@@ -283,10 +293,6 @@ impl Kernel {
                 edge.workspace_id == workspace_id
                     && edge.kind == GraphEdgeKind::Consumes
                     && edge.state == coordy_protocol::GraphEdgeState::Stale
-                    && eval
-                        .required_validations
-                        .iter()
-                        .any(|id| id == &edge.target.id)
             })
             .map(|edge| (edge.id.clone(), edge.target.id.clone(), edge.generation))
             .collect();
@@ -295,6 +301,41 @@ impl Kernel {
         }
         let graph_run_id = crate::graph::schedule::open_graph_run(world, workspace_id);
         for (edge_id, node_id, generation) in stale_edges {
+            if !product::should_review_stale_consumer(world, &node_id) {
+                continue;
+            }
+            let superseded_reviews: Vec<String> = world
+                .runs
+                .iter()
+                .filter(|run| {
+                    run.task_id == node_id
+                        && run.trigger == "graph_review"
+                        && run.agent_id != conductor_id
+                })
+                .map(|run| run.id.clone())
+                .collect();
+            let conductor_changed = !superseded_reviews.is_empty();
+            for run_id in &superseded_reviews {
+                if let Some(run) = world.run_mut(run_id) {
+                    if run.status != "running" {
+                        continue;
+                    }
+                    run.status = "cancelled".into();
+                    run.queue_status = "cancelled".into();
+                }
+                crate::graph::schedule::cancel_attempt_for_run(world, run_id);
+            }
+            if conductor_changed {
+                for attempt in world.node_attempts.iter_mut().filter(|attempt| {
+                    attempt
+                        .run_id
+                        .as_ref()
+                        .is_some_and(|run_id| superseded_reviews.contains(run_id))
+                        && attempt.lease_status != "succeeded"
+                }) {
+                    attempt.lease_status = "paused".into();
+                }
+            }
             if world
                 .runs
                 .iter()
@@ -324,6 +365,7 @@ impl Kernel {
                 continue;
             };
             let prompt = product::review_prompt(&packet);
+            let run_count_before = world.runs.len();
             match self.start_prompt_on_task(
                 world,
                 &Actor::Daemon,
@@ -355,13 +397,11 @@ impl Kernel {
                     }
                 }
                 Err(_) => {
-                    if let Some(attempt) = world
-                        .node_attempts
-                        .iter_mut()
-                        .find(|attempt| attempt.id == attempt_id)
-                    {
-                        attempt.lease_status = "failed".into();
-                    }
+                    crate::graph::schedule::finish_attempt_start_error(
+                        world,
+                        &attempt_id,
+                        run_count_before,
+                    );
                 }
             }
         }
@@ -450,7 +490,6 @@ impl Kernel {
                 )
             } else if let Some(squad_id) = task.assignee_squad_id.clone() {
                 self.dispatch_squad_leader(world, actor, task_id, &squad_id)
-                    .map(|_| Outcome::ok("squad dispatched", json!({})))
             } else {
                 continue;
             };
@@ -467,24 +506,341 @@ impl Kernel {
         }
     }
 
+    fn dispatch_graph_or_blocker_release(
+        &self,
+        world: &mut World,
+        actor: &Actor,
+        released: &[String],
+    ) {
+        let mut graph_workspaces = Vec::new();
+        let mut blocker = Vec::new();
+        for task_id in released {
+            let Some(task) = world.task(task_id) else {
+                continue;
+            };
+            if product::workspace_conductor_id(world, &task.workspace_id).is_some() {
+                graph_workspaces.push(task.workspace_id.clone());
+            } else {
+                blocker.push(task_id.clone());
+            }
+        }
+        graph_workspaces.sort();
+        graph_workspaces.dedup();
+        for workspace_id in graph_workspaces {
+            self.reconcile_workspace_graph(world, &workspace_id);
+        }
+        if !blocker.is_empty() {
+            self.dispatch_released_blocker_tasks(world, actor, &blocker);
+        }
+    }
+
+    fn dispatch_ready_graph_tasks(
+        &self,
+        world: &mut World,
+        task_ids: &[String],
+        prompt: GraphPromptKind,
+    ) {
+        for task_id in task_ids {
+            let Some(task) = world.task(task_id).cloned() else {
+                continue;
+            };
+            if product::workspace_conductor_id(world, &task.workspace_id).is_none() {
+                continue;
+            }
+            let declared_graph =
+                crate::graph::schedule::node_on_declared_graph(world, &task.workspace_id, task_id);
+            if declared_graph
+                && !crate::graph::evaluate_world(world, &task.workspace_id)
+                    .ready_nodes
+                    .iter()
+                    .any(|node_id| node_id == task_id)
+            {
+                continue;
+            }
+            if !product::task_ready_for_graph_dispatch(world, task_id) {
+                continue;
+            }
+            let prompt_text = match prompt {
+                GraphPromptKind::Ready => product::graph_ready_prompt(&task),
+                GraphPromptKind::Replan => product::graph_replan_prompt(&task),
+            };
+            let attempt = if declared_graph {
+                let graph_run_id =
+                    crate::graph::schedule::open_graph_run(world, &task.workspace_id);
+                let snapshot = crate::graph::state_from_world(world, &task.workspace_id);
+                let fingerprint = crate::graph::input_fingerprint(&snapshot, task_id);
+                crate::graph::schedule::claim_node_attempt(
+                    world,
+                    &graph_run_id,
+                    &task.workspace_id,
+                    task_id,
+                    &fingerprint,
+                    RunRole::Executor,
+                )
+                .map(|attempt_id| (attempt_id, fingerprint))
+            } else {
+                None
+            };
+            if declared_graph && attempt.is_none() {
+                continue;
+            }
+            let run_count_before = world.runs.len();
+            let started = if let Some(agent_id) = task.assignee_agent_id.clone() {
+                self.start_prompt_on_task(
+                    world,
+                    &Actor::Daemon,
+                    task_id,
+                    &agent_id,
+                    prompt_text,
+                    None,
+                    "graph",
+                    true,
+                )
+            } else if let Some(squad_id) = task.assignee_squad_id.clone() {
+                self.dispatch_squad_leader(world, &Actor::Daemon, task_id, &squad_id)
+            } else {
+                continue;
+            };
+            match started {
+                Ok(outcome) => {
+                    if let (Some((attempt_id, fingerprint)), Some(run_id)) = (
+                        attempt,
+                        outcome.ids.get("run_id").and_then(|value| value.as_str()),
+                    ) {
+                        crate::graph::schedule::bind_attempt_run(world, &attempt_id, run_id);
+                        product::record_graph_event(
+                            world,
+                            &task.workspace_id,
+                            "attempt_started",
+                            None,
+                            Some(task_id),
+                            json!({
+                                "attempt_id": attempt_id,
+                                "run_id": run_id,
+                                "role": "executor",
+                                "input_fingerprint": fingerprint,
+                            }),
+                        );
+                    }
+                }
+                Err(err) => {
+                    if let Some((attempt_id, _)) = attempt {
+                        crate::graph::schedule::finish_attempt_start_error(
+                            world,
+                            &attempt_id,
+                            run_count_before,
+                        );
+                    }
+                    product::push_notice(
+                        world,
+                        &task.workspace_id,
+                        "blocker",
+                        "图已放行，但未能自动开始",
+                        &err.message,
+                        Some(task_id.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    fn reconcile_workspace_graph(&self, world: &mut World, workspace_id: &str) {
+        self.reconcile_graph(world, workspace_id);
+        if product::workspace_conductor_id(world, workspace_id).is_none() {
+            return;
+        }
+        let task_ids: Vec<String> = world
+            .tasks
+            .iter()
+            .filter(|task| task.workspace_id == workspace_id)
+            .filter(|task| {
+                crate::graph::schedule::node_on_declared_graph(world, workspace_id, &task.id)
+                    || !world.runs.iter().any(|run| {
+                        run.task_id == task.id
+                            && run.trigger != "graph_review"
+                            && run.status == "completed"
+                    })
+            })
+            .map(|task| task.id.clone())
+            .collect();
+        self.dispatch_ready_graph_tasks(world, &task_ids, GraphPromptKind::Ready);
+    }
+
+    fn dispatch_conductor_reviews(
+        &self,
+        world: &mut World,
+        consumer_ids: &[String],
+        changer_id: &str,
+        entity: &str,
+    ) {
+        for task_id in consumer_ids {
+            if !product::should_review_stale_consumer(world, task_id) {
+                continue;
+            }
+            let Some(task) = world.task(task_id).cloned() else {
+                continue;
+            };
+            let Some(conductor_id) = product::workspace_conductor_id(world, &task.workspace_id)
+            else {
+                continue;
+            };
+            let edges: Vec<(String, String, String, u64)> = world
+                .dependencies
+                .iter()
+                .filter(|dep| {
+                    dep.kind == coordy_protocol::GraphEdgeKind::Consumes
+                        && dep.target.id == *task_id
+                        && !dep.valid()
+                })
+                .map(|dep| {
+                    (
+                        dep.id.clone(),
+                        dep.source.id.clone(),
+                        dep.entity.clone(),
+                        dep.generation,
+                    )
+                })
+                .collect();
+            if edges.is_empty() {
+                continue;
+            }
+            if world.runs.iter().any(|run| {
+                if run.task_id != *task_id
+                    || run.trigger != "graph_review"
+                    || run.agent_id != conductor_id
+                {
+                    return false;
+                }
+                run.status == "running"
+                    || (run.status == "completed"
+                        && edges.iter().all(|(dep_id, _, _, generation)| {
+                            run.prompt
+                                .contains(&format!("{dep_id} @ generation {generation}"))
+                        }))
+            }) {
+                continue;
+            }
+            let prompt = product::conductor_review_prompt(&task, changer_id, entity, &edges);
+            if let Err(err) = self.start_prompt_on_task(
+                world,
+                &Actor::Daemon,
+                task_id,
+                &conductor_id,
+                prompt,
+                None,
+                "graph_review",
+                true,
+            ) {
+                product::push_notice(
+                    world,
+                    &task.workspace_id,
+                    "replan",
+                    "依赖已失效，但未能启动图总管",
+                    &err.message,
+                    Some(task_id.clone()),
+                );
+            }
+        }
+    }
+
+    fn after_harness_event(
+        &self,
+        world: &mut World,
+        run_id: &str,
+        event: &HarnessEvent,
+        was_active: bool,
+    ) -> Result<(), CoordyError> {
+        if !was_active {
+            return Ok(());
+        }
+        let Some(run) = world.run(run_id).cloned() else {
+            return Ok(());
+        };
+        match event {
+            HarnessEvent::Message { role, content } if role == "assistant" => {
+                if !product::is_conductor_review(
+                    world,
+                    &run.workspace_id,
+                    &run.agent_id,
+                    &run.trigger,
+                ) {
+                    return Ok(());
+                }
+                for dep_id in parse_reaffirm_prefix_ids(content) {
+                    let generation = world
+                        .dependencies
+                        .iter()
+                        .find(|dep| dep.id == dep_id && dep.target.id == run.task_id)
+                        .map(|dep| dep.generation);
+                    let Some(generation) = generation else {
+                        continue;
+                    };
+                    if !run
+                        .prompt
+                        .contains(&format!("{dep_id} @ generation {generation}"))
+                    {
+                        continue;
+                    }
+                    if product::reaffirm_dependency(world, &Actor::Daemon, &dep_id, generation)
+                        .is_ok()
+                    {
+                        self.dispatch_ready_graph_tasks(
+                            world,
+                            std::slice::from_ref(&run.task_id),
+                            GraphPromptKind::Replan,
+                        );
+                    }
+                }
+                self.reconcile_workspace_graph(world, &run.workspace_id);
+            }
+            HarnessEvent::Tool {
+                name, exit_code, ..
+            } if name == coordy_protocol::HARNESS_SESSION_TOOL && *exit_code == Some(0) => {
+                if product::workspace_conductor_id(world, &run.workspace_id).is_none() {
+                    return Ok(());
+                }
+                if product::is_conductor_review(
+                    world,
+                    &run.workspace_id,
+                    &run.agent_id,
+                    &run.trigger,
+                ) {
+                    let review_decided = world.node_attempts.iter().any(|attempt| {
+                        attempt.run_id.as_deref() == Some(run.id.as_str())
+                            && attempt.lease_status == "succeeded"
+                    });
+                    if review_decided {
+                        self.reconcile_workspace_graph(world, &run.workspace_id);
+                    }
+                    return Ok(());
+                }
+                let successors = product::graph_successor_task_ids(world, &run.task_id);
+                self.dispatch_ready_graph_tasks(world, &successors, GraphPromptKind::Ready);
+                self.reconcile_workspace_graph(world, &run.workspace_id);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     fn dispatch_squad_leader(
         &self,
         world: &mut World,
         actor: &Actor,
         task_id: &str,
         squad_id: &str,
-    ) -> Result<(), CoordyError> {
+    ) -> Result<Outcome, CoordyError> {
         let task = world
             .task(task_id)
             .cloned()
             .ok_or_else(|| CoordyError::not_found("task"))?;
         if task.status == "backlog" {
-            return Ok(());
+            return Ok(Outcome::ok("squad dispatch skipped", json!({})));
         }
         if product::reject_if_unresolved_blockers(world, task_id).is_err()
             || product::reject_if_stale_dependencies(world, task_id).is_err()
         {
-            return Ok(());
+            return Ok(Outcome::ok("squad dispatch skipped", json!({})));
         }
         let squad = world
             .squad(squad_id)
@@ -515,8 +871,7 @@ impl Kernel {
             None,
             "squad",
             true,
-        )?;
-        Ok(())
+        )
     }
 
     pub fn watch(&self, cursor: Option<u64>) -> Vec<Effect> {
@@ -721,6 +1076,7 @@ impl Kernel {
                     access_member_ids: Vec::new(),
                     concurrency_limit: 6,
                     cli_args: String::new(),
+                    tool_access: "auto".into(),
                     mcp_servers: Vec::new(),
                     skill_ids: Vec::new(),
                 });
@@ -742,6 +1098,7 @@ impl Kernel {
                 access_member_ids,
                 concurrency_limit,
                 cli_args,
+                tool_access,
                 mcp_servers,
             } => {
                 let agent = world
@@ -759,13 +1116,45 @@ impl Kernel {
                 if agent.archived {
                     return Err(CoordyError::invalid("archived agents cannot be updated"));
                 }
-                if let Some(name) = name {
-                    let name = normalize_agent_name(&name)?;
-                    if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
-                        return Err(CoordyError::invalid(
-                            "agent name must be unique in this workspace",
-                        ));
+                // Normalize every fallible field before the first mutation so an
+                // invalid combined update cannot leave unaudited partial state.
+                let name = match name {
+                    Some(name) => {
+                        let name = normalize_agent_name(&name)?;
+                        if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
+                            return Err(CoordyError::invalid(
+                                "agent name must be unique in this workspace",
+                            ));
+                        }
+                        Some(name)
                     }
+                    None => None,
+                };
+                let harness = match harness {
+                    Some(harness) => {
+                        let harness = harness.trim();
+                        if harness.is_empty() {
+                            return Err(CoordyError::invalid("runtime is required"));
+                        }
+                        Some(harness.to_string())
+                    }
+                    None => None,
+                };
+                let access = match access {
+                    Some(access)
+                        if matches!(access.as_str(), "owner" | "workspace" | "members") =>
+                    {
+                        Some(access)
+                    }
+                    Some(_) => return Err(CoordyError::invalid("unknown access")),
+                    None => None,
+                };
+                let tool_access = tool_access
+                    .as_deref()
+                    .map(normalize_tool_access)
+                    .transpose()?;
+
+                if let Some(name) = name {
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.name = name;
                     }
@@ -781,12 +1170,8 @@ impl Kernel {
                     }
                 }
                 if let Some(harness) = harness {
-                    let harness = harness.trim();
-                    if harness.is_empty() {
-                        return Err(CoordyError::invalid("runtime is required"));
-                    }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
-                        row.harness = harness.to_string();
+                        row.harness = harness;
                     }
                 }
                 if let Some(avatar) = avatar {
@@ -810,9 +1195,6 @@ impl Kernel {
                     }
                 }
                 if let Some(access) = access {
-                    if !matches!(access.as_str(), "owner" | "workspace" | "members") {
-                        return Err(CoordyError::invalid("unknown access"));
-                    }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.access = access;
                     }
@@ -831,6 +1213,11 @@ impl Kernel {
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.workspace_id = row.workspace_id.clone();
                         row.cli_args = cli_args;
+                    }
+                }
+                if let Some(tool_access) = tool_access {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.tool_access = tool_access;
                     }
                 }
                 if let Some(mcp_servers) = mcp_servers {
@@ -865,6 +1252,15 @@ impl Kernel {
                 }
                 if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                     row.archived = true;
+                }
+                if let Some(workspace) = world
+                    .workspaces
+                    .iter_mut()
+                    .find(|workspace| workspace.id == agent.workspace_id)
+                {
+                    if workspace.conductor_agent_id.as_deref() == Some(agent_id.as_str()) {
+                        workspace.conductor_agent_id = None;
+                    }
                 }
                 Self::emit(
                     &mut world,
@@ -1054,6 +1450,11 @@ impl Kernel {
                 );
                 self.reconcile_graph(&mut world, &workspace_id);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
+                self.dispatch_ready_graph_tasks(
+                    &mut world,
+                    std::slice::from_ref(&task_id),
+                    GraphPromptKind::Ready,
+                );
                 Ok(Outcome::ok(
                     "assigned",
                     json!({ "task_id": task_id, "agent_id": agent_id }),
@@ -1214,8 +1615,8 @@ impl Kernel {
                         Some(task_id.clone()),
                     );
                 }
-                self.dispatch_released_blocker_tasks(&mut world, &actor, &released);
                 self.reconcile_graph(&mut world, &workspace_id);
+                self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok(
                     "status updated",
@@ -1533,6 +1934,8 @@ impl Kernel {
                     product::bump_node_artifact(&mut world, &contract_ws, &contract_id);
                     let consumers = invalidate_dependencies(&mut world, "contract", &contract_id);
                     pause_stale_consumers(&mut world, &consumers);
+                    let _ = consumers;
+                    self.reconcile_workspace_graph(&mut world, &contract_ws);
                 }
                 Ok(Outcome::ok(
                     "approval recorded",
@@ -1546,6 +1949,11 @@ impl Kernel {
                 chat_id,
                 trigger,
             } => {
+                if is_internal_graph_trigger(&trigger) {
+                    return Err(CoordyError::invalid(
+                        "graph runs may only be created by the internal scheduler",
+                    ));
+                }
                 let task = world
                     .task(&task_id)
                     .cloned()
@@ -1554,11 +1962,18 @@ impl Kernel {
                     return Err(CoordyError::invalid("backlog issues are not queued"));
                 }
                 product::reject_if_unresolved_blockers(&world, &task_id)?;
-                product::reject_if_stale_dependencies(&world, &task_id)?;
                 let agent_id = override_agent
                     .filter(|id| !id.is_empty())
                     .or(task.assignee_agent_id.clone())
                     .ok_or_else(|| CoordyError::invalid("assign an agent first"))?;
+                let trigger = if trigger.is_empty() {
+                    "issue".into()
+                } else {
+                    trigger
+                };
+                if !product::is_conductor_review(&world, &task.workspace_id, &agent_id, &trigger) {
+                    product::reject_if_stale_dependencies(&world, &task_id)?;
+                }
                 if !can_command_agent(&world, &actor, &agent_id) {
                     return Err(CoordyError::denied("cannot command this agent"));
                 }
@@ -1660,7 +2075,7 @@ impl Kernel {
                             })
                             .unwrap_or_else(|| ".".into());
                         drop(world);
-                        self.ports.spawn_harness(
+                        if let Err(error) = self.ports.spawn_harness(
                             &harness,
                             &worktree,
                             &prompt,
@@ -1669,12 +2084,28 @@ impl Kernel {
                             &agent.thinking,
                             &agent.speed,
                             &agent.cli_args,
-                        )?;
+                            &agent.tool_access,
+                        ) {
+                            let mut world = self.world.lock().expect("world lock");
+                            if let Some(run) = world.run_mut(&run_id) {
+                                run.status = "failed".into();
+                                run.queue_status = "failed".into();
+                            }
+                            return Err(error);
+                        }
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }
                 };
                 for event in events {
-                    ingest_event(&mut world, &self.advisor, &run_id, event)?;
+                    let was_active = world
+                        .run(&run_id)
+                        .map(|run| run.status == "running")
+                        .unwrap_or(false);
+                    if !was_active {
+                        continue;
+                    }
+                    ingest_event(&mut world, &self.advisor, &run_id, event.clone())?;
+                    self.after_harness_event(&mut world, &run_id, &event, was_active)?;
                 }
                 if let Some(run) = world.run_mut(&run_id) {
                     if run.status == "running" {
@@ -1700,6 +2131,18 @@ impl Kernel {
                     active.status = "cancelled".into();
                     active.queue_status = "cancelled".into();
                 }
+                if let Some(node_id) =
+                    crate::graph::schedule::cancel_attempt_for_run(&mut world, &run_id)
+                {
+                    product::record_graph_event(
+                        &mut world,
+                        &run.workspace_id,
+                        "attempt_cancelled",
+                        None,
+                        Some(&node_id),
+                        json!({ "run_id": run_id }),
+                    );
+                }
                 ingest_event(
                     &mut world,
                     &self.advisor,
@@ -1723,8 +2166,27 @@ impl Kernel {
                 {
                     return Err(CoordyError::denied("cannot ingest into this run"));
                 }
-                ingest_event(&mut world, &self.advisor, &run_id, event)?;
-                self.reconcile_graph(&mut world, &run.workspace_id);
+                let was_active = run.status == "running";
+                if !was_active {
+                    return Err(CoordyError::invalid("cannot ingest into a terminal run"));
+                }
+                ingest_event(&mut world, &self.advisor, &run_id, event.clone())?;
+                let inconclusive_review_terminal = matches!(
+                    &event,
+                    HarnessEvent::Tool {
+                        name,
+                        exit_code: Some(0),
+                        ..
+                    } if name == coordy_protocol::HARNESS_SESSION_TOOL
+                ) && run.role == RunRole::ConductorReview
+                    && !world.node_attempts.iter().any(|attempt| {
+                        attempt.run_id.as_deref() == Some(run_id.as_str())
+                            && attempt.lease_status == "succeeded"
+                    });
+                if !inconclusive_review_terminal {
+                    self.reconcile_graph(&mut world, &run.workspace_id);
+                }
+                self.after_harness_event(&mut world, &run_id, &event, was_active)?;
                 Ok(Outcome::ok("ingested", json!({ "run_id": run_id })))
             }
             Command::ApplyPatch { task_id, patch } => {
@@ -1752,6 +2214,10 @@ impl Kernel {
                     .cloned()
                     .collect();
                 if let Some(reason) = action_conflicts(&active, &patch) {
+                    if let Some(blocked_task) = world.task_mut(&task_id) {
+                        blocked_task.status = "blocked".into();
+                        blocked_task.blocked_reason = Some(reason.clone());
+                    }
                     push_inbox(
                         &mut world,
                         &task.workspace_id,
@@ -1779,7 +2245,7 @@ impl Kernel {
                 product::bump_node_artifact(&mut world, &task.workspace_id, &task_id);
                 let consumers = invalidate_dependencies(&mut world, "repo", &task_id);
                 pause_stale_consumers(&mut world, &consumers);
-                self.reconcile_graph(&mut world, &task.workspace_id);
+                self.reconcile_workspace_graph(&mut world, &task.workspace_id);
                 Ok(Outcome::ok("patch applied", json!({ "task_id": task_id })))
             }
             Command::DeclareDependency {
@@ -1847,6 +2313,18 @@ impl Kernel {
                     .map(|dep| dep.workspace_id.clone())
                 {
                     self.reconcile_graph(&mut world, &workspace_id);
+                }
+                if let Some(task_id) = outcome
+                    .ids
+                    .get("task_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                {
+                    self.dispatch_ready_graph_tasks(
+                        &mut world,
+                        std::slice::from_ref(&task_id),
+                        GraphPromptKind::Replan,
+                    );
                 }
                 Ok(outcome)
             }
@@ -1924,6 +2402,31 @@ impl Kernel {
                 {
                     return Err(CoordyError::denied("cannot retry this run"));
                 }
+                let (retry_agent_id, retry_trigger) = if old.role == RunRole::ConductorReview {
+                    let conductor_id = product::workspace_conductor_id(&world, &old.workspace_id)
+                        .ok_or_else(|| {
+                            CoordyError::invalid("conductor review retry requires a conductor")
+                        })?;
+                    (conductor_id, "graph_review")
+                } else {
+                    (old.agent_id.clone(), "retry")
+                };
+                let has_graph_attempt = world
+                    .node_attempts
+                    .iter()
+                    .any(|attempt| attempt.run_id.as_deref() == Some(run_id.as_str()));
+                let retry_attempt = if has_graph_attempt {
+                    Some(
+                        crate::graph::schedule::claim_explicit_retry(&mut world, &run_id)
+                            .ok_or_else(|| {
+                                CoordyError::invalid(
+                                    "graph run retry requires the latest terminal attempt",
+                                )
+                            })?,
+                    )
+                } else {
+                    None
+                };
                 if let Some(row) = world.run_mut(&run_id) {
                     row.retry_count += 1;
                 }
@@ -1941,16 +2444,75 @@ impl Kernel {
                 } else {
                     old.prompt.clone()
                 };
-                self.start_prompt_on_task(
+                let run_count_before = world.runs.len();
+                let started = self.start_prompt_on_task(
                     &mut world,
                     &actor,
                     &old.task_id,
-                    &old.agent_id,
+                    &retry_agent_id,
                     prompt,
                     old.chat_id,
-                    "retry",
+                    retry_trigger,
                     false,
-                )
+                );
+                match started {
+                    Ok(started) => {
+                        if let (Some((attempt_id, node_id, fingerprint)), Some(retry_run_id)) = (
+                            retry_attempt,
+                            started.ids.get("run_id").and_then(|value| value.as_str()),
+                        ) {
+                            crate::graph::schedule::bind_attempt_run(
+                                &mut world,
+                                &attempt_id,
+                                retry_run_id,
+                            );
+                            product::record_graph_event(
+                                &mut world,
+                                &old.workspace_id,
+                                "attempt_started",
+                                None,
+                                Some(&node_id),
+                                json!({
+                                    "attempt_id": attempt_id,
+                                    "run_id": retry_run_id,
+                                    "role": old.role.clone(),
+                                    "input_fingerprint": fingerprint,
+                                    "retry_of": run_id,
+                                }),
+                            );
+                        }
+                        Ok(started)
+                    }
+                    Err(err) => {
+                        if let Some((attempt_id, node_id, fingerprint)) = retry_attempt {
+                            crate::graph::schedule::finish_explicit_retry_start_error(
+                                &mut world,
+                                &attempt_id,
+                                run_count_before,
+                            );
+                            if world
+                                .node_attempts
+                                .iter()
+                                .any(|attempt| attempt.id == attempt_id)
+                            {
+                                product::record_graph_event(
+                                    &mut world,
+                                    &old.workspace_id,
+                                    "attempt_start_failed",
+                                    None,
+                                    Some(&node_id),
+                                    json!({
+                                        "attempt_id": attempt_id,
+                                        "role": old.role.clone(),
+                                        "input_fingerprint": fingerprint,
+                                        "retry_of": run_id,
+                                    }),
+                                );
+                            }
+                        }
+                        Err(err)
+                    }
+                }
             }
             Command::AssignIssue {
                 task_id,
@@ -1984,6 +2546,11 @@ impl Kernel {
                 {
                     self.reconcile_graph(&mut world, &workspace_id);
                 }
+                self.dispatch_ready_graph_tasks(
+                    &mut world,
+                    std::slice::from_ref(&issue_id),
+                    GraphPromptKind::Ready,
+                );
                 Ok(outcome)
             }
             Command::TriggerAutomation { automation_id } => {
@@ -2021,10 +2588,21 @@ impl Kernel {
                 }
                 return Ok(outcome);
             }
+            Command::RefreshGithub { .. } => Err(CoordyError::unavailable(
+                "github refresh requires coordyd to invoke the GitHub CLI",
+            )),
             other => {
+                let conductor_transition = match &other {
+                    Command::UpdateWorkspace {
+                        workspace_id,
+                        conductor_agent_id: Some(_),
+                        ..
+                    } => Some(workspace_id.clone()),
+                    _ => None,
+                };
                 let outcome = product::submit(&mut world, &actor, other)?;
                 let released = Self::released_task_ids(&outcome);
-                self.dispatch_released_blocker_tasks(&mut world, &actor, &released);
+                self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
                 let workspace_id = outcome
                     .ids
                     .get("workspace_id")
@@ -2039,8 +2617,8 @@ impl Kernel {
                                 world.task(task_id).map(|task| task.workspace_id.clone())
                             })
                     });
-                if let Some(workspace_id) = workspace_id {
-                    self.reconcile_graph(&mut world, &workspace_id);
+                if let Some(workspace_id) = conductor_transition.or(workspace_id) {
+                    self.reconcile_workspace_graph(&mut world, &workspace_id);
                 }
                 Ok(outcome)
             }
@@ -2164,6 +2742,11 @@ impl Kernel {
                                 a.concurrency_limit
                             },
                             cli_args: a.cli_args.clone(),
+                            tool_access: if a.tool_access.is_empty() {
+                                "auto".into()
+                            } else {
+                                a.tool_access.clone()
+                            },
                             mcp_servers: a.mcp_servers.clone(),
                             skill_ids: a.skill_ids.clone(),
                         })
@@ -2325,6 +2908,7 @@ impl Kernel {
                     repo_path,
                     llm_advisor_enabled: world.llm_advisor_enabled,
                     notification_kinds: world.notification_kinds.clone(),
+                    github: product::github_view(&world, &workspace_id),
                 })
             }
             Query::AgentContext { agent_id } => {
@@ -2489,6 +3073,13 @@ impl Kernel {
 
 const SUPERSEDING_AUTHORITY: &[&str] = &["USER", "SPEC", "REPOSITORY_FACT", "AUTHORIZED_DECISION"];
 
+fn is_internal_graph_trigger(trigger: &str) -> bool {
+    matches!(
+        trigger,
+        "graph" | "graph_execute" | "graph_validate" | "graph_resume" | "graph_review"
+    )
+}
+
 fn role_for_trigger(trigger: &str) -> RunRole {
     match trigger {
         "graph_execute" => RunRole::Executor,
@@ -2599,6 +3190,21 @@ fn push_inbox(
         },
     );
     world.inbox.push(item);
+}
+
+fn parse_reaffirm_prefix_ids(content: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("REAFFIRM:") else {
+            continue;
+        };
+        let id = rest.split_whitespace().next().unwrap_or("").to_string();
+        if !id.is_empty() {
+            ids.push(id);
+        }
+    }
+    ids
 }
 
 fn pause_stale_consumers(world: &mut World, consumer_ids: &[String]) {
@@ -2750,7 +3356,7 @@ fn ingest_event(
                     maybe_record_commitment(world, &run, kind, claim, authority);
                 }
             }
-            if run.role == RunRole::ConductorReview && role != "user" {
+            if run.role == RunRole::ConductorReview && role == "assistant" {
                 for parsed in parse_validation_prefixes(&content) {
                     let Some(generation) = parsed.generation else {
                         continue;
@@ -2830,44 +3436,66 @@ fn ingest_event(
             ..
         } => {
             if name == coordy_protocol::HARNESS_SESSION_TOOL {
-                let ok = exit_code.unwrap_or(0) == 0;
-                if let Some(active) = world.run_mut(run_id) {
-                    if active.status == "running" {
-                        active.status = if ok {
-                            "completed".into()
-                        } else {
-                            "failed".into()
-                        };
-                        active.queue_status = active.status.clone();
+                if let Some(exit_code) = exit_code {
+                    let ok = exit_code == 0;
+                    crate::graph::schedule::ensure_attempt_for_graph_run(world, run_id);
+                    if let Some(active) = world.run_mut(run_id) {
+                        if active.status == "running" {
+                            active.status = if ok {
+                                "completed".into()
+                            } else {
+                                "failed".into()
+                            };
+                            active.queue_status = active.status.clone();
+                        }
                     }
-                }
-                if let Some(node_id) =
-                    crate::graph::schedule::complete_attempt_for_run(world, run_id, ok)
-                {
-                    product::record_graph_event(
-                        world,
-                        &run.workspace_id,
-                        "attempt_completed",
-                        None,
-                        Some(&node_id),
-                        json!({
-                            "run_id": run_id,
-                            "ok": ok,
-                        }),
-                    );
-                    if ok && run.role == RunRole::Executor {
-                        product::mark_node_succeeded(world, &run.workspace_id, &node_id);
+                    let completed_attempt = if ok && run.role == RunRole::ConductorReview {
+                        crate::graph::schedule::pause_attempt_for_run(world, run_id).map(
+                            |node_id| {
+                                product::record_graph_event(
+                                    world,
+                                    &run.workspace_id,
+                                    "attempt_inconclusive",
+                                    None,
+                                    Some(&node_id),
+                                    json!({
+                                        "run_id": run_id,
+                                        "reason": "missing_valid_validation_decision",
+                                    }),
+                                );
+                                node_id
+                            },
+                        );
+                        None
+                    } else {
+                        crate::graph::schedule::complete_attempt_for_run(world, run_id, ok)
+                    };
+                    if let Some(node_id) = completed_attempt {
+                        product::record_graph_event(
+                            world,
+                            &run.workspace_id,
+                            "attempt_completed",
+                            None,
+                            Some(&node_id),
+                            json!({
+                                "run_id": run_id,
+                                "ok": ok,
+                            }),
+                        );
+                        if ok && run.role == RunRole::Executor {
+                            product::mark_node_succeeded(world, &run.workspace_id, &node_id);
+                        }
                     }
-                }
-                if !ok {
-                    product::push_notice(
-                        world,
-                        &run.workspace_id,
-                        "agent_failed",
-                        "智能体运行失败",
-                        &output,
-                        Some(run.task_id.clone()),
-                    );
+                    if !ok {
+                        product::push_notice(
+                            world,
+                            &run.workspace_id,
+                            "agent_failed",
+                            "智能体运行失败",
+                            &output,
+                            Some(run.task_id.clone()),
+                        );
+                    }
                 }
             }
             if matches!(name.as_str(), "git" | "test" | "patch_apply") {
@@ -3026,6 +3654,16 @@ fn normalize_agent_name(name: &str) -> Result<String, CoordyError> {
         return Err(CoordyError::invalid("agent name is required"));
     }
     Ok(name.to_string())
+}
+
+fn normalize_tool_access(value: &str) -> Result<String, CoordyError> {
+    match value.trim() {
+        "" | "auto" => Ok("auto".into()),
+        "full_access" => Ok("full_access".into()),
+        _ => Err(CoordyError::invalid(
+            "tool_access must be auto or full_access",
+        )),
+    }
 }
 
 fn agent_name_taken(

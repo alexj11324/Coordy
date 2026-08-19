@@ -79,11 +79,12 @@ describe("product ipc channels", () => {
 });
 
 describe("external link allowlist", () => {
-  it("only opens Discord https links from the shell", () => {
+  it("only opens approved HTTPS origins from the shell", () => {
     expect(canOpenExternal("https://discord.com/invite/coordy")).toBe(true);
     expect(canOpenExternal("https://discord.gg/coordy")).toBe(true);
+    expect(canOpenExternal("https://github.com/alexj11324/Coordy/pull/7")).toBe(true);
+    expect(canOpenExternal("https://github.com.evil.example/alexj11324/Coordy/pull/7")).toBe(false);
     expect(canOpenExternal("https://evil.example/")).toBe(false);
     expect(canOpenExternal("http://discord.com/")).toBe(false);
   });
 });
-

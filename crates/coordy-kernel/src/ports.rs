@@ -12,6 +12,7 @@ pub trait Ports: Send + Sync {
     fn create_worktree(&self, repo: &str, task_id: &str) -> Result<String, CoordyError>;
     fn apply_patch(&self, worktree: &str, patch: &str) -> Result<(), CoordyError>;
     fn read_jsonl(&self, path: &str) -> Result<Vec<HarnessEvent>, CoordyError>;
+    #[allow(clippy::too_many_arguments)]
     fn spawn_harness(
         &self,
         kind: &str,
@@ -22,6 +23,7 @@ pub trait Ports: Send + Sync {
         thinking: &str,
         speed: &str,
         cli_args: &str,
+        tool_access: &str,
     ) -> Result<(), CoordyError>;
 
     fn cancel_harness(&self, run_id: &str) -> Result<(), CoordyError>;
@@ -43,6 +45,7 @@ impl Ports for NoopPorts {
         crate::jsonl::read_jsonl(path)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_harness(
         &self,
         kind: &str,
@@ -53,6 +56,7 @@ impl Ports for NoopPorts {
         _thinking: &str,
         _speed: &str,
         _cli_args: &str,
+        _tool_access: &str,
     ) -> Result<(), CoordyError> {
         if kind == "codex" || kind == "claude_code" || kind == "opencode" || kind == "acp" {
             return Err(CoordyError::unavailable(format!(
@@ -73,6 +77,7 @@ pub struct RecordingPorts {
     pub patches: std::sync::Mutex<Vec<String>>,
     pub spawns: std::sync::Mutex<
         Vec<(
+            String,
             String,
             String,
             String,
@@ -102,6 +107,7 @@ impl Ports for RecordingPorts {
         crate::jsonl::read_jsonl(path)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_harness(
         &self,
         kind: &str,
@@ -112,6 +118,7 @@ impl Ports for RecordingPorts {
         thinking: &str,
         speed: &str,
         cli_args: &str,
+        tool_access: &str,
     ) -> Result<(), CoordyError> {
         self.spawns.lock().unwrap().push((
             kind.to_string(),
@@ -122,6 +129,7 @@ impl Ports for RecordingPorts {
             thinking.to_string(),
             speed.to_string(),
             cli_args.to_string(),
+            tool_access.to_string(),
         ));
         Ok(())
     }

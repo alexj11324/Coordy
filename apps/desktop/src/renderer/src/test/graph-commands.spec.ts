@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   declareDependencyCommand,
   dependencyIdFromGraphEdgeId,
+  graphConductorStatusLabel,
   reaffirmCommandForStaleEdge,
   removeCommandForDependencyEdge,
+  staleDependencyHoldLabel,
+  updateWorkspaceConductorCommand,
 } from "../features/graph/graph-commands";
 
 describe("graph inspector commands", () => {
@@ -55,5 +58,30 @@ describe("graph inspector commands", () => {
       target: { kind: "task", id: "task_ui" },
       entity: "repo",
     });
+  });
+
+  it("assembles UpdateWorkspace to set or clear the graph conductor", () => {
+    expect(updateWorkspaceConductorCommand("ws_1", "agent_2")).toEqual({
+      type: "UpdateWorkspace",
+      workspace_id: "ws_1",
+      conductor_agent_id: "agent_2",
+    });
+    expect(updateWorkspaceConductorCommand("ws_1", "none")).toEqual({
+      type: "UpdateWorkspace",
+      workspace_id: "ws_1",
+      conductor_agent_id: "",
+    });
+    expect(updateWorkspaceConductorCommand("ws_1", null)).toEqual({
+      type: "UpdateWorkspace",
+      workspace_id: "ws_1",
+      conductor_agent_id: "",
+    });
+  });
+
+  it("labels stale holds and conductor status for the inspector", () => {
+    expect(staleDependencyHoldLabel(false)).toBe("已失效");
+    expect(staleDependencyHoldLabel(true)).toBe("等待总管批准");
+    expect(graphConductorStatusLabel(false)).toBeNull();
+    expect(graphConductorStatusLabel(true)).toBe("总管托管中");
   });
 });
