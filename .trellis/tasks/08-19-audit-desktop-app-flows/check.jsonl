@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/prd.md","reason":"Verify every parent acceptance criterion and out-of-scope boundary."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/renderer-flow-audit.md","reason":"Account for every confirmed renderer finding."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/ipc-runtime-audit.md","reason":"Account for every confirmed IPC/runtime finding."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/test-flow-audit.md","reason":"Verify the new automation closes the documented evidence gaps."}

@@ -1,0 +1,3 @@
+{"file":".trellis/tasks/08-19-repair-runtime-agent-flows/prd.md","reason":"Verify all child acceptance criteria."}
+{"file":".trellis/spec/backend/runtime-integration-contracts.md","reason":"Check ready/on-demand/missing and concrete transport invariants."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/ipc-runtime-audit.md","reason":"Confirm findings 3, 5, and 6 are closed."}

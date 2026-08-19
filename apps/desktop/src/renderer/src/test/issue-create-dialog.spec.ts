@@ -6,6 +6,9 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { IssueCreateDialog } from "../features/issue-create-dialog";
+import { useLayoutStore } from "../state/layout-store";
+import { useSession } from "../state/session-store";
 
 function button(label: string): HTMLButtonElement {
   const match = Array.from(document.querySelectorAll("button")).find(
@@ -45,11 +48,6 @@ describe("issue create dialog", () => {
         discoverAgents: vi.fn(async () => []),
       },
     });
-    const [{ IssueCreateDialog }, { useLayoutStore }, { useSession }] = await Promise.all([
-      import("../features/issue-create-dialog"),
-      import("../state/layout-store"),
-      import("../state/session-store"),
-    ]);
     useSession.getState().setWorkspace("ws");
     useSession.getState().setPrincipal("p1");
     useLayoutStore.setState({ lastCreateMode: "manual" });

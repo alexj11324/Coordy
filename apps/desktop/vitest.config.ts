@@ -8,5 +8,6 @@ export default defineConfig({
       "src/renderer/src/test/**/*.spec.ts",
       "src/renderer/src/test/**/*.spec.tsx",
     ],
+    setupFiles: ["./src/test/setup.ts"],
   },
 });

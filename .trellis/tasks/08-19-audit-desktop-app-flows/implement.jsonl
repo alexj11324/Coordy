@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/prd.md","reason":"Parent requirements, task map, and cross-child acceptance criteria."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/design.md","reason":"Cross-layer ownership, safety, and rollback boundaries."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/renderer-flow-audit.md","reason":"Confirmed renderer flow defects and reproduction paths."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/ipc-runtime-audit.md","reason":"Confirmed IPC, daemon, and runtime boundary defects."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/test-flow-audit.md","reason":"Current coverage boundary and golden-flow plan."}
