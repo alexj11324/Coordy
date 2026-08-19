@@ -60,6 +60,7 @@ import {
   asWorkspaces,
 } from "../lib/coordy/views";
 import { StatusLamp } from "./status-lamp";
+import { updateWorkspaceConductorCommand } from "./graph/graph-commands";
 import { useSession } from "../state/session-store";
 import { applyTheme, FONT_SIZE_OPTIONS, useThemeStore, type ThemePreference } from "../state/theme-store";
 
@@ -241,7 +242,7 @@ function SettingsPane({
   });
   const agents = useQuery({
     queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
-    enabled: Boolean(workspaceId) && tab === "chat",
+    enabled: Boolean(workspaceId) && (tab === "chat" || tab === "general"),
     queryFn: () => view({ type: "Agents", workspace_id: workspaceId! }),
   });
   const secrets = useQuery({
@@ -335,7 +336,14 @@ function SettingsPane({
         </Pane>
       );
     case "general":
-      return <GeneralPane workspaceId={workspaceId} workspace={ws} onSaved={invalidate} />;
+      return (
+        <GeneralPane
+          workspaceId={workspaceId}
+          workspace={ws}
+          agents={listableAgents(asAgents(agents.data))}
+          onSaved={invalidate}
+        />
+      );
     case "repositories":
       return (
         <Pane title="代码仓库" description="绑定本机目录。智能体在该目录中执行，路径不会上传。">
@@ -737,29 +745,46 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
 function GeneralPane({
   workspaceId,
   workspace,
+  agents,
   onSaved,
 }: {
   workspaceId: string | null;
   workspace: ReturnType<typeof asWorkspace>;
+  agents: ReturnType<typeof listableAgents>;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(workspace?.name ?? "");
   const [description, setDescription] = useState(workspace?.description ?? "");
   const [context, setContext] = useState(workspace?.context ?? "");
   const [prefix, setPrefix] = useState(workspace?.issue_prefix ?? "COOR");
+  const [conductor, setConductor] = useState(workspace?.conductor_agent_id || "none");
   useEffect(() => {
     setName(workspace?.name ?? "");
     setDescription(workspace?.description ?? "");
     setContext(workspace?.context ?? "");
     setPrefix(workspace?.issue_prefix ?? "COOR");
-  }, [workspace?.id, workspace?.name, workspace?.description, workspace?.context, workspace?.issue_prefix]);
+    setConductor(workspace?.conductor_agent_id || "none");
+  }, [
+    workspace?.id,
+    workspace?.name,
+    workspace?.description,
+    workspace?.context,
+    workspace?.issue_prefix,
+    workspace?.conductor_agent_id,
+  ]);
   const dirty =
     name !== (workspace?.name ?? "") ||
     description !== (workspace?.description ?? "") ||
     context !== (workspace?.context ?? "") ||
-    prefix !== (workspace?.issue_prefix ?? "COOR");
+    prefix !== (workspace?.issue_prefix ?? "COOR") ||
+    conductor !== (workspace?.conductor_agent_id || "none");
+  const conductorItems = {
+    none: "未指定",
+    ...Object.fromEntries(agents.map((agent) => [agent.id, agentDisplayName(agent)])),
+  };
+  const selectedConductor = agents.find((agent) => agent.id === conductor);
   return (
-    <Pane title="常规" description="工作区名称、智能体背景上下文与事项前缀保存在本机内核。">
+    <Pane title="常规" description="工作区名称、智能体背景上下文、事项前缀与图总管保存在本机内核。">
       <div className="space-y-1.5">
         <Label htmlFor="ws-name">名称</Label>
         <Input id="ws-name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -782,13 +807,40 @@ function GeneralPane({
         <Label htmlFor="ws-prefix">事项前缀</Label>
         <Input id="ws-prefix" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="ws-conductor">图总管</Label>
+        <Select
+          value={conductor}
+          items={conductorItems}
+          onValueChange={(value) => value && setConductor(value)}
+        >
+          <SelectTrigger id="ws-conductor">
+            <SelectValue>{selectedConductor ? agentDisplayName(selectedConductor) : "未指定"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">未指定</SelectItem>
+            {agents.map((agent) => (
+              <SelectItem key={agent.id} value={agent.id}>
+                {agentDisplayName(agent)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          指定后，绿灯已指派事项由内核按图自动开工；失效边由总管批准。未指定时仍由成员点开工或确认。
+        </p>
+      </div>
       <Button
         disabled={!workspaceId || !dirty || !name.trim()}
         onClick={() => {
           if (!workspaceId) return;
+          const conductorCmd = updateWorkspaceConductorCommand(
+            workspaceId,
+            conductor === "none" ? null : conductor,
+          );
+          if (conductorCmd.type !== "UpdateWorkspace") return;
           void submit({
-            type: "UpdateWorkspace",
-            workspace_id: workspaceId,
+            ...conductorCmd,
             name: name.trim(),
             description,
             context,
