@@ -591,6 +591,141 @@ fn assistant_plan_artifact_creates_reviewable_revision_without_applying_tasks() 
 }
 
 #[test]
+fn a_new_chat_run_creates_a_new_task_plan_source_record() {
+    let h = setup();
+    let first = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "First plan".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let first_content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&first).unwrap()
+    );
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: first.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: first_content,
+                },
+            },
+        ))
+        .unwrap();
+    let first_proposal = h.kernel.export_world().task_plan_proposals[0].clone();
+    let chat_task_id = match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: first.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat { chat, .. } => chat.task_id.unwrap(),
+        _ => panic!("chat"),
+    };
+    let second_run_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::StartRun {
+                task_id: chat_task_id,
+                source: RunSource::Acp {
+                    prompt: "Regenerate the plan".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(first.chat_id.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut second = first;
+    second.source_run_id = second_run_id.clone();
+    second.children[0].title = "Regenerated design".into();
+    let second_content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&second).unwrap()
+    );
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: second_run_id,
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: second_content,
+                },
+            },
+        ))
+        .unwrap();
+
+    let world = h.kernel.export_world();
+    assert_eq!(world.task_plan_proposals.len(), 2);
+    let latest = world.task_plan_proposals.last().unwrap();
+    assert_ne!(latest.id, first_proposal.id);
+    assert_eq!(latest.revision, 1);
+    assert_eq!(first_proposal.revision, 1);
+    assert_eq!(latest.draft.source_run_id, second.source_run_id);
+    let latest_id = latest.id.clone();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id: latest_id,
+                expected_revision: 1,
+                idempotency_key: "apply-regenerated".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: second.chat_id,
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat { task_plan, .. } => assert!(task_plan.is_none()),
+        _ => panic!("chat"),
+    }
+    let superseded = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.alice },
+            Command::ApplyTaskPlan {
+                proposal_id: first_proposal.id,
+                expected_revision: 1,
+                idempotency_key: "apply-superseded".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(superseded.code, "invalid");
+}
+
+#[test]
 fn unsupported_plan_artifact_stays_visible_and_inert() {
     let h = setup();
     let parent_id = h
@@ -8114,6 +8249,7 @@ fn task_plan_create_parent_applies_exact_graph_and_is_idempotent() {
 #[test]
 fn confirmed_task_plan_dispatches_parallel_stage_then_releases_once_and_rolls_up() {
     let h = setup();
+    set_conductor(&h, &h.a2);
     let mut draft = plan_draft(
         &h,
         TaskPlanParent::Create {
@@ -8129,7 +8265,7 @@ fn confirmed_task_plan_dispatches_parallel_stage_then_releases_once_and_rolls_up
     research.acceptance_criteria = vec!["Approach validated".into()];
     research.assignee = Some(TaskPlanAssignee::Agent { id: h.a2.clone() });
     let mut build = draft.children[1].clone();
-    build.depends_on = vec!["design".into(), "research".into()];
+    build.depends_on = vec!["design".into()];
     build.assignee = Some(TaskPlanAssignee::Agent { id: h.a1.clone() });
     draft.children = vec![draft.children[0].clone(), research, build];
     let (proposal_id, revision) = save_plan(&h, draft);
@@ -8323,6 +8459,7 @@ fn confirmed_task_plan_dispatches_parallel_stage_then_releases_once_and_rolls_up
 #[test]
 fn cancelled_or_blocked_plan_child_holds_later_stage_and_manual_parents_stay_manual() {
     let h = setup();
+    set_conductor(&h, &h.a2);
     let draft = plan_draft(
         &h,
         TaskPlanParent::Create {
@@ -8523,6 +8660,7 @@ fn confirmed_task_plan_dispatches_a_ready_squad_through_its_leader() {
 #[test]
 fn failed_plan_child_run_does_not_release_stage_or_complete_parent() {
     let h = setup();
+    set_conductor(&h, &h.a2);
     let draft = plan_draft(
         &h,
         TaskPlanParent::Create {
@@ -8578,6 +8716,14 @@ fn failed_plan_child_run_does_not_release_stage_or_complete_parent() {
         .unwrap();
     let world = h.kernel.export_world();
     assert_eq!(world.run(&run_id).unwrap().status, "failed");
+    assert_eq!(
+        world
+            .runs
+            .iter()
+            .filter(|run| run.task_id == child_ids[0])
+            .count(),
+        1
+    );
     assert_eq!(world.task(&parent_id).unwrap().status, "open");
     assert_eq!(world.task(&child_ids[1]).unwrap().status, "backlog");
     assert!(!world.runs.iter().any(|run| run.task_id == child_ids[1]));
@@ -9218,15 +9364,46 @@ fn task_plan_revision_cannot_change_source_provenance() {
             project_id: None,
         },
     );
-    let (proposal_id, revision) = save_plan(&h, original);
-    let replacement_source = plan_draft(
-        &h,
-        TaskPlanParent::Create {
-            title: "Parent revised elsewhere".into(),
-            description: String::new(),
-            project_id: None,
-        },
-    );
+    let (proposal_id, revision) = save_plan(&h, original.clone());
+    let chat_task_id = match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: original.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat { chat, .. } => chat.task_id.unwrap(),
+        _ => panic!("chat"),
+    };
+    let replacement_run_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::StartRun {
+                task_id: chat_task_id,
+                source: RunSource::Acp {
+                    prompt: "Regenerate".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(original.chat_id.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut replacement_source = original;
+    replacement_source.source_run_id = replacement_run_id;
+    replacement_source.children[0].title = "Parent revised from another run".into();
     let baseline = h.kernel.export_world();
 
     let error = h

@@ -837,6 +837,17 @@ pub(crate) fn latest_task_plan<'a>(
         .max_by_key(|proposal| proposal.revision)
 }
 
+fn latest_task_plan_record_for_chat<'a>(
+    world: &'a World,
+    chat_id: &str,
+) -> Option<&'a TaskPlanProposalRecord> {
+    world
+        .task_plan_proposals
+        .iter()
+        .rev()
+        .find(|proposal| proposal.draft.chat_id == chat_id)
+}
+
 fn save_task_plan(
     world: &mut World,
     actor: &Actor,
@@ -864,8 +875,14 @@ fn save_task_plan(
             if current.revision != expected_revision {
                 return Err(CoordyError::invalid("stale task plan revision"));
             }
+            if latest_task_plan_record_for_chat(world, &current.draft.chat_id)
+                .is_some_and(|latest| latest.id != proposal_id)
+            {
+                return Err(CoordyError::invalid("task plan proposal was superseded"));
+            }
             if current.draft.workspace_id != draft.workspace_id
                 || current.draft.chat_id != draft.chat_id
+                || current.draft.source_run_id != draft.source_run_id
                 || current.draft.source_agent_id != draft.source_agent_id
             {
                 return Err(CoordyError::invalid("task plan provenance cannot change"));
@@ -899,12 +916,11 @@ pub(crate) fn latest_applicable_task_plan_for_chat<'a>(
     world: &'a World,
     chat_id: &str,
 ) -> Option<&'a TaskPlanProposalRecord> {
-    world.task_plan_proposals.iter().rev().find(|proposal| {
-        proposal.draft.chat_id == chat_id
-            && !world
-                .task_plan_applications
-                .iter()
-                .any(|application| application.proposal_id == proposal.id)
+    latest_task_plan_record_for_chat(world, chat_id).filter(|proposal| {
+        !world
+            .task_plan_applications
+            .iter()
+            .any(|application| application.proposal_id == proposal.id)
             && latest_task_plan(world, &proposal.id)
                 .is_some_and(|latest| latest.revision == proposal.revision)
     })
@@ -941,6 +957,7 @@ pub(crate) fn save_task_plan_from_chat_run(
         return Ok(());
     }
     let (id, revision) = latest_applicable_task_plan_for_chat(world, &draft.chat_id)
+        .filter(|proposal| proposal.draft.source_run_id == draft.source_run_id)
         .map(|proposal| (proposal.id.clone(), proposal.revision + 1))
         .unwrap_or_else(|| (ids::new("plan"), 1));
     world.task_plan_proposals.push(TaskPlanProposalRecord {
@@ -1049,6 +1066,11 @@ fn apply_task_plan(
         return Err(CoordyError::invalid(
             "task plan proposal is already applied",
         ));
+    }
+    if latest_task_plan_record_for_chat(world, &proposal.draft.chat_id)
+        .is_some_and(|latest| latest.id != proposal_id)
+    {
+        return Err(CoordyError::invalid("task plan proposal was superseded"));
     }
     if proposal.revision != expected_revision {
         return Err(CoordyError::invalid("stale task plan revision"));

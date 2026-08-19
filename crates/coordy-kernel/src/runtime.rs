@@ -548,6 +548,13 @@ impl Kernel {
         prompt: GraphPromptKind,
     ) {
         for task_id in task_ids {
+            if world
+                .task_plan_applications
+                .iter()
+                .any(|application| application.child_task_ids.contains(task_id))
+            {
+                continue;
+            }
             let Some(task) = world.task(task_id).cloned() else {
                 continue;
             };
