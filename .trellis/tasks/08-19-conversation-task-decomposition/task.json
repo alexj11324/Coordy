@@ -3,7 +3,7 @@
   "name": "conversation-task-decomposition",
   "title": "Conversation-driven task decomposition",
   "description": "",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,11 +11,11 @@
   "creator": "alexjiang",
   "assignee": "alexjiang",
   "createdAt": "2026-08-19",
-  "completedAt": null,
-  "branch": null,
+  "completedAt": "2026-08-19",
+  "branch": "agent/conversation-task-decomposition",
   "base_branch": "main",
-  "worktree_path": null,
-  "commit": null,
+  "worktree_path": "/private/tmp/Coordy-conversation-task-decomposition",
+  "commit": "d970df5",
   "pr_url": null,
   "subtasks": [],
   "children": [
@@ -26,6 +26,6 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "All four child tasks, final code review fixes, full automated gates, and isolated macOS runtime acceptance completed.",
   "meta": {}
 }

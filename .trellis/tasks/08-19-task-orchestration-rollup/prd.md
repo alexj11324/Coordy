@@ -25,12 +25,12 @@ Dispatch confirmed ready children by stage/dependency and roll child progress up
 
 ## Acceptance Criteria
 
-- [ ] Parallel stage children start together after confirmation.
-- [ ] Serial stages and explicit blockers release in order exactly once.
-- [ ] Failed or blocked children do not falsely complete the parent.
-- [ ] Progress survives persistence/reload and matches the child task source of
+- [x] Parallel stage children start together after confirmation.
+- [x] Serial stages and explicit blockers release in order exactly once.
+- [x] Failed or blocked children do not falsely complete the parent.
+- [x] Progress survives persistence/reload and matches the child task source of
   truth.
-- [ ] The all-done and cancelled-child terminal cases pass kernel and real-runtime
+- [x] The all-done and cancelled-child terminal cases pass kernel and real-runtime
   acceptance.
 
 ## Notes

@@ -22,12 +22,12 @@ Add a built-in Coordy planning skill and structured agent handoff so chat agents
 
 ## Acceptance Criteria
 
-- [ ] Fake chat harness output creates a proposal revision with correct
+- [x] Fake chat harness output creates a proposal revision with correct
   provenance and a normal assistant explanation.
-- [ ] Malformed, duplicated, or unsupported-version artifacts remain inert and
+- [x] Malformed, duplicated, or unsupported-version artifacts remain inert and
   surface a clear error.
-- [ ] An ordinary non-planning run receives no planning-only context.
-- [ ] No plan can apply without the member-authenticated confirmation command.
+- [x] An ordinary non-planning run receives no planning-only context.
+- [x] No plan can apply without the member-authenticated confirmation command.
 
 ## Notes
 

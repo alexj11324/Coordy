@@ -72,29 +72,29 @@ kernel-authoritative instead of granting a model direct write authority.
 
 ## Acceptance Criteria
 
-- [ ] In a real desktop chat, the user can ask an agent to split a goal and see
+- [x] In a real desktop chat, the user can ask an agent to split a goal and see
   an inline plan card instead of raw JSON.
-- [ ] The plan card exposes parent context and every child's title, description,
+- [x] The plan card exposes parent context and every child's title, description,
   acceptance criteria, priority, stage, dependencies, and suggested assignee.
-- [ ] Editing, deleting, adding, and regenerating items produces a new proposal
+- [x] Editing, deleting, adding, and regenerating items produces a new proposal
   revision without creating issues.
-- [ ] One confirmation creates the parent when needed, all children, their
+- [x] One confirmation creates the parent when needed, all children, their
   `parent_id`, project linkage, stage values, blocker edges, and assignments.
-- [ ] A malformed, stale, unauthorized, cyclic, or partially invalid proposal
+- [x] A malformed, stale, unauthorized, cyclic, or partially invalid proposal
   creates zero tasks and shows a specific error.
-- [ ] A repeated confirmation returns the original created IDs and creates no
+- [x] A repeated confirmation returns the original created IDs and creates no
   duplicates.
-- [ ] Confirm-and-start runs only ready stage-one children; serial/later-stage
+- [x] Confirm-and-start runs only ready stage-one children; serial/later-stage
   children remain parked until eligible.
-- [ ] Completing blockers/stages starts each newly ready child exactly once.
-- [ ] Parent progress updates after every child transition and the agreed parent
+- [x] Completing blockers/stages starts each newly ready child exactly once.
+- [x] Parent progress updates after every child transition and the agreed parent
   completion rule is enforced by the kernel.
-- [ ] The built-in planning skill is present for chat agents, absent from
+- [x] The built-in planning skill is present for chat agents, absent from
   ordinary issue execution unless relevant, and its output cannot bypass the
   confirmation command.
-- [ ] Protocol wire tests, kernel invariant tests, desktop tests/typecheck/build,
+- [x] Protocol wire tests, kernel invariant tests, desktop tests/typecheck/build,
   and real macOS runtime acceptance all pass.
-- [ ] Runtime acceptance covers create-new-parent, attach-to-existing-parent,
+- [x] Runtime acceptance covers create-new-parent, attach-to-existing-parent,
   regenerate, invalid cycle, confirm-and-start, stage release, and parent
   completion.
 

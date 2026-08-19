@@ -24,12 +24,12 @@ Define a structured task-plan draft and a kernel-owned all-or-nothing command th
 
 ## Acceptance Criteria
 
-- [ ] Valid create-parent and existing-parent plans round-trip on the wire and
+- [x] Valid create-parent and existing-parent plans round-trip on the wire and
   apply with the exact requested graph.
-- [ ] Invalid identity, stale revision, missing draft key, duplicate key, cycle,
+- [x] Invalid identity, stale revision, missing draft key, duplicate key, cycle,
   and unauthorized apply each create zero tasks.
-- [ ] Repeating an idempotency key returns the first result without duplicates.
-- [ ] Existing task/blocker/assignment invariant tests remain green.
+- [x] Repeating an idempotency key returns the first result without duplicates.
+- [x] Existing task/blocker/assignment invariant tests remain green.
 
 ## Notes
 

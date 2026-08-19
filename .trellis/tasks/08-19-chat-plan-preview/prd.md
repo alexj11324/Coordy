@@ -22,10 +22,10 @@ Render agent-produced task plans in chat with editable preview, regeneration, on
 
 ## Acceptance Criteria
 
-- [ ] Desktop tests cover preview, edits, regeneration, disabled invalid apply,
+- [x] Desktop tests cover preview, edits, regeneration, disabled invalid apply,
   create-only, and confirm-and-start.
-- [ ] Keyboard operation and the 720x520 layout remain usable.
-- [ ] Existing normal chat messages and manual child creation are unchanged.
+- [x] Keyboard operation and the 720x520 layout remain usable.
+- [x] Existing normal chat messages and manual child creation are unchanged.
 
 ## Notes
 
