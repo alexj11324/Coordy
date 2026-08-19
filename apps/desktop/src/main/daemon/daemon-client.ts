@@ -97,6 +97,10 @@ export class DaemonClient {
     return this.request({ type: "ClearSecret" });
   }
 
+  async completeDraft(kind: string, prompt: string) {
+    return this.request({ type: "CompleteDraft", kind, prompt });
+  }
+
   async discoverAgents(refresh = false) {
     return this.request({ type: "DiscoverAgents", refresh });
   }

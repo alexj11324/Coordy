@@ -9,7 +9,7 @@ import {
   Input,
   cn,
 } from "@coordy/ui";
-import { ChevronDown, Maximize2, MessageCircle, Minimize2, Minus, Plus, SendHorizonal } from "lucide-react";
+import { Archive, ChevronDown, Maximize2, MessageCircle, Minimize2, Minus, Plus, SendHorizonal, Square } from "lucide-react";
 import { useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
@@ -191,6 +191,41 @@ export function FloatingChat() {
           </DropdownMenu>
         </div>
         <div className="flex shrink-0 items-center">
+          {current ? (
+            <>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="text-muted-foreground"
+                aria-label="停止当前运行"
+                title="停止"
+                onClick={() => {
+                  void submit({ type: "StopChat", chat_id: current.id }).then(async () => {
+                    await qc.invalidateQueries();
+                  });
+                }}
+              >
+                <Square />
+              </Button>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="text-muted-foreground"
+                aria-label="归档对话"
+                title="归档"
+                onClick={() => {
+                  void submit({ type: "ArchiveChat", chat_id: current.id }).then(async () => {
+                    useLayoutStore.getState().setActiveChatId(null);
+                    await qc.invalidateQueries();
+                  });
+                }}
+              >
+                <Archive />
+              </Button>
+            </>
+          ) : null}
           <Button
             type="button"
             size="icon-sm"

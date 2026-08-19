@@ -4,13 +4,14 @@ import { ChevronRight, Loader2, MessageSquare } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  applyBuilderTurn,
+  applyDraftCompletion,
   applyDraftFastChange,
   applyDraftModelChange,
   applyDraftRuntimeChange,
   applyDraftThinkingChange,
   BUILDER_STARTER_PROMPTS,
   classifyCreateAgentError,
+  draftCompletionReply,
   emptyAgentDraft,
   type AgentDraft,
   type BuilderMessage,
@@ -104,7 +105,7 @@ export function AiCreateAgentPage() {
             </span>
             <h2 className="mt-5 text-xl font-semibold">选择新智能体的 harness 与执行参数</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              此对话在本机进行，不会调用 harness。Harness、模型、思考强度与 Codex Fast 仅在创建完成后、启动运行时使用。
+              此对话会调用已配置的模型密钥，把答复写入右侧草稿。未配置密钥时会明确失败，不会用模板冒充模型。Harness、模型、思考强度与 Codex Fast 仅在创建完成后、启动运行时使用。
             </p>
             <div className="mt-6 space-y-4">
               <HarnessDropdown
@@ -165,6 +166,7 @@ export function AiBuilderSessionPage() {
   const [nameError, setNameError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
+  const [sending, setSending] = useState(false);
   const runtimes = useMemo(
     () => pickerRuntimes(catalog.data, session?.draft.harness),
     [catalog.data, session?.draft.harness],
@@ -194,18 +196,46 @@ export function AiBuilderSessionPage() {
     setSession(stamped);
   };
 
-  const send = (text: string) => {
-    if (!session || !text.trim() || !runtimeOnline) return;
+  const send = async (text: string) => {
+    if (!session || !text.trim() || !runtimeOnline || sending) return;
+    setSending(true);
+    setFormError(null);
     const userCount = session.messages.filter((message) => message.role === "user").length;
-    const turn = applyBuilderTurn(session.draft, userCount, text);
     const user: BuilderMessage = { id: `${session.id}-u-${userCount}`, role: "user", content: text.trim() };
-    const assistant: BuilderMessage = {
-      id: `${session.id}-a-${userCount}`,
-      role: "assistant",
-      content: turn.reply,
-    };
-    persist({ ...session, draft: turn.draft, messages: [...session.messages, user, assistant] });
+    const withUser = { ...session, messages: [...session.messages, user] };
+    persist(withUser);
     setComposer("");
+    try {
+      const secrets = await window.coordy.secretsStatus();
+      if (!secrets.key_configured) {
+        throw new Error("未配置模型密钥。请在设置 → 模型密钥中填写后再使用对话起草。");
+      }
+      const completion = await window.coordy.completeDraft("agent", text.trim());
+      persist({
+        ...withUser,
+        draft: applyDraftCompletion(withUser.draft, completion),
+        messages: [
+          ...withUser.messages,
+          {
+            id: `${session.id}-a-${userCount}`,
+            role: "assistant",
+            content: draftCompletionReply(completion),
+          },
+        ],
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      persist({
+        ...withUser,
+        messages: [
+          ...withUser.messages,
+          { id: `${session.id}-a-${userCount}`, role: "assistant", content: message },
+        ],
+      });
+      setFormError(message);
+    } finally {
+      setSending(false);
+    }
   };
 
   const create = async () => {
@@ -266,16 +296,17 @@ export function AiBuilderSessionPage() {
         <BuilderConversation
           messages={session.messages}
           runtimeOnline={runtimeOnline}
+          sending={sending}
           composer={composer}
           onComposerChange={setComposer}
-          onSend={send}
+          onSend={(text) => void send(text)}
         />
         <div className="flex min-h-0 flex-col border-t bg-muted/10 lg:border-t-0 lg:border-l">
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto max-w-2xl px-5 py-6">
               <div className="mb-6">
                 <h2 className="text-sm font-semibold tracking-tight">智能体配置</h2>
-                <p className="mt-1 text-xs text-muted-foreground">提问内容会写入此处。此为本地草稿，并非模型回复。</p>
+                <p className="mt-1 text-xs text-muted-foreground">模型回复会写入此处。也可直接编辑字段。</p>
               </div>
               <AgentConfigurationPanel
                 compact
@@ -323,12 +354,14 @@ export function AiBuilderSessionPage() {
 function BuilderConversation({
   messages,
   runtimeOnline,
+  sending,
   composer,
   onComposerChange,
   onSend,
 }: {
   messages: BuilderMessage[];
   runtimeOnline: boolean;
+  sending: boolean;
   composer: string;
   onComposerChange: (value: string) => void;
   onSend: (text: string) => void;
@@ -342,7 +375,9 @@ function BuilderConversation({
       <header className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-b px-5 py-2.5">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-semibold">起草对话</h2>
-          <p className="truncate text-xs text-muted-foreground">本机提问，将答复写入右侧指令。</p>
+          <p className="truncate text-xs text-muted-foreground">
+            {sending ? "正在调用已配置的模型密钥…" : "调用已配置的模型密钥，将答复写入右侧草稿。"}
+          </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span className={cn("size-2 rounded-full", runtimeOnline ? "bg-emerald-500" : "bg-muted-foreground/40")} />
@@ -377,7 +412,7 @@ function BuilderConversation({
                 <button
                   key={prompt}
                   type="button"
-                  disabled={!runtimeOnline}
+                  disabled={!runtimeOnline || sending}
                   onClick={() => onSend(prompt)}
                   className="rounded-full border bg-background px-3 py-1.5 text-xs transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-50"
                 >
@@ -401,10 +436,11 @@ function BuilderConversation({
               }
             }}
             placeholder="描述所需智能体…"
+            disabled={sending || !runtimeOnline}
             className="min-h-16 flex-1 resize-none rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           />
-          <Button type="submit" disabled={!composer.trim()}>
-            发送
+          <Button type="submit" disabled={!composer.trim() || sending || !runtimeOnline}>
+            {sending ? "发送中…" : "发送"}
           </Button>
         </div>
       </form>

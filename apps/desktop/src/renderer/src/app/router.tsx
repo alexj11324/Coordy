@@ -11,6 +11,7 @@ import {
   ManualCreateAgentPage,
 } from "../features/create-agent";
 import { AgentDetailPage } from "../features/agent-detail";
+import { AutomationsPage, ProjectsPage, SkillsPage, SquadsPage } from "../features/catalog-pages";
 import { RuntimesPage } from "../features/runtimes";
 import { SettingsPage } from "../features/settings";
 import {
@@ -18,16 +19,12 @@ import {
   ConflictsPage,
   ContractsPage,
   DependenciesPage,
-  AutomationsPage,
   ChatPage,
   InboxPage,
   MemoryPage,
   MyIssuesPage,
   PrincipalsPage,
-  ProjectsPage,
   RunsPage,
-  SkillsPage,
-  SquadsPage,
   StatsPage,
 } from "../features/pages";
 

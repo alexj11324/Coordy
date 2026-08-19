@@ -52,6 +52,7 @@ import {
 import {
   asAccount,
   asAgents,
+  asComputers,
   asHealth,
   asLabels,
   asPrincipals,
@@ -77,8 +78,7 @@ const ACCOUNT_TABS = [
 const WORKSPACE_TABS = [
   { id: "general", label: "常规", icon: SettingsIcon },
   { id: "repositories", label: "代码仓库", icon: FolderGit2 },
-  { id: "github", label: "GitHub", icon: FolderGit2 },
-  { id: "integrations", label: "集成", icon: Plug },
+  { id: "cloud", label: "云通道", icon: Plug },
   { id: "labs", label: "实验室", icon: FlaskConical },
   { id: "members", label: "成员", icon: Users },
   { id: "labels", label: "标签", icon: Tags },
@@ -125,7 +125,12 @@ function initials(name: string): string {
 export function SettingsPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
-  const tab: SettingsTab = isSettingsTab(raw) ? raw : "profile";
+  const tab: SettingsTab =
+    raw === "github" || raw === "integrations"
+      ? "cloud"
+      : isSettingsTab(raw)
+        ? raw
+        : "profile";
   const workspaceId = useSession((s) => s.workspaceId);
   const principalId = useSession((s) => s.principalId);
   const qc = useQueryClient();
@@ -315,6 +320,8 @@ function SettingsPane({
           live={asHealth(health.data) ?? (health.isError ? null : asHealth(settings.data))}
           isError={health.isError}
           os={info?.os}
+          hostname={info?.hostname}
+          workspaceId={workspaceId}
         />
       );
     case "updates":
@@ -347,18 +354,12 @@ function SettingsPane({
           </Button>
         </Pane>
       );
-    case "github":
+    case "cloud":
       return (
-        <Pane title="GitHub" description="Coordy 不登录 GitHub 账号，也没有 OAuth。">
+        <Pane title="云通道" description="本机桌面不提供云通道，也不假装有 OAuth 或公网入站。">
           <p className="text-sm text-muted-foreground">
-            仓库绑定入口位于「代码仓库」。事项当前不支持关联 Pull Request。
+            不提供 GitHub App、Pull Request 侧栏、CI，也不提供飞书 / Slack / 钉钉 / 企业微信。仓库绑定入口位于「代码仓库」。模型密钥位于「模型密钥」。
           </p>
-        </Pane>
-      );
-    case "integrations":
-      return (
-        <Pane title="集成" description="不提供 Slack / 飞书 / 企业微信云通道。">
-          <p className="text-sm text-muted-foreground">本机模型密钥位于「模型密钥」。可选 LLM 顾问位于「实验室」。</p>
         </Pane>
       );
     case "labs":
@@ -415,17 +416,27 @@ function DaemonPane({
   live,
   isError,
   os,
+  hostname,
+  workspaceId,
 }: {
   live: ReturnType<typeof asHealth>;
   isError: boolean;
   os?: string;
+  hostname?: string;
+  workspaceId: string | null;
 }) {
+  const computers = useQuery({
+    queryKey: ["view", { type: "Computers", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId),
+    queryFn: () => view({ type: "Computers", workspace_id: workspaceId! }),
+  });
   const conn = daemonConnectionStatus({ isError, status: live?.status });
-  const host = osShortLabel(os) || "本机";
+  const host = hostname?.trim() || osShortLabel(os) || "本机";
+  const registered = asComputers(computers.data);
   return (
     <Pane
       title="Daemon"
-      description="绿灯表示桌面当前可通过 Unix socket 完成对 coordyd 的 Health 查询，不是本机设备清单中的登记状态。"
+      description="绿灯表示桌面当前可通过 Unix socket 完成对 coordyd 的 Health 查询。本机电脑在绿灯时登记到当前工作区。"
     >
       <Row
         label="本机"
@@ -453,6 +464,22 @@ function DaemonPane({
           </Row>
         </>
       ) : null}
+      <div className="pt-4">
+        <h3 className="mb-2 text-sm font-medium">已登记电脑</h3>
+        {registered.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Daemon 绿灯后会以主机名登记当前电脑。</p>
+        ) : (
+          <ul className="space-y-2">
+            {registered.map((computer) => (
+              <li key={computer.id} className="rounded-lg border border-border px-3 py-2 text-sm">
+                {computer.name}
+                {computer.kind ? ` · ${computer.kind}` : ""}
+                {computer.concurrency_limit ? ` · 并发 ${computer.concurrency_limit}` : ""}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Pane>
   );
 }
@@ -643,8 +670,7 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
       description="本机 harness 使用的模型密钥。不是云账号登录用的 API Token。"
     >
       <p className="text-sm text-muted-foreground">
-        Multica 的 API Token 是 <code className="font-mono text-xs">mul_</code>{" "}
-        个人访问令牌，用于 CLI 与外部集成登录。Coordy 没有云账号，不会签发此类 token；CLI 通过本机 Unix socket 通信。此处密钥写入本机 0600 文件，启动运行时注入环境变量，不写入 SQLite。
+        Coordy 没有云账号，也不会签发个人访问令牌。CLI 通过本机 Unix socket 通信。此处密钥写入本机 0600 文件，启动运行时注入环境变量，不写入 SQLite。
       </p>
       <div className="flex items-center gap-2 text-sm">
         {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">未配置密钥</Badge>}

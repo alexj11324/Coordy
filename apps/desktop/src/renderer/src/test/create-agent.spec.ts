@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyBuilderTurn,
+  applyDraftCompletion,
   applyDraftFastChange,
   applyDraftModelChange,
   applyDraftRuntimeChange,
@@ -87,6 +88,19 @@ describe("agent creation studio helpers", () => {
     const third = applyBuilderTurn(second.draft, 2, "把结论写在 issue 评论里");
     expect(third.draft.instructions).toContain("issue 评论");
     expect(third.reply).toContain("右侧草稿");
+  });
+
+  it("merges a model draft completion into the live form", () => {
+    const next = applyDraftCompletion(
+      { ...EMPTY_AGENT_DRAFT, name: "旧名", harness: "claude" },
+      { name: "审查员", description: "看 PR", instructions: "只评论" },
+    );
+    expect(next.name).toBe("审查员");
+    expect(next.description).toBe("看 PR");
+    expect(next.instructions).toBe("只评论");
+    expect(next.harness).toBe("claude");
+    const kept = applyDraftCompletion(next, { name: "", description: "", instructions: "" });
+    expect(kept.name).toBe("审查员");
   });
 
   it("maps a unique-name kernel error onto the name field", () => {

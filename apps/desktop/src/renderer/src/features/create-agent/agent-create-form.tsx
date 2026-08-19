@@ -129,7 +129,7 @@ export function AgentConfigurationPanel({
         </div>
       </SettingsBlock>
 
-      <SettingsBlock title="访问权限" description="启动运行时按此权限校验。详情页当前不可修改。">
+      <SettingsBlock title="访问权限" description="启动运行时按此权限校验。保存后可在详情页改为指定成员、并发上限与 CLI 参数。">
         <div className="space-y-1 p-2" role="radiogroup" aria-label="访问权限">
           {ACCESS_OPTIONS.map((option) => {
             const selected = draft.access === option.id;

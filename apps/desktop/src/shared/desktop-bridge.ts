@@ -10,6 +10,7 @@ import type {
   SetSecretInput,
   DiscoveredAgentView,
   ImportAgentsResult,
+  DraftCompletion,
 } from "@coordy/protocol";
 
 export type DirEntry = {
@@ -31,6 +32,7 @@ export interface CoordyDesktopBridge {
   secretsStatus(): Promise<SecretStatus>;
   setSecret(input: SetSecretInput): Promise<SecretStatus>;
   clearSecret(): Promise<SecretStatus>;
+  completeDraft(kind: string, prompt: string): Promise<DraftCompletion>;
   discoverAgents(refresh?: boolean): Promise<DiscoveredAgentView[]>;
   importAgents(input: {
     workspace_id: string;

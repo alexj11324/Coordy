@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { join } from "path";
+import { hostname } from "os";
 import { exec } from "child_process";
 import { IPC } from "../shared/ipc-channels";
 import {
@@ -104,6 +105,7 @@ app.whenReady().then(async () => {
       version: app.getVersion(),
       os: process.platform,
       cliPath: cliBinaryPath(),
+      hostname: hostname(),
     };
   });
   ipcMain.handle(IPC.chooseRepository, async (event) => {
@@ -146,6 +148,13 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.clearSecret, (event) => {
     guard(event);
     return daemon.client!.clearSecret();
+  });
+  ipcMain.handle(IPC.completeDraft, (event, kind: string, prompt: string) => {
+    guard(event);
+    if (!kind || typeof kind !== "string" || typeof prompt !== "string") {
+      throw new Error("invalid draft request");
+    }
+    return daemon.client!.completeDraft(kind, prompt);
   });
   ipcMain.handle(IPC.discoverAgents, (event, refresh?: boolean) => {
     guard(event);

@@ -19,6 +19,7 @@ const bridge: CoordyDesktopBridge = {
   secretsStatus: () => ipcRenderer.invoke(IPC.secretsStatus),
   setSecret: (input) => ipcRenderer.invoke(IPC.setSecret, input),
   clearSecret: () => ipcRenderer.invoke(IPC.clearSecret),
+  completeDraft: (kind, prompt) => ipcRenderer.invoke(IPC.completeDraft, kind, prompt),
   discoverAgents: (refresh = false) => ipcRenderer.invoke(IPC.discoverAgents, refresh),
   importAgents: (input) => ipcRenderer.invoke(IPC.importAgents, input),
   quit: () => ipcRenderer.invoke(IPC.quit),

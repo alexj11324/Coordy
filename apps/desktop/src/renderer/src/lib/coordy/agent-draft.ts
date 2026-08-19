@@ -286,6 +286,29 @@ export function applyBuilderTurn(
   };
 }
 
+export function applyDraftCompletion(
+  draft: AgentDraft,
+  completion: { name?: string; description?: string; instructions?: string },
+): AgentDraft {
+  return {
+    ...draft,
+    name: completion.name?.trim() || draft.name,
+    description: completion.description?.trim() || draft.description,
+    instructions: completion.instructions?.trim() || draft.instructions,
+  };
+}
+
+export function draftCompletionReply(completion: {
+  name?: string;
+  description?: string;
+  instructions?: string;
+}): string {
+  const lines = ["已根据模型回复更新右侧草稿。"];
+  if (completion.name?.trim()) lines.push(`名称：${completion.name.trim()}`);
+  if (completion.description?.trim()) lines.push(`描述：${completion.description.trim()}`);
+  return lines.join("\n");
+}
+
 export function classifyCreateAgentError(err: unknown): { nameError: string | null; formError: string | null } {
   const message = err instanceof Error ? err.message : String(err);
   if (message.includes("name is required") || message.includes("请填写名称")) {

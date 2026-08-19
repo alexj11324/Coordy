@@ -488,7 +488,7 @@ export type Effect =
 
 export type CoordyError = { code: string; message: string };
 
-export type AppInfo = { version: string; os: string; cliPath?: string };
+export type AppInfo = { version: string; os: string; cliPath?: string; hostname?: string };
 export type InstallCliResult = { ok: boolean; message: string };
 export type DiscoveredAgentView = {
   id: string;
