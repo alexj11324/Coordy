@@ -5,7 +5,8 @@ use coordy_kernel::{
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, Effect, GithubPullRequestItem,
     GithubSync, GraphEdgeKind, GraphEdgeState, HarnessEvent, NodeKind, Query, RunRole, RunSource,
-    ValidationChoice, View, STALE_DEPENDENCY_REASON,
+    TaskPlanApplyMode, TaskPlanAssignee, TaskPlanChild, TaskPlanDraft, TaskPlanParent,
+    ValidationChoice, View, STALE_DEPENDENCY_REASON, TASK_PLAN_VERSION,
 };
 use std::sync::Arc;
 
@@ -123,6 +124,123 @@ fn setup_kernel(kernel: Kernel) -> Harness {
         a1,
         a2,
     }
+}
+
+fn plan_draft(h: &Harness, parent: TaskPlanParent) -> TaskPlanDraft {
+    let chat_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateChat {
+                workspace_id: h.workspace_id.clone(),
+                agent_id: h.a1.clone(),
+                project_id: None,
+            },
+        ))
+        .unwrap()
+        .ids["chat_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let task_id = match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat { chat, .. } => chat.task_id.unwrap(),
+        _ => panic!("chat"),
+    };
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: task_id.clone(),
+                status: "open".into(),
+            },
+        ))
+        .unwrap();
+    let run_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::StartRun {
+                task_id,
+                source: RunSource::Acp {
+                    prompt: "Split this goal".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(chat_id.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    TaskPlanDraft {
+        version: TASK_PLAN_VERSION.into(),
+        workspace_id: h.workspace_id.clone(),
+        chat_id,
+        source_run_id: run_id,
+        source_agent_id: h.a1.clone(),
+        parent,
+        children: vec![
+            TaskPlanChild {
+                key: "design".into(),
+                title: "Design".into(),
+                description: "Define the interface".into(),
+                acceptance_criteria: vec!["Interface reviewed".into()],
+                priority: "high".into(),
+                stage: 1,
+                depends_on: vec![],
+                assignee: Some(TaskPlanAssignee::Agent { id: h.a1.clone() }),
+            },
+            TaskPlanChild {
+                key: "build".into(),
+                title: "Build".into(),
+                description: "Implement the interface".into(),
+                acceptance_criteria: vec!["Tests pass".into()],
+                priority: "medium".into(),
+                stage: 2,
+                depends_on: vec!["design".into()],
+                assignee: Some(TaskPlanAssignee::Agent { id: h.a2.clone() }),
+            },
+        ],
+    }
+}
+
+fn save_plan(h: &Harness, draft: TaskPlanDraft) -> (String, u64) {
+    let saved = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SaveTaskPlanProposal {
+                proposal_id: None,
+                expected_revision: None,
+                draft,
+            },
+        ))
+        .unwrap();
+    (
+        saved.ids["proposal_id"].as_str().unwrap().to_string(),
+        saved.ids["revision"].as_u64().unwrap(),
+    )
 }
 
 #[test]
@@ -7369,4 +7487,585 @@ fn github_sync_rejects_member_forged_snapshots() {
     let task = tasks.iter().find(|row| row.id == task_id).unwrap();
     assert_eq!(task.status, "open");
     assert!(task.pull_requests.is_empty());
+}
+
+#[test]
+fn task_plan_create_parent_applies_exact_graph_and_is_idempotent() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Ship the feature".into(),
+            description: "Coordinate delivery".into(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let runs_before_apply = h.kernel.export_world().runs.len();
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id: proposal_id.clone(),
+                expected_revision: revision,
+                idempotency_key: "confirm-create-parent".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    assert_eq!(h.kernel.export_world().runs.len(), runs_before_apply);
+    let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
+    let child_ids: Vec<String> = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(child_ids.len(), 2);
+    assert_eq!(applied.ids["draft_key_to_task_id"]["design"], child_ids[0]);
+    assert_eq!(applied.ids["draft_key_to_task_id"]["build"], child_ids[1]);
+
+    let tasks = match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Board { tasks } => tasks,
+        _ => panic!("board"),
+    };
+    let parent = tasks.iter().find(|task| task.id == parent_id).unwrap();
+    assert_eq!(parent.title, "Ship the feature");
+    assert_eq!(parent.status, "open");
+    let design = tasks.iter().find(|task| task.id == child_ids[0]).unwrap();
+    assert_eq!(design.parent_id.as_deref(), Some(parent_id.as_str()));
+    assert_eq!(design.priority, "high");
+    assert_eq!(design.stage, "1");
+    assert_eq!(design.status, "open");
+    assert_eq!(design.assignee_agent_id.as_deref(), Some(h.a1.as_str()));
+    assert!(design.description.contains("## Acceptance criteria"));
+    assert!(design.description.contains("- Interface reviewed"));
+    let build = tasks.iter().find(|task| task.id == child_ids[1]).unwrap();
+    assert_eq!(build.parent_id.as_deref(), Some(parent_id.as_str()));
+    assert_eq!(build.priority, "medium");
+    assert_eq!(build.stage, "2");
+    assert_eq!(build.status, "backlog");
+    assert_eq!(build.assignee_agent_id.as_deref(), Some(h.a2.as_str()));
+    assert_eq!(build.blocker_ids, vec![child_ids[0].clone()]);
+
+    let before_retry = h.kernel.export_world().tasks.len();
+    let repeated = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "confirm-create-parent".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    assert_eq!(repeated.message, "task plan already applied");
+    assert_eq!(repeated.ids["parent_task_id"], parent_id);
+    assert_eq!(
+        repeated.ids["child_task_ids"],
+        applied.ids["child_task_ids"]
+    );
+    assert_eq!(h.kernel.export_world().tasks.len(), before_retry);
+}
+
+#[test]
+fn task_plan_existing_parent_inherits_project_and_parks_create_only_children() {
+    let h = setup();
+    let squad_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateSquad {
+                workspace_id: h.workspace_id.clone(),
+                name: "Builders".into(),
+                leader_agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let project_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateProject {
+                workspace_id: h.workspace_id.clone(),
+                name: "Launch".into(),
+                icon: String::new(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["project_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let parent_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Existing parent".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AssignIssue {
+                task_id: parent_id.clone(),
+                agent_id: None,
+                principal_id: None,
+                squad_id: None,
+                project_id: Some(project_id.clone()),
+                parent_id: None,
+                stage: None,
+            },
+        ))
+        .unwrap();
+    let mut draft = plan_draft(
+        &h,
+        TaskPlanParent::Existing {
+            task_id: parent_id.clone(),
+        },
+    );
+    draft.children[1].assignee = Some(TaskPlanAssignee::Squad {
+        id: squad_id.clone(),
+    });
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "confirm-existing-parent".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    assert_eq!(applied.ids["parent_task_id"], parent_id);
+    let child_ids = applied.ids["child_task_ids"].as_array().unwrap();
+    let world = h.kernel.export_world();
+    for (index, child_id) in child_ids.iter().enumerate() {
+        let task = world.task(child_id.as_str().unwrap()).unwrap();
+        assert_eq!(task.parent_id.as_deref(), Some(parent_id.as_str()));
+        assert_eq!(task.project_id.as_deref(), Some(project_id.as_str()));
+        assert_eq!(task.status, "backlog");
+        if index == 1 {
+            assert_eq!(task.assignee_squad_id.as_deref(), Some(squad_id.as_str()));
+            assert!(task.assignee_agent_id.is_none());
+        }
+    }
+}
+
+#[test]
+fn task_plan_preflight_rejects_invalid_graphs_without_allocating_tasks() {
+    let h = setup();
+    let valid = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let baseline = h.kernel.export_world();
+    let cases = [
+        {
+            let mut draft = valid.clone();
+            draft.children[0].key.clear();
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[0].key = " design".into();
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[1].key = "design".into();
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[1].depends_on = vec!["missing".into()];
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[1].depends_on = vec!["design".into(), "design".into()];
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[0].stage = 2;
+            draft.children[0].depends_on = vec!["build".into()];
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[0].depends_on = vec!["build".into()];
+            draft.children[1].depends_on.clear();
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[0].assignee = Some(TaskPlanAssignee::Agent {
+                id: "agent_missing".into(),
+            });
+            draft
+        },
+        {
+            let mut draft = valid.clone();
+            draft.children[0].stage = 0;
+            draft
+        },
+    ];
+    for draft in cases {
+        let error = h
+            .kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: h.alice.clone(),
+                },
+                Command::SaveTaskPlanProposal {
+                    proposal_id: None,
+                    expected_revision: None,
+                    draft,
+                },
+            ))
+            .unwrap_err();
+        assert!(matches!(error.code.as_str(), "invalid" | "not_found"));
+        let after = h.kernel.export_world();
+        assert_eq!(after.tasks.len(), baseline.tasks.len());
+        assert_eq!(
+            after.workspace(&h.workspace_id).unwrap().next_issue_number,
+            baseline
+                .workspace(&h.workspace_id)
+                .unwrap()
+                .next_issue_number
+        );
+    }
+}
+
+#[test]
+fn task_plan_apply_revalidates_assignees_without_partial_creation() {
+    let h = setup();
+    let squad_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateSquad {
+                workspace_id: h.workspace_id.clone(),
+                name: "Builders".into(),
+                leader_agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    draft.children[0].assignee = Some(TaskPlanAssignee::Squad { id: squad_id });
+    let (proposal_id, revision) = save_plan(&h, draft);
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ArchiveAgent {
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+
+    let baseline = h.kernel.export_world();
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "archived-squad-leader".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid");
+    let after = h.kernel.export_world();
+    assert_eq!(after.tasks.len(), baseline.tasks.len());
+    assert_eq!(after.runs.len(), baseline.runs.len());
+    assert_eq!(after.issue_blockers.len(), baseline.issue_blockers.len());
+    assert_eq!(
+        after.task_plan_applications.len(),
+        baseline.task_plan_applications.len()
+    );
+    assert_eq!(
+        after.workspace(&h.workspace_id).unwrap().next_issue_number,
+        baseline
+            .workspace(&h.workspace_id)
+            .unwrap()
+            .next_issue_number
+    );
+}
+
+#[test]
+fn task_plan_idempotency_keys_are_scoped_to_one_proposal() {
+    let h = setup();
+    let first = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "First parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let second = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Second parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (first_id, first_revision) = save_plan(&h, first);
+    let (second_id, second_revision) = save_plan(&h, second);
+
+    let first_applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id: first_id,
+                expected_revision: first_revision,
+                idempotency_key: "same-client-key".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    let second_applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id: second_id,
+                expected_revision: second_revision,
+                idempotency_key: "same-client-key".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+
+    assert_ne!(
+        first_applied.ids["parent_task_id"],
+        second_applied.ids["parent_task_id"]
+    );
+    assert_eq!(h.kernel.export_world().task_plan_applications.len(), 2);
+}
+
+#[test]
+fn task_plan_revision_cannot_change_source_provenance() {
+    let h = setup();
+    let original = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, original);
+    let replacement_source = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parent revised elsewhere".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let baseline = h.kernel.export_world();
+
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SaveTaskPlanProposal {
+                proposal_id: Some(proposal_id.clone()),
+                expected_revision: Some(revision),
+                draft: replacement_source,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid");
+    let after = h.kernel.export_world();
+    assert_eq!(
+        after.task_plan_proposals.len(),
+        baseline.task_plan_proposals.len()
+    );
+    let viewed = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::TaskPlan { proposal_id },
+        ))
+        .unwrap();
+    match viewed {
+        View::TaskPlan { proposal } => assert_eq!(proposal.revision, revision),
+        _ => panic!("task plan"),
+    }
+}
+
+#[test]
+fn task_plan_stale_or_unauthorized_apply_creates_nothing() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft.clone());
+    let mut revised = draft;
+    revised.children[0].title = "Revised design".into();
+    let revision_two = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SaveTaskPlanProposal {
+                proposal_id: Some(proposal_id.clone()),
+                expected_revision: Some(revision),
+                draft: revised,
+            },
+        ))
+        .unwrap()
+        .ids["revision"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(revision_two, 2);
+    let baseline = h.kernel.export_world();
+    let stale = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id: proposal_id.clone(),
+                expected_revision: revision,
+                idempotency_key: "stale".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(stale.code, "invalid");
+    let denied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.bob.clone() },
+            Command::ApplyTaskPlan {
+                proposal_id: proposal_id.clone(),
+                expected_revision: revision_two,
+                idempotency_key: "unauthorized".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(denied.code, "denied");
+    let after = h.kernel.export_world();
+    assert_eq!(after.tasks.len(), baseline.tasks.len());
+    assert_eq!(
+        after.workspace(&h.workspace_id).unwrap().next_issue_number,
+        baseline
+            .workspace(&h.workspace_id)
+            .unwrap()
+            .next_issue_number
+    );
+    let viewed = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::TaskPlan { proposal_id },
+        ))
+        .unwrap();
+    match viewed {
+        View::TaskPlan { proposal } => assert_eq!(proposal.revision, revision_two),
+        _ => panic!("task plan"),
+    }
+}
+
+#[test]
+fn stored_world_defaults_task_plan_collections_for_older_snapshots() {
+    let h = setup();
+    let mut value = serde_json::to_value(h.kernel.export_world()).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.remove("task_plan_proposals");
+    object.remove("task_plan_applications");
+    let restored: coordy_kernel::World = serde_json::from_value(value).unwrap();
+    assert!(restored.task_plan_proposals.is_empty());
+    assert!(restored.task_plan_applications.is_empty());
 }

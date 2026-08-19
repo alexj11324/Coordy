@@ -2405,8 +2405,8 @@ impl Kernel {
                 let (retry_agent_id, retry_trigger) = if old.role == RunRole::ConductorReview {
                     let conductor_id = product::workspace_conductor_id(&world, &old.workspace_id)
                         .ok_or_else(|| {
-                            CoordyError::invalid("conductor review retry requires a conductor")
-                        })?;
+                        CoordyError::invalid("conductor review retry requires a conductor")
+                    })?;
                     (conductor_id, "graph_review")
                 } else {
                     (old.agent_id.clone(), "retry")
@@ -2669,6 +2669,23 @@ impl Kernel {
                         .iter()
                         .map(|t| product::task_view(&world, t, &actor))
                         .collect(),
+                })
+            }
+            Query::TaskPlan { proposal_id } => {
+                let proposal = product::latest_task_plan(&world, &proposal_id)
+                    .ok_or_else(|| CoordyError::not_found("task plan proposal"))?;
+                require_member(&world, &actor, &proposal.draft.workspace_id)?;
+                let chat = world
+                    .chat(&proposal.draft.chat_id)
+                    .ok_or_else(|| CoordyError::not_found("chat"))?;
+                if actor
+                    .principal_id()
+                    .is_some_and(|principal_id| principal_id != chat.owner_principal_id)
+                {
+                    return Err(CoordyError::denied("private chat owner required"));
+                }
+                Ok(View::TaskPlan {
+                    proposal: product::task_plan_view(proposal),
                 })
             }
             Query::Commitments { workspace_id } => {

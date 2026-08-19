@@ -1,11 +1,14 @@
+use std::collections::{HashMap, HashSet};
+
 use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
     CommentView, ComputerView, CoordyError, DependencyView, Effect, GithubPullRequestItem,
     GithubView, GraphEdgeKind, GraphEdgeState, GraphEdgeView, GraphHealthView, GraphNodeView,
     GraphTimelineEventView, InboxView, LabelView, Mention, NodeKind, NodeMaterializationView,
     NodeRef, Outcome, ProjectView, PullRequestView, ReviewPacket, RunRole, SkillView, SquadView,
-    StatsView, TaskView, ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON,
-    STALE_DEPENDENCY_REASON,
+    StatsView, TaskPlanApplyMode, TaskPlanAssignee, TaskPlanDraft, TaskPlanParent,
+    TaskPlanProposalView, TaskView, ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON,
+    STALE_DEPENDENCY_REASON, TASK_PLAN_VERSION,
 };
 use serde_json::json;
 
@@ -14,7 +17,8 @@ use crate::ids;
 use crate::world::{
     Attachment, Automation, Chat, ChatMessage, Comment, Computer, CustomPropertyDef, DirectoryLock,
     GraphEdge, Integration, IssueBlockerEdge, NodeMaterialization, Principal, Project, Reaction,
-    Skill, Squad, Task, TaskSubscription, Workspace, WorkspaceLabel, World,
+    Skill, Squad, Task, TaskPlanApplication, TaskPlanProposalRecord, TaskSubscription, Workspace,
+    WorkspaceLabel, World,
 };
 
 pub fn slugify(name: &str) -> String {
@@ -187,6 +191,253 @@ fn role_ok(role: &str) -> bool {
 
 pub(crate) fn priority_ok(value: &str) -> bool {
     matches!(value, "urgent" | "high" | "medium" | "low" | "none")
+}
+
+pub fn task_plan_view(proposal: &TaskPlanProposalRecord) -> TaskPlanProposalView {
+    TaskPlanProposalView {
+        id: proposal.id.clone(),
+        revision: proposal.revision,
+        created_by: proposal.created_by.clone(),
+        created_at: proposal.created_at.clone(),
+        draft: proposal.draft.clone(),
+    }
+}
+
+fn validate_task_plan(
+    world: &World,
+    actor: &Actor,
+    draft: &TaskPlanDraft,
+) -> Result<(), CoordyError> {
+    require_not_agent(actor)?;
+    require_member(world, actor, &draft.workspace_id)?;
+    if draft.version != TASK_PLAN_VERSION {
+        return Err(CoordyError::invalid("unsupported task plan version"));
+    }
+    let workspace = world
+        .workspace(&draft.workspace_id)
+        .ok_or_else(|| CoordyError::not_found("workspace"))?;
+    if workspace.archived {
+        return Err(CoordyError::invalid("workspace is archived"));
+    }
+    let chat = world
+        .chat(&draft.chat_id)
+        .ok_or_else(|| CoordyError::not_found("chat"))?;
+    if chat.workspace_id != draft.workspace_id || chat.archived {
+        return Err(CoordyError::invalid("chat is not active in this workspace"));
+    }
+    if let Some(principal_id) = actor.principal_id() {
+        if chat.owner_principal_id != principal_id {
+            return Err(CoordyError::denied("private chat owner required"));
+        }
+    }
+    if chat.agent_id != draft.source_agent_id {
+        return Err(CoordyError::invalid("source agent does not match chat"));
+    }
+    let run = world
+        .run(&draft.source_run_id)
+        .ok_or_else(|| CoordyError::not_found("source run"))?;
+    if run.workspace_id != draft.workspace_id
+        || run.chat_id.as_deref() != Some(draft.chat_id.as_str())
+        || run.agent_id != draft.source_agent_id
+    {
+        return Err(CoordyError::invalid("source run provenance mismatch"));
+    }
+
+    match &draft.parent {
+        TaskPlanParent::Create {
+            title, project_id, ..
+        } => {
+            if title.trim().is_empty() {
+                return Err(CoordyError::invalid("parent title is required"));
+            }
+            if let Some(project_id) = project_id {
+                let project = world
+                    .project(project_id)
+                    .ok_or_else(|| CoordyError::not_found("project"))?;
+                if project.workspace_id != draft.workspace_id {
+                    return Err(CoordyError::invalid("project workspace mismatch"));
+                }
+            }
+        }
+        TaskPlanParent::Existing { task_id } => {
+            let task = world
+                .task(task_id)
+                .ok_or_else(|| CoordyError::not_found("parent task"))?;
+            if task.workspace_id != draft.workspace_id
+                || task.deleted
+                || task.stage == "chat"
+                || matches!(task.status.as_str(), "done" | "cancelled")
+            {
+                return Err(CoordyError::invalid(
+                    "parent task is not active in this workspace",
+                ));
+            }
+        }
+    }
+
+    if draft.children.is_empty() {
+        return Err(CoordyError::invalid("task plan must contain a child"));
+    }
+    let effective_actor = Actor::Principal {
+        id: chat.owner_principal_id.clone(),
+    };
+    let mut keys = HashSet::new();
+    for child in &draft.children {
+        let key = child.key.trim();
+        if key != child.key
+            || key.is_empty()
+            || key.len() > 64
+            || !key
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        {
+            return Err(CoordyError::invalid("invalid child draft key"));
+        }
+        if !keys.insert(key.to_string()) {
+            return Err(CoordyError::invalid("duplicate child draft key"));
+        }
+        if child.title.trim().is_empty() {
+            return Err(CoordyError::invalid("child title is required"));
+        }
+        if child.description.trim().is_empty() {
+            return Err(CoordyError::invalid("child description is required"));
+        }
+        if child.acceptance_criteria.is_empty()
+            || child
+                .acceptance_criteria
+                .iter()
+                .any(|criterion| criterion.trim().is_empty())
+        {
+            return Err(CoordyError::invalid(
+                "child acceptance criteria are required",
+            ));
+        }
+        if !priority_ok(&child.priority) {
+            return Err(CoordyError::invalid("unknown child priority"));
+        }
+        if child.stage == 0 {
+            return Err(CoordyError::invalid("child stage must be at least 1"));
+        }
+        if let Some(assignee) = &child.assignee {
+            match assignee {
+                TaskPlanAssignee::Agent { id } => {
+                    let agent = world
+                        .agent(id)
+                        .ok_or_else(|| CoordyError::not_found("suggested agent"))?;
+                    if agent.workspace_id != draft.workspace_id || agent.archived {
+                        return Err(CoordyError::invalid(
+                            "suggested agent is unavailable in this workspace",
+                        ));
+                    }
+                    if !can_command_agent(world, &effective_actor, id) {
+                        return Err(CoordyError::denied(
+                            "chat owner cannot command suggested agent",
+                        ));
+                    }
+                }
+                TaskPlanAssignee::Squad { id } => {
+                    let squad = world
+                        .squad(id)
+                        .ok_or_else(|| CoordyError::not_found("suggested squad"))?;
+                    if squad.workspace_id != draft.workspace_id {
+                        return Err(CoordyError::invalid("suggested squad workspace mismatch"));
+                    }
+                    let leader = world
+                        .agent(&squad.leader_agent_id)
+                        .ok_or_else(|| CoordyError::not_found("suggested squad leader"))?;
+                    if leader.workspace_id != draft.workspace_id || leader.archived {
+                        return Err(CoordyError::invalid(
+                            "suggested squad leader is unavailable in this workspace",
+                        ));
+                    }
+                    if !can_command_agent(world, &effective_actor, &squad.leader_agent_id) {
+                        return Err(CoordyError::denied(
+                            "chat owner cannot command suggested squad leader",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for child in &draft.children {
+        let mut dependencies_seen = HashSet::new();
+        for dependency in &child.depends_on {
+            if !dependencies_seen.insert(dependency) {
+                return Err(CoordyError::invalid("duplicate dependency draft key"));
+            }
+            if !keys.contains(dependency.as_str()) {
+                return Err(CoordyError::invalid("unknown dependency draft key"));
+            }
+            if dependency == &child.key {
+                return Err(CoordyError::invalid("child cannot depend on itself"));
+            }
+            let blocker = draft
+                .children
+                .iter()
+                .find(|candidate| candidate.key == *dependency)
+                .expect("dependency key was validated");
+            if blocker.stage > child.stage {
+                return Err(CoordyError::invalid("child cannot depend on a later stage"));
+            }
+        }
+    }
+    if task_plan_has_cycle(draft) {
+        return Err(CoordyError::invalid("task plan dependencies form a cycle"));
+    }
+    Ok(())
+}
+
+fn task_plan_has_cycle(draft: &TaskPlanDraft) -> bool {
+    fn visit(
+        key: &str,
+        dependencies: &HashMap<&str, Vec<&str>>,
+        visiting: &mut HashSet<String>,
+        visited: &mut HashSet<String>,
+    ) -> bool {
+        if visited.contains(key) {
+            return false;
+        }
+        if !visiting.insert(key.to_string()) {
+            return true;
+        }
+        if dependencies.get(key).is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| visit(item, dependencies, visiting, visited))
+        }) {
+            return true;
+        }
+        visiting.remove(key);
+        visited.insert(key.to_string());
+        false
+    }
+
+    let dependencies: HashMap<&str, Vec<&str>> = draft
+        .children
+        .iter()
+        .map(|child| {
+            (
+                child.key.as_str(),
+                child.depends_on.iter().map(String::as_str).collect(),
+            )
+        })
+        .collect();
+    let mut visiting = HashSet::new();
+    let mut visited = HashSet::new();
+    draft
+        .children
+        .iter()
+        .any(|child| visit(&child.key, &dependencies, &mut visiting, &mut visited))
+}
+
+fn task_plan_description(description: &str, criteria: &[String]) -> String {
+    let mut result = description.trim().to_string();
+    result.push_str("\n\n## Acceptance criteria");
+    for criterion in criteria {
+        result.push_str("\n- ");
+        result.push_str(criterion.trim());
+    }
+    result
 }
 
 fn notify_enabled(world: &World, kind: &str) -> bool {
@@ -498,8 +749,322 @@ fn complete_issues_from_merged_prs(
     (completed, released_all)
 }
 
+pub(crate) fn latest_task_plan<'a>(
+    world: &'a World,
+    proposal_id: &str,
+) -> Option<&'a TaskPlanProposalRecord> {
+    world
+        .task_plan_proposals
+        .iter()
+        .filter(|proposal| proposal.id == proposal_id)
+        .max_by_key(|proposal| proposal.revision)
+}
+
+fn save_task_plan(
+    world: &mut World,
+    actor: &Actor,
+    proposal_id: Option<String>,
+    expected_revision: Option<u64>,
+    draft: TaskPlanDraft,
+) -> Result<Outcome, CoordyError> {
+    validate_task_plan(world, actor, &draft)?;
+    let (proposal_id, revision) = match proposal_id {
+        Some(proposal_id) => {
+            if proposal_id.trim().is_empty() {
+                return Err(CoordyError::invalid("proposal id is required"));
+            }
+            let current = latest_task_plan(world, &proposal_id)
+                .ok_or_else(|| CoordyError::not_found("task plan proposal"))?;
+            if world
+                .task_plan_applications
+                .iter()
+                .any(|application| application.proposal_id == proposal_id)
+            {
+                return Err(CoordyError::invalid("applied task plan cannot be revised"));
+            }
+            let expected_revision = expected_revision
+                .ok_or_else(|| CoordyError::invalid("expected revision is required"))?;
+            if current.revision != expected_revision {
+                return Err(CoordyError::invalid("stale task plan revision"));
+            }
+            if current.draft.workspace_id != draft.workspace_id
+                || current.draft.chat_id != draft.chat_id
+                || current.draft.source_run_id != draft.source_run_id
+                || current.draft.source_agent_id != draft.source_agent_id
+            {
+                return Err(CoordyError::invalid("task plan provenance cannot change"));
+            }
+            (proposal_id, current.revision + 1)
+        }
+        None => {
+            if expected_revision.is_some() {
+                return Err(CoordyError::invalid(
+                    "new task plan cannot have an expected revision",
+                ));
+            }
+            (ids::new("plan"), 1)
+        }
+    };
+    world.task_plan_proposals.push(TaskPlanProposalRecord {
+        id: proposal_id.clone(),
+        revision,
+        created_by: actor.id().to_string(),
+        created_at: ids::now(),
+        draft: draft.clone(),
+    });
+    emit_changed(world, draft.workspace_id);
+    Ok(Outcome::ok(
+        "task plan saved",
+        json!({ "proposal_id": proposal_id, "revision": revision }),
+    ))
+}
+
+struct PlannedTaskInput<'a> {
+    workspace_id: &'a str,
+    title: String,
+    description: String,
+    priority: String,
+    project_id: Option<String>,
+    parent_id: Option<String>,
+    stage: String,
+}
+
+fn create_planned_task(
+    world: &mut World,
+    input: PlannedTaskInput<'_>,
+) -> Result<String, CoordyError> {
+    let (number, identifier) = allocate_issue_number(world, input.workspace_id)?;
+    let id = ids::new("task");
+    let sort_key = world.tasks.len() as i64;
+    world.tasks.push(Task {
+        id: id.clone(),
+        workspace_id: input.workspace_id.to_string(),
+        title: input.title,
+        description: input.description,
+        status: "backlog".into(),
+        assignee_agent_id: None,
+        worktree_path: None,
+        blocked_reason: None,
+        identifier,
+        number,
+        priority: input.priority,
+        start_date: None,
+        due_date: None,
+        labels: Vec::new(),
+        custom_fields: Vec::new(),
+        assignee_principal_id: None,
+        assignee_squad_id: None,
+        project_id: input.project_id,
+        parent_id: input.parent_id,
+        stage: input.stage,
+        sort_key,
+        deleted: false,
+        pull_requests: Vec::new(),
+    });
+    Ok(id)
+}
+
+fn apply_task_plan(
+    world: &mut World,
+    actor: &Actor,
+    proposal_id: &str,
+    expected_revision: u64,
+    idempotency_key: &str,
+    mode: TaskPlanApplyMode,
+) -> Result<Outcome, CoordyError> {
+    require_not_agent(actor)?;
+    if idempotency_key.trim().is_empty() || idempotency_key.len() > 128 {
+        return Err(CoordyError::invalid("invalid idempotency key"));
+    }
+    let proposal = latest_task_plan(world, proposal_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("task plan proposal"))?;
+    require_member(world, actor, &proposal.draft.workspace_id)?;
+    let chat = world
+        .chat(&proposal.draft.chat_id)
+        .ok_or_else(|| CoordyError::not_found("chat"))?;
+    if actor
+        .principal_id()
+        .is_some_and(|principal_id| principal_id != chat.owner_principal_id)
+    {
+        return Err(CoordyError::denied("private chat owner required"));
+    }
+    if let Some(application) = world.task_plan_applications.iter().find(|application| {
+        application.proposal_id == proposal_id && application.idempotency_key == idempotency_key
+    }) {
+        if application.applied_by != actor.id() {
+            return Err(CoordyError::denied(
+                "idempotency key belongs to another actor",
+            ));
+        }
+        return Ok(Outcome::ok(
+            "task plan already applied",
+            json!({
+                "proposal_id": application.proposal_id,
+                "revision": application.proposal_revision,
+                "parent_task_id": application.parent_task_id,
+                "child_task_ids": application.child_task_ids,
+            }),
+        ));
+    }
+    if world
+        .task_plan_applications
+        .iter()
+        .any(|application| application.proposal_id == proposal_id)
+    {
+        return Err(CoordyError::invalid(
+            "task plan proposal is already applied",
+        ));
+    }
+    if proposal.revision != expected_revision {
+        return Err(CoordyError::invalid("stale task plan revision"));
+    }
+    validate_task_plan(world, actor, &proposal.draft)?;
+
+    // No IDs, issue numbers, notices, or task state are allocated until the
+    // complete preflight above succeeds. The staged world is swapped in only
+    // after every mutation below has completed successfully.
+    let mut staged = world.clone();
+    let (parent_task_id, project_id) = match &proposal.draft.parent {
+        TaskPlanParent::Create {
+            title,
+            description,
+            project_id,
+        } => {
+            let parent_id = create_planned_task(
+                &mut staged,
+                PlannedTaskInput {
+                    workspace_id: &proposal.draft.workspace_id,
+                    title: title.trim().to_string(),
+                    description: description.trim().to_string(),
+                    priority: "none".into(),
+                    project_id: project_id.clone(),
+                    parent_id: None,
+                    stage: String::new(),
+                },
+            )?;
+            if let Some(parent) = staged.task_mut(&parent_id) {
+                parent.status = "open".into();
+            }
+            (parent_id, project_id.clone())
+        }
+        TaskPlanParent::Existing { task_id } => {
+            let parent = staged
+                .task(task_id)
+                .ok_or_else(|| CoordyError::not_found("parent task"))?;
+            (task_id.clone(), parent.project_id.clone())
+        }
+    };
+
+    let mut key_to_id = HashMap::new();
+    let mut child_task_ids = Vec::with_capacity(proposal.draft.children.len());
+    for child in &proposal.draft.children {
+        let task_id = create_planned_task(
+            &mut staged,
+            PlannedTaskInput {
+                workspace_id: &proposal.draft.workspace_id,
+                title: child.title.trim().to_string(),
+                description: task_plan_description(&child.description, &child.acceptance_criteria),
+                priority: child.priority.clone(),
+                project_id: project_id.clone(),
+                parent_id: Some(parent_task_id.clone()),
+                stage: child.stage.to_string(),
+            },
+        )?;
+        if let Some(task) = staged.task_mut(&task_id) {
+            match &child.assignee {
+                Some(TaskPlanAssignee::Agent { id }) => {
+                    task.assignee_agent_id = Some(id.clone());
+                }
+                Some(TaskPlanAssignee::Squad { id }) => {
+                    task.assignee_squad_id = Some(id.clone());
+                }
+                None => {}
+            }
+        }
+        key_to_id.insert(child.key.clone(), task_id.clone());
+        child_task_ids.push(task_id);
+    }
+    for child in &proposal.draft.children {
+        let task_id = key_to_id
+            .get(&child.key)
+            .expect("preflight guarantees every child key");
+        for dependency in &child.depends_on {
+            let blocker_id = key_to_id
+                .get(dependency)
+                .expect("preflight guarantees every dependency key");
+            add_issue_blocker(&mut staged, actor, task_id, blocker_id)?;
+        }
+    }
+    for task_id in &child_task_ids {
+        if let Some(task) = staged.task_mut(task_id) {
+            task.status = "backlog".into();
+            task.blocked_reason = None;
+        }
+    }
+    if mode == TaskPlanApplyMode::ConfirmAndStart {
+        let first_stage = proposal
+            .draft
+            .children
+            .iter()
+            .map(|child| child.stage)
+            .min()
+            .expect("preflight requires a child");
+        for child in &proposal.draft.children {
+            if child.stage == first_stage && child.depends_on.is_empty() {
+                let task_id = key_to_id
+                    .get(&child.key)
+                    .expect("preflight guarantees every child key");
+                if let Some(task) = staged.task_mut(task_id) {
+                    task.status = "open".into();
+                }
+            }
+        }
+    }
+    staged.task_plan_applications.push(TaskPlanApplication {
+        proposal_id: proposal_id.to_string(),
+        proposal_revision: proposal.revision,
+        idempotency_key: idempotency_key.to_string(),
+        applied_by: actor.id().to_string(),
+        applied_at: ids::now(),
+        mode,
+        parent_task_id: parent_task_id.clone(),
+        child_task_ids: child_task_ids.clone(),
+    });
+    emit_changed(&mut staged, proposal.draft.workspace_id.clone());
+    *world = staged;
+    Ok(Outcome::ok(
+        "task plan applied",
+        json!({
+            "proposal_id": proposal_id,
+            "revision": proposal.revision,
+            "parent_task_id": parent_task_id,
+            "child_task_ids": child_task_ids,
+            "draft_key_to_task_id": key_to_id,
+        }),
+    ))
+}
+
 pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outcome, CoordyError> {
     match command {
+        Command::SaveTaskPlanProposal {
+            proposal_id,
+            expected_revision,
+            draft,
+        } => save_task_plan(world, actor, proposal_id, expected_revision, draft),
+        Command::ApplyTaskPlan {
+            proposal_id,
+            expected_revision,
+            idempotency_key,
+            mode,
+        } => apply_task_plan(
+            world,
+            actor,
+            &proposal_id,
+            expected_revision,
+            &idempotency_key,
+            mode,
+        ),
         Command::UpdateWorkspace {
             workspace_id,
             name,
@@ -2534,7 +3099,7 @@ fn sync_issue_blocker_hold(world: &mut World, task_id: &str) {
     }
 }
 
-fn add_issue_blocker(
+pub(crate) fn add_issue_blocker(
     world: &mut World,
     actor: &Actor,
     task_id: &str,

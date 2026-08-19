@@ -1,1 +1,4 @@
 {"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/08-19-conversation-task-decomposition/design.md", "reason": "Apply the frozen authority boundary, proposal schema, and atomic apply design."}
+{"file": ".trellis/tasks/08-19-conversation-task-decomposition/research/multica-conversation-decomposition.md", "reason": "Use behavioral evidence without copying Multica contracts or source."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Trace protocol, kernel, persistence, scheduler, and UI boundaries."}

@@ -11,6 +11,73 @@ pub const HARNESS_SESSION_TOOL: &str = "coordy.session";
 pub const ISSUE_BLOCKER_REASON: &str = "waiting on unfinished blockers";
 /// `blocked_reason` / StartRun gate when a consumer dependency is `valid = false`.
 pub const STALE_DEPENDENCY_REASON: &str = "依赖已失效，须先确认或重规划";
+/// Provider-neutral fenced artifact version understood by chat planning.
+pub const TASK_PLAN_VERSION: &str = "COORDY_TASK_PLAN_V1";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskPlanParent {
+    Create {
+        title: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        project_id: Option<String>,
+    },
+    Existing {
+        task_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskPlanAssignee {
+    Agent { id: String },
+    Squad { id: String },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPlanChild {
+    pub key: String,
+    pub title: String,
+    pub description: String,
+    pub acceptance_criteria: Vec<String>,
+    pub priority: String,
+    pub stage: u32,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub assignee: Option<TaskPlanAssignee>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TaskPlanDraft {
+    pub version: String,
+    pub workspace_id: String,
+    pub chat_id: String,
+    pub source_run_id: String,
+    pub source_agent_id: String,
+    pub parent: TaskPlanParent,
+    pub children: Vec<TaskPlanChild>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPlanApplyMode {
+    CreateOnly,
+    ConfirmAndStart,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskPlanProposalView {
+    pub id: String,
+    pub revision: u64,
+    pub created_by: String,
+    pub created_at: String,
+    pub draft: TaskPlanDraft,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -268,6 +335,19 @@ pub enum Command {
         title: String,
         #[serde(default)]
         description: String,
+    },
+    SaveTaskPlanProposal {
+        #[serde(default)]
+        proposal_id: Option<String>,
+        #[serde(default)]
+        expected_revision: Option<u64>,
+        draft: TaskPlanDraft,
+    },
+    ApplyTaskPlan {
+        proposal_id: String,
+        expected_revision: u64,
+        idempotency_key: String,
+        mode: TaskPlanApplyMode,
     },
     AssignTask {
         task_id: String,
@@ -711,6 +791,7 @@ pub struct Mention {
 pub enum Query {
     Health,
     Board { workspace_id: String },
+    TaskPlan { proposal_id: String },
     Commitments { workspace_id: String },
     Principals { workspace_id: String },
     Agents { workspace_id: String },
@@ -775,6 +856,9 @@ pub enum View {
     },
     Board {
         tasks: Vec<TaskView>,
+    },
+    TaskPlan {
+        proposal: TaskPlanProposalView,
     },
     Commitments {
         items: Vec<CommitmentView>,

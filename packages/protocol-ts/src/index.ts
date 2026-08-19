@@ -4,6 +4,7 @@ export const PROTOCOL_VERSION = "coordy-local-v1";
 export const HARNESS_SESSION_TOOL = "coordy.session";
 export const ISSUE_BLOCKER_REASON = "waiting on unfinished blockers";
 export const STALE_DEPENDENCY_REASON = "依赖已失效，须先确认或重规划";
+export const TASK_PLAN_VERSION = "COORDY_TASK_PLAN_V1";
 
 export type Actor =
   | { type: "principal"; id: string }
@@ -27,6 +28,40 @@ export type GraphEdgeState =
   | "pending_validation"
   | "rejected"
   | "superseded";
+
+export type TaskPlanParent =
+  | { mode: "create"; title: string; description?: string; project_id?: string | null }
+  | { mode: "existing"; task_id: string };
+export type TaskPlanAssignee =
+  | { type: "agent"; id: string }
+  | { type: "squad"; id: string };
+export type TaskPlanChild = {
+  key: string;
+  title: string;
+  description: string;
+  acceptance_criteria: string[];
+  priority: string;
+  stage: number;
+  depends_on?: string[];
+  assignee?: TaskPlanAssignee | null;
+};
+export type TaskPlanDraft = {
+  version: string;
+  workspace_id: string;
+  chat_id: string;
+  source_run_id: string;
+  source_agent_id: string;
+  parent: TaskPlanParent;
+  children: TaskPlanChild[];
+};
+export type TaskPlanApplyMode = "create_only" | "confirm_and_start";
+export type TaskPlanProposalView = {
+  id: string;
+  revision: number;
+  created_by: string;
+  created_at: string;
+  draft: TaskPlanDraft;
+};
 
 export type Command =
   | { type: "CreateWorkspace"; name: string }
@@ -72,6 +107,19 @@ export type Command =
   | { type: "RevokeGrant"; grant_id: string }
   | { type: "Delegate"; workspace_id: string; from_actor_id: string; to_actor_id: string; resource: string; action: string }
   | { type: "CreateTask"; workspace_id: string; title: string; description?: string }
+  | {
+      type: "SaveTaskPlanProposal";
+      proposal_id?: string | null;
+      expected_revision?: number | null;
+      draft: TaskPlanDraft;
+    }
+  | {
+      type: "ApplyTaskPlan";
+      proposal_id: string;
+      expected_revision: number;
+      idempotency_key: string;
+      mode: TaskPlanApplyMode;
+    }
   | { type: "AssignTask"; task_id: string; agent_id: string }
   | {
       type: "AssignIssue";
@@ -247,6 +295,7 @@ export type Query =
   | { type: "Workspaces" }
   | { type: "Workspace"; workspace_id: string }
   | { type: "Board"; workspace_id: string }
+  | { type: "TaskPlan"; proposal_id: string }
   | { type: "Commitments"; workspace_id: string }
   | { type: "Principals"; workspace_id: string }
   | { type: "Agents"; workspace_id: string }
@@ -661,6 +710,7 @@ export type View =
   | { type: "Health" } & HealthView
   | { type: "Workspaces"; items: WorkspaceView[] }
   | { type: "Board"; tasks: TaskView[] }
+  | { type: "TaskPlan"; proposal: TaskPlanProposalView }
   | { type: "Commitments"; items: CommitmentView[] }
   | { type: "Principals"; items: PrincipalView[] }
   | { type: "Agents"; items: AgentView[] }
