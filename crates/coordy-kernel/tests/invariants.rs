@@ -1081,6 +1081,56 @@ fn declare_dep(h: &Harness, from_id: &str, to_id: &str, entity: &str) -> String 
         .to_string()
 }
 
+fn set_conductor(h: &Harness, agent_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::UpdateWorkspace {
+                workspace_id: h.workspace_id.clone(),
+                name: None,
+                icon: None,
+                description: None,
+                context: None,
+                slug: None,
+                issue_prefix: None,
+                conductor_agent_id: Some(agent_id.into()),
+            },
+        ))
+        .unwrap();
+}
+
+fn ingest_assistant(h: &Harness, run_id: &str, content: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: run_id.into(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: content.into(),
+                },
+            },
+        ))
+        .unwrap();
+}
+
+fn ingest_session_ok(h: &Harness, run_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: run_id.into(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: String::new(),
+                    output: "ok".into(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+}
+
 fn start_fixture(h: &Harness, task_id: &str, events: Vec<HarnessEvent>) -> String {
     h.kernel
         .submit_sync(cmd(
@@ -3493,4 +3543,369 @@ fn finishing_one_of_two_blockers_does_not_start() {
         ))
         .unwrap();
     assert_eq!(ports.spawns.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn apply_patch_invalidates_only_edges_pointing_at_changer() {
+    let h = setup();
+    let producer_a = issue_title(&h, "api-a");
+    let producer_b = issue_title(&h, "api-b");
+    let consumer_a = issue_title(&h, "ui-a");
+    let consumer_b = issue_title(&h, "ui-b");
+    assign_a1(&h, &producer_a);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer_a);
+    let dep_a = declare_dep(&h, &consumer_a, &producer_a, "repo");
+    let dep_b = declare_dep(&h, &consumer_b, &producer_b, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer_a,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let deps = alice_deps(&h);
+    assert!(
+        deps.iter().any(|dep| dep.id == dep_a && !dep.valid),
+        "edge pointing at the patched producer must go stale"
+    );
+    assert!(
+        deps.iter().any(|dep| dep.id == dep_b && dep.valid),
+        "unrelated repo edge must stay valid"
+    );
+}
+
+#[test]
+fn assign_without_conductor_does_not_auto_start() {
+    let h = setup();
+    let task = issue_title(&h, "solo");
+    assign_a1(&h, &task);
+    assert!(
+        alice_runs(&h).is_empty(),
+        "no conductor means assign must not StartRun"
+    );
+}
+
+#[test]
+fn conductor_auto_starts_assigned_green_task() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let ws = h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::Workspace {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    match ws {
+        View::Workspace(view) => {
+            assert_eq!(view.conductor_agent_id.as_deref(), Some(h.a2.as_str()));
+        }
+        other => panic!("expected workspace, got {other:?}"),
+    }
+    let task = issue_title(&h, "ready");
+    assign_a1(&h, &task);
+    let runs = alice_runs(&h);
+    assert!(
+        runs.iter()
+            .any(|run| run.task_id == task && run.agent_id == h.a1 && run.trigger == "graph"),
+        "conductor mode must StartRun the assignee with trigger graph"
+    );
+}
+
+#[test]
+fn conductor_starts_waiting_task_when_blocker_finishes() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let blocker = issue_title(&h, "design");
+    let waiting = issue_title(&h, "implement");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: waiting.clone(),
+                blocker_id: blocker.clone(),
+            },
+        ))
+        .unwrap();
+    assign_a1(&h, &blocker);
+    assign_a1(&h, &waiting);
+    assert!(
+        !alice_runs(&h)
+            .iter()
+            .any(|run| run.task_id == waiting && run.trigger == "graph"),
+        "blocked waiting task must not auto-start"
+    );
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::SetTaskStatus {
+                task_id: blocker,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let runs = alice_runs(&h);
+    assert!(
+        runs.iter()
+            .any(|run| run.task_id == waiting && run.trigger == "graph" && run.agent_id == h.a1),
+        "conductor mode starts the waiting assignee with graph, not blocker"
+    );
+    assert!(
+        !runs
+            .iter()
+            .any(|run| run.task_id == waiting && run.trigger == "blocker"),
+        "conductor mode must not also open a blocker-triggered run"
+    );
+}
+
+#[test]
+fn conductor_reviews_stale_edge_then_reaffirm_starts_executor() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let executor_before = alice_runs(&h)
+        .into_iter()
+        .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+        .count();
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let after_patch = alice_runs(&h);
+    assert!(
+        after_patch.iter().any(|run| {
+            run.task_id == consumer && run.agent_id == h.a2 && run.trigger == "graph"
+        }),
+        "stale downstream must StartRun the conductor"
+    );
+    assert_eq!(
+        after_patch
+            .iter()
+            .filter(|run| run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.status == "running")
+            .count(),
+        0,
+        "executor must not auto-start while the edge is stale"
+    );
+    let conductor_run = after_patch
+        .iter()
+        .find(|run| run.task_id == consumer && run.agent_id == h.a2 && run.trigger == "graph")
+        .expect("conductor run")
+        .id
+        .clone();
+    ingest_assistant(&h, &conductor_run, &format!("REAFFIRM: {dep_id}"));
+    assert!(alice_deps(&h)
+        .iter()
+        .any(|dep| dep.id == dep_id && dep.valid));
+    let after_reaffirm = alice_runs(&h);
+    assert!(
+        after_reaffirm.iter().any(|run| {
+            run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.trigger == "graph"
+                && run.status == "running"
+        }),
+        "REAFFIRM must start the consumer assignee with a replan graph run"
+    );
+    assert!(
+        after_reaffirm
+            .iter()
+            .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+            .count()
+            > executor_before
+    );
+    let executor_run = after_reaffirm
+        .iter()
+        .find(|run| {
+            run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.trigger == "graph"
+                && run.status == "running"
+        })
+        .expect("executor run");
+    let View::Run { events, .. } = h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::Run {
+                run_id: executor_run.id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("run detail");
+    };
+    assert!(
+        events
+            .iter()
+            .any(|event| event.payload.contains("重规划") && event.payload.contains("user:")),
+        "executor prompt must be a replan, not the previous loop"
+    );
+}
+
+#[test]
+fn executor_agent_cannot_reaffirm_but_principal_and_conductor_can() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let denied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a1.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::ReaffirmDependency {
+                dependency_id: dep_id.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(denied.code, "denied");
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Agent {
+                id: h.a2.clone(),
+                principal_id: h.alice.clone(),
+            },
+            Command::ReaffirmDependency {
+                dependency_id: dep_id.clone(),
+            },
+        ))
+        .unwrap();
+    let producer_b = issue_title(&h, "other-api");
+    assign_a1(&h, &producer_b);
+    create_worktree(&h, &producer_b);
+    let dep_b = declare_dep(&h, &consumer, &producer_b, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer_b,
+                patch: "another change".into(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ReaffirmDependency {
+                dependency_id: dep_b,
+            },
+        ))
+        .unwrap();
+}
+
+#[test]
+fn conductor_session_complete_starts_green_successor() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.trigger == "graph")
+        .expect("producer run")
+        .id;
+    let consumer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.trigger == "graph")
+        .expect("consumer run")
+        .id;
+    ingest_session_ok(&h, &consumer_run);
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer && run.status == "running")
+            .count(),
+        0
+    );
+    ingest_session_ok(&h, &producer_run);
+    assert!(
+        alice_runs(&h).iter().any(|run| {
+            run.task_id == consumer
+                && run.agent_id == h.a1
+                && run.trigger == "graph"
+                && run.status == "running"
+                && run.id != consumer_run
+        }),
+        "successful producer session must start a still-green successor"
+    );
+}
+
+#[test]
+fn executor_graph_run_cannot_reaffirm_by_prefix() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let executor_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.agent_id == h.a1)
+        .map(|run| run.id);
+    if let Some(run_id) = executor_run {
+        let _ = h.kernel.submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id,
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: format!("REAFFIRM: {dep_id}"),
+                },
+            },
+        ));
+    }
+    assert!(
+        alice_deps(&h)
+            .iter()
+            .any(|dep| dep.id == dep_id && !dep.valid),
+        "only the conductor graph run may ingest REAFFIRM"
+    );
 }

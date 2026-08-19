@@ -198,18 +198,22 @@ pub fn resolve_depends_target(world: &World, workspace_id: &str, token: &str) ->
 pub fn invalidate_dependencies(
     world: &mut World,
     changed_entity: &str,
-    changer_task: &str,
+    changer_id: &str,
 ) -> Vec<String> {
     let mut consumers = Vec::new();
     let mut conflicts = Vec::new();
     for dep in world.dependencies.iter_mut() {
-        if dep.entity == changed_entity && dep.from_id != changer_task && dep.valid {
+        if dep.entity == changed_entity
+            && dep.to_id == changer_id
+            && dep.from_id != changer_id
+            && dep.valid
+        {
             dep.valid = false;
             consumers.push(dep.from_id.clone());
             conflicts.push(crate::world::Conflict {
                 id: crate::ids::new("conflict"),
                 workspace_id: dep.workspace_id.clone(),
-                summary: format!("dependency {} invalidated by {}", dep.id, changer_task),
+                summary: format!("dependency {} invalidated by {}", dep.id, changer_id),
                 status: "open".into(),
             });
         }

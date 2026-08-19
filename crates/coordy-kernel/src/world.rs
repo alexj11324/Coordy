@@ -83,6 +83,8 @@ pub struct Workspace {
     pub next_issue_number: u64,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub conductor_agent_id: Option<String>,
 }
 
 fn default_issue_prefix() -> String {

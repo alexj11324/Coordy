@@ -65,6 +65,7 @@ pub fn workspace_view(ws: &Workspace) -> WorkspaceView {
         } else {
             ws.next_issue_number
         },
+        conductor_agent_id: ws.conductor_agent_id.clone(),
     }
 }
 
@@ -245,9 +246,25 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             context,
             slug,
             issue_prefix,
+            conductor_agent_id,
         } => {
             require_not_agent(actor)?;
             require_member(world, actor, &workspace_id)?;
+            if let Some(conductor_id) = conductor_agent_id.as_ref().filter(|id| !id.is_empty()) {
+                let agent = world
+                    .agent(conductor_id)
+                    .ok_or_else(|| CoordyError::not_found("agent"))?;
+                if agent.workspace_id != workspace_id {
+                    return Err(CoordyError::invalid(
+                        "conductor must belong to this workspace",
+                    ));
+                }
+                if agent.archived {
+                    return Err(CoordyError::invalid(
+                        "conductor cannot be an archived agent",
+                    ));
+                }
+            }
             if let Some(slug) = slug.as_ref().map(|s| slugify(s)) {
                 ensure_unique_slug(world, &workspace_id, &slug)?;
                 if let Some(ws) = world.workspaces.iter_mut().find(|w| w.id == workspace_id) {
@@ -278,6 +295,13 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
                     return Err(CoordyError::invalid("issue prefix must be alphanumeric"));
                 }
                 ws.issue_prefix = prefix;
+            }
+            if let Some(conductor_id) = conductor_agent_id {
+                ws.conductor_agent_id = if conductor_id.is_empty() {
+                    None
+                } else {
+                    Some(conductor_id)
+                };
             }
             emit_changed(world, workspace_id.clone());
             Ok(Outcome::ok(
@@ -2019,6 +2043,111 @@ pub(crate) fn blocker_release_prompt(task: &Task) -> String {
     }
 }
 
+pub(crate) fn workspace_conductor_id(world: &World, workspace_id: &str) -> Option<String> {
+    world
+        .workspace(workspace_id)
+        .and_then(|ws| ws.conductor_agent_id.clone())
+        .filter(|id| !id.is_empty())
+}
+
+pub(crate) fn is_conductor_review(
+    world: &World,
+    workspace_id: &str,
+    agent_id: &str,
+    trigger: &str,
+) -> bool {
+    trigger == "graph" && workspace_conductor_id(world, workspace_id).as_deref() == Some(agent_id)
+}
+
+pub(crate) fn can_reaffirm_dependency(world: &World, actor: &Actor, workspace_id: &str) -> bool {
+    match actor {
+        Actor::Daemon => true,
+        Actor::Principal { .. } => actor_in_workspace(world, actor, workspace_id),
+        Actor::Agent { id, .. } => {
+            actor_in_workspace(world, actor, workspace_id)
+                && workspace_conductor_id(world, workspace_id).as_deref() == Some(id.as_str())
+        }
+    }
+}
+
+pub(crate) fn graph_ready_prompt(task: &Task) -> String {
+    blocker_release_prompt(task)
+}
+
+pub(crate) fn graph_replan_prompt(task: &Task) -> String {
+    let body = graph_ready_prompt(task);
+    format!("上游依赖刚被确认仍有效。请按当前事项重规划后再做，不要空跑上一轮 prompt。\n\n{body}")
+}
+
+pub(crate) fn conductor_review_prompt(
+    task: &Task,
+    changer_id: &str,
+    entity: &str,
+    edges: &[(String, String, String)],
+) -> String {
+    let lines = edges
+        .iter()
+        .map(|(id, to_id, edge_entity)| format!("- {id} → {to_id}（{edge_entity}）"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "工作区图总管：下游事项的依赖已失效，请决定是否放行。\n\n事项：{}（{}）\n打脏来源：{changer_id} 的 {entity} 变更。\n失效依赖：\n{lines}\n若批准下游继续，请用助手消息单独一行写出前缀 REAFFIRM、冒号和上列依赖 id。\n若应继续挡住，写出前缀 HOLD、冒号和依赖 id，或不批准。\n不要代替执行者改代码。",
+        task.title, task.id
+    )
+}
+
+pub(crate) fn task_ready_for_graph_dispatch(world: &World, task_id: &str) -> bool {
+    let Some(task) = world.task(task_id) else {
+        return false;
+    };
+    if task.deleted || matches!(task.status.as_str(), "backlog" | "done" | "cancelled") {
+        return false;
+    }
+    if task.blocked_reason.as_deref() == Some("marked blocked") {
+        return false;
+    }
+    match task.assignee_agent_id.as_deref() {
+        Some(id) if !id.is_empty() => {}
+        _ => return false,
+    }
+    if !unresolved_blocker_ids(world, task_id).is_empty() {
+        return false;
+    }
+    if task_has_stale_dependency(world, task_id) {
+        return false;
+    }
+    !world.runs.iter().any(|run| {
+        run.task_id == task_id
+            && run.status == "running"
+            && !is_conductor_review(world, &task.workspace_id, &run.agent_id, &run.trigger)
+    })
+}
+
+pub(crate) fn graph_successor_task_ids(world: &World, task_id: &str) -> Vec<String> {
+    let mut ids = issue_blocking_ids(world, task_id);
+    for dep in &world.dependencies {
+        if dep.to_id == task_id {
+            ids.push(dep.from_id.clone());
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub(crate) fn should_review_stale_consumer(world: &World, task_id: &str) -> bool {
+    let Some(task) = world.task(task_id) else {
+        return false;
+    };
+    if task.deleted || matches!(task.status.as_str(), "backlog" | "done" | "cancelled") {
+        return false;
+    }
+    if task.blocked_reason.as_deref() == Some("marked blocked") {
+        return false;
+    }
+    workspace_conductor_id(world, &task.workspace_id).is_some()
+}
+
 fn sync_issue_blocker_hold(world: &mut World, task_id: &str) {
     let unresolved = unresolved_blocker_ids(world, task_id);
     let Some(task) = world.task_mut(task_id) else {
@@ -2215,8 +2344,10 @@ pub(crate) fn reaffirm_dependency(
         .find(|dep| dep.id == dependency_id)
         .cloned()
         .ok_or_else(|| CoordyError::not_found("dependency"))?;
-    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
-        return Err(CoordyError::denied("not in workspace"));
+    if !can_reaffirm_dependency(world, actor, &dep.workspace_id) {
+        return Err(CoordyError::denied(
+            "only a member, daemon, or workspace conductor may reaffirm",
+        ));
     }
     if let Some(row) = world
         .dependencies
