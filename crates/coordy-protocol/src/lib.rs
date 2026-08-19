@@ -115,6 +115,30 @@ pub enum RunRole {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum ValidationChoice {
+    Reaffirm,
+    Hold,
+    Remove,
+    Replan,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewPacket {
+    pub dependency_id: String,
+    pub reason: String,
+    pub invalidation_event: Option<String>,
+    pub old_version: Option<u64>,
+    pub new_version: Option<u64>,
+    pub changed_files: Vec<String>,
+    pub diff_ref: Option<String>,
+    pub diff_missing_reason: Option<String>,
+    pub consumer_plan: String,
+    pub deterministic_checks: Vec<String>,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum GraphEdgeState {
     Active,
     Stale,
@@ -395,6 +419,21 @@ pub enum Command {
     },
     RemoveDependency {
         dependency_id: String,
+    },
+    SetWorkspaceConductor {
+        workspace_id: String,
+        agent_id: Option<String>,
+    },
+    ValidationDecision {
+        dependency_id: String,
+        expected_generation: u64,
+        decision: ValidationChoice,
+        #[serde(default)]
+        evidence_refs: Vec<String>,
+        #[serde(default)]
+        rationale: String,
+        #[serde(default)]
+        validator_run_id: Option<String>,
     },
     AddIssueBlocker {
         task_id: String,
@@ -842,6 +881,8 @@ pub struct WorkspaceView {
     pub issue_prefix: String,
     #[serde(default)]
     pub next_issue_number: u64,
+    #[serde(default)]
+    pub conductor_agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

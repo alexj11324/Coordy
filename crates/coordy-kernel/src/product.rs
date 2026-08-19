@@ -2,8 +2,9 @@ use coordy_protocol::{
     AccountView, Actor, AttachmentView, AutomationView, ChatMessageView, ChatView, Command,
     CommentView, ComputerView, CoordyError, DependencyView, Effect, GraphEdgeKind, GraphEdgeState,
     GraphEdgeView, GraphHealthView, GraphNodeView, InboxView, LabelView, Mention, NodeKind,
-    NodeMaterializationView, NodeRef, Outcome, ProjectView, SkillView, SquadView, StatsView,
-    TaskView, WorkspaceView, ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON,
+    NodeMaterializationView, NodeRef, Outcome, ProjectView, ReviewPacket, RunRole, SkillView,
+    SquadView, StatsView, TaskView, ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON,
+    STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
@@ -66,6 +67,7 @@ pub fn workspace_view(ws: &Workspace) -> WorkspaceView {
         } else {
             ws.next_issue_number
         },
+        conductor_agent_id: ws.conductor_agent_id.clone(),
     }
 }
 
@@ -1459,6 +1461,27 @@ pub fn submit(world: &mut World, actor: &Actor, command: Command) -> Result<Outc
             require_not_agent(actor)?;
             remove_issue_blocker(world, actor, &task_id, &blocker_id)
         }
+        Command::SetWorkspaceConductor {
+            workspace_id,
+            agent_id,
+        } => set_workspace_conductor(world, actor, &workspace_id, agent_id),
+        Command::ValidationDecision {
+            dependency_id,
+            expected_generation,
+            decision,
+            evidence_refs,
+            rationale,
+            validator_run_id,
+        } => apply_validation_decision(
+            world,
+            actor,
+            &dependency_id,
+            expected_generation,
+            decision,
+            evidence_refs,
+            rationale,
+            validator_run_id,
+        ),
         other => Err(CoordyError::invalid(format!(
             "unhandled product command: {}",
             command_name(&other)
@@ -2593,6 +2616,201 @@ pub(crate) fn remove_dependency(
         "dependency removed",
         json!({ "dependency_id": dependency_id, "task_id": dep.target.id }),
     ))
+}
+
+pub(crate) fn set_workspace_conductor(
+    world: &mut World,
+    actor: &Actor,
+    workspace_id: &str,
+    agent_id: Option<String>,
+) -> Result<Outcome, CoordyError> {
+    require_not_agent(actor)?;
+    require_member(world, actor, workspace_id)?;
+    if let Some(agent_id) = agent_id.as_ref() {
+        let Some(agent) = world.agent(agent_id) else {
+            return Err(CoordyError::not_found("agent"));
+        };
+        if agent.workspace_id != workspace_id {
+            return Err(CoordyError::invalid("agent/workspace mismatch"));
+        }
+    }
+    let Some(ws) = world.workspaces.iter_mut().find(|ws| ws.id == workspace_id) else {
+        return Err(CoordyError::not_found("workspace"));
+    };
+    ws.conductor_agent_id = agent_id.clone();
+    emit_changed(world, workspace_id.to_string());
+    Ok(Outcome::ok(
+        "conductor updated",
+        json!({ "workspace_id": workspace_id, "agent_id": agent_id }),
+    ))
+}
+
+fn validator_role_ok(role: &RunRole) -> bool {
+    matches!(role, RunRole::ConductorReview | RunRole::HumanApproval)
+}
+
+pub(crate) fn apply_validation_decision(
+    world: &mut World,
+    actor: &Actor,
+    dependency_id: &str,
+    expected_generation: u64,
+    decision: ValidationChoice,
+    evidence_refs: Vec<String>,
+    rationale: String,
+    validator_run_id: Option<String>,
+) -> Result<Outcome, CoordyError> {
+    if let Some(run_id) = validator_run_id.as_ref() {
+        let Some(run) = world.run(run_id) else {
+            return Err(CoordyError::not_found("run"));
+        };
+        if !validator_role_ok(&run.role) {
+            return Err(CoordyError::denied(
+                "validator run role must be conductor_review or human_approval",
+            ));
+        }
+    } else if actor.is_agent() {
+        return Err(CoordyError::denied(
+            "executor cannot submit a validation decision",
+        ));
+    }
+    let dep = world
+        .dependencies
+        .iter()
+        .find(|dep| dep.id == dependency_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("dependency"))?;
+    if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
+        return Err(CoordyError::denied("not in workspace"));
+    }
+    record_graph_event(
+        world,
+        &dep.workspace_id,
+        "validation_decision",
+        Some(dependency_id),
+        Some(&dep.target.id),
+        json!({
+            "decision": decision,
+            "expected_generation": expected_generation,
+            "actual_generation": dep.generation,
+            "evidence_refs": evidence_refs,
+            "rationale": rationale,
+            "validator_run_id": validator_run_id,
+        }),
+    );
+    match decision {
+        ValidationChoice::Reaffirm => {
+            reaffirm_dependency(world, actor, dependency_id, expected_generation)
+        }
+        ValidationChoice::Remove => {
+            if dep.generation != expected_generation {
+                return Err(CoordyError::invalid("dependency generation mismatch"));
+            }
+            remove_dependency(world, actor, dependency_id)
+        }
+        ValidationChoice::Hold | ValidationChoice::Replan => {
+            if dep.generation != expected_generation {
+                return Err(CoordyError::invalid("dependency generation mismatch"));
+            }
+            let next_state = if decision == ValidationChoice::Hold {
+                GraphEdgeState::PendingValidation
+            } else {
+                GraphEdgeState::Rejected
+            };
+            if let Some(row) = world
+                .dependencies
+                .iter_mut()
+                .find(|row| row.id == dependency_id)
+            {
+                row.state = next_state.clone();
+                row.actor_id = Some(actor.id().to_string());
+                row.source_event = Some(format!("validation:{decision:?}"));
+            }
+            if decision == ValidationChoice::Replan {
+                push_notice(
+                    world,
+                    &dep.workspace_id,
+                    "replan",
+                    "Replan required",
+                    STALE_DEPENDENCY_REASON,
+                    Some(dep.target.id.clone()),
+                );
+            }
+            refresh_task_run_gates(world, &dep.target.id);
+            emit_changed(world, dep.workspace_id.clone());
+            Ok(Outcome::ok(
+                "validation recorded",
+                json!({
+                    "dependency_id": dependency_id,
+                    "state": next_state,
+                    "task_id": dep.target.id,
+                }),
+            ))
+        }
+    }
+}
+
+pub(crate) fn build_review_packet(world: &World, edge_id: &str) -> Option<ReviewPacket> {
+    let edge = world.dependencies.iter().find(|edge| edge.id == edge_id)?;
+    let invalidation = world
+        .graph_events
+        .iter()
+        .rev()
+        .find(|event| event.edge_id.as_deref() == Some(edge_id) && event.kind == "invalidate")
+        .map(|event| event.id.clone());
+    let worktree = world
+        .task(&edge.source.id)
+        .and_then(|task| task.worktree_path.clone())
+        .filter(|path| !path.is_empty())
+        .or_else(|| {
+            world
+                .task(&edge.target.id)
+                .and_then(|task| task.worktree_path.clone())
+                .filter(|path| !path.is_empty())
+        });
+    let consumer_plan = world
+        .commitments
+        .iter()
+        .rev()
+        .find(|row| {
+            row.task_id.as_deref() == Some(edge.target.id.as_str())
+                && row.commitment_type == "PLAN"
+                && row.status == "ACTIVE"
+        })
+        .map(|row| row.claim.clone())
+        .or_else(|| {
+            world
+                .task(&edge.target.id)
+                .map(|task| task.description.clone())
+        })
+        .unwrap_or_default();
+    Some(ReviewPacket {
+        dependency_id: edge.id.clone(),
+        reason: edge
+            .reason
+            .clone()
+            .unwrap_or_else(|| STALE_DEPENDENCY_REASON.into()),
+        invalidation_event: invalidation,
+        old_version: edge.observed_version,
+        new_version: edge.current_version,
+        changed_files: Vec::new(),
+        diff_ref: worktree.clone(),
+        diff_missing_reason: if worktree.is_none() {
+            Some("worktree not readable".into())
+        } else {
+            None
+        },
+        consumer_plan,
+        deterministic_checks: Vec::new(),
+        generation: edge.generation,
+    })
+}
+
+pub(crate) fn review_prompt(packet: &ReviewPacket) -> String {
+    let body = serde_json::to_string_pretty(packet).unwrap_or_else(|_| "{}".into());
+    format!(
+        "# ReviewPacket\n\n```json\n{body}\n```\n\n用一行结构化决定回复，必须带当前 generation（{generation}）：\n`REAFFIRM: <dependency_id> generation=<generation>`\n`HOLD: <dependency_id> generation=<generation>`\n`REMOVE: <dependency_id> generation=<generation>`\n`REPLAN: <dependency_id> generation=<generation>`",
+        generation = packet.generation
+    )
 }
 
 pub(crate) fn dependency_view(dep: &GraphEdge) -> DependencyView {

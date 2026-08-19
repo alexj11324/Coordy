@@ -144,6 +144,16 @@ export type Command =
     }
   | { type: "ReaffirmDependency"; dependency_id: string; expected_generation: number }
   | { type: "RemoveDependency"; dependency_id: string }
+  | { type: "SetWorkspaceConductor"; workspace_id: string; agent_id?: string | null }
+  | {
+      type: "ValidationDecision";
+      dependency_id: string;
+      expected_generation: number;
+      decision: ValidationChoice;
+      evidence_refs?: string[];
+      rationale?: string;
+      validator_run_id?: string | null;
+    }
   | { type: "AddIssueBlocker"; task_id: string; blocker_id: string }
   | { type: "RemoveIssueBlocker"; task_id: string; blocker_id: string }
   | { type: "SetSettings"; workspace_id: string; llm_advisor_enabled: boolean }
@@ -282,6 +292,7 @@ export type WorkspaceView = {
   slug?: string;
   issue_prefix?: string;
   next_issue_number?: number;
+  conductor_agent_id?: string | null;
 };
 export type AttachmentView = { id: string; name: string; path: string };
 export type PullRequestView = { number: number; url?: string };
@@ -459,6 +470,20 @@ export type RunView = {
   role?: RunRole;
 };
 export type RunRole = "executor" | "validator" | "conductor_review" | "human_approval";
+export type ValidationChoice = "reaffirm" | "hold" | "remove" | "replan";
+export type ReviewPacket = {
+  dependency_id: string;
+  reason: string;
+  invalidation_event?: string | null;
+  old_version?: number | null;
+  new_version?: number | null;
+  changed_files: string[];
+  diff_ref?: string | null;
+  diff_missing_reason?: string | null;
+  consumer_plan: string;
+  deterministic_checks: string[];
+  generation: number;
+};
 export type RunEventView = { seq: number; kind: string; payload: string };
 export type InboxView = {
   id: string;

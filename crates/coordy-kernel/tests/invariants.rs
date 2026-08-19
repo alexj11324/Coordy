@@ -4,7 +4,8 @@ use coordy_kernel::{
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
-    HarnessEvent, NodeKind, Query, RunRole, RunSource, View, STALE_DEPENDENCY_REASON,
+    HarnessEvent, NodeKind, Query, RunRole, RunSource, ValidationChoice, View,
+    STALE_DEPENDENCY_REASON,
 };
 
 fn daemon() -> Actor {
@@ -1869,6 +1870,268 @@ fn graph_scheduler_writes_executor_role_even_when_agent_is_named_conductor() {
     assert_eq!(run.role, RunRole::Executor);
     assert_eq!(run.trigger, "graph_execute");
     assert_eq!(run.agent_id, conductor_id);
+}
+
+fn set_conductor(h: &Harness, agent_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::SetWorkspaceConductor {
+                workspace_id: h.workspace_id.clone(),
+                agent_id: Some(agent_id.into()),
+            },
+        ))
+        .unwrap();
+}
+
+fn invalidate_producer(h: &Harness, producer: &str) {
+    bind_demo_repo(h);
+    create_worktree(h, producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::ApplyPatch {
+                task_id: producer.into(),
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+}
+
+fn graph_review_runs(h: &Harness) -> Vec<coordy_protocol::RunView> {
+    alice_runs(h)
+        .into_iter()
+        .filter(|run| run.trigger == "graph_review")
+        .collect()
+}
+
+fn eval_ready(h: &Harness) -> coordy_protocol::GraphEvaluationView {
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(h),
+            Query::GraphEvaluation {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphEvaluation(eval) => eval,
+        other => panic!("expected graph evaluation, got {other:?}"),
+    }
+}
+
+#[test]
+fn validation_decision_rejects_expired_generation() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    invalidate_producer(&h, &producer);
+    let generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ValidationDecision {
+                dependency_id: dep_id,
+                expected_generation: generation.saturating_sub(1),
+                decision: ValidationChoice::Reaffirm,
+                evidence_refs: vec!["packet".into()],
+                rationale: "rubber stamp".into(),
+                validator_run_id: None,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("generation"));
+}
+
+#[test]
+fn validation_hold_keeps_downstream_out_of_ready_set() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+    complete_session(&h, &producer_run.id);
+    invalidate_producer(&h, &producer);
+    let generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ValidationDecision {
+                dependency_id: dep_id,
+                expected_generation: generation,
+                decision: ValidationChoice::Hold,
+                evidence_refs: vec!["review-packet".into()],
+                rationale: "hold until next plan".into(),
+                validator_run_id: None,
+            },
+        ))
+        .unwrap();
+    let edge = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.target.id == consumer)
+        .expect("edge");
+    assert_eq!(edge.state, GraphEdgeState::PendingValidation);
+    let eval = eval_ready(&h);
+    assert!(!eval.ready_nodes.contains(&consumer));
+}
+
+#[test]
+fn human_validation_uses_the_same_command_as_conductor() {
+    let h = setup();
+    set_conductor(&h, &h.a1);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    invalidate_producer(&h, &producer);
+    let generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ValidationDecision {
+                dependency_id: dep_id.clone(),
+                expected_generation: generation,
+                decision: ValidationChoice::Reaffirm,
+                evidence_refs: vec!["human".into()],
+                rationale: "inspector".into(),
+                validator_run_id: None,
+            },
+        ))
+        .unwrap();
+    let edge = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep");
+    assert_eq!(edge.state, GraphEdgeState::Active);
+    assert_eq!(edge.observed_version, edge.current_version);
+}
+
+#[test]
+fn executor_reaffirm_prefix_does_not_clear_stale_edge() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+    invalidate_producer(&h, &producer);
+    let generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: producer_run.id,
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: format!("REAFFIRM: {dep_id} generation={generation}"),
+                },
+            },
+        ))
+        .unwrap();
+    let edge = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep");
+    assert_eq!(edge.state, GraphEdgeState::Stale);
+    assert_eq!(producer_run.role, RunRole::Executor);
+}
+
+#[test]
+fn conductor_review_prefix_without_generation_is_ignored() {
+    let h = setup();
+    set_conductor(&h, &h.a1);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &consumer);
+    invalidate_producer(&h, &producer);
+    let review = graph_review_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer)
+        .expect("review run");
+    assert_eq!(review.role, RunRole::ConductorReview);
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: review.id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: format!("REAFFIRM: {dep_id}"),
+                },
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        alice_deps(&h)
+            .into_iter()
+            .find(|dep| dep.id == dep_id)
+            .expect("dep")
+            .state,
+        GraphEdgeState::Stale
+    );
+    let generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: review.id,
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: format!("HOLD: {dep_id} generation={generation}"),
+                },
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        alice_deps(&h)
+            .into_iter()
+            .find(|dep| dep.id == dep_id)
+            .expect("dep")
+            .state,
+        GraphEdgeState::PendingValidation
+    );
 }
 
 #[test]
