@@ -1670,6 +1670,9 @@ pub struct DiscoveredAgentView {
     pub id: String,
     pub name: String,
     pub installed: bool,
+    /// `ready`, `on_demand`, or `missing`.
+    #[serde(default)]
+    pub launch_state: String,
     pub command: String,
     pub source: String,
     pub version: Option<String>,

@@ -713,6 +713,7 @@ export type DiscoveredAgentView = {
   id: string;
   name: string;
   installed: boolean;
+  launch_state?: "ready" | "on_demand" | "missing" | string;
   command: string;
   source: string;
   version?: string | null;

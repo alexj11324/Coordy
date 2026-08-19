@@ -15,24 +15,143 @@ use crate::SecretEnv;
 
 pub const ACP_STUB_REPLY: &str = "内置演示智能体已就绪。这不是云端模型：在「新建智能体」中选择本机 harness，并配置模型密钥后即可使用真实智能体。";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcpResumePolicy {
+    Resume,
+    Load,
+    FreshOnly,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AcpThinkingPolicy {
+    None,
+    Fixed(&'static str),
+    Advertised,
+    ProcessArgument,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AcpProviderPolicy {
+    pub protocol_version: u8,
+    pub resume: AcpResumePolicy,
+    pub set_model: bool,
+    pub thinking: AcpThinkingPolicy,
+}
+
+/// Provider behavior above the shared ACP JSON-RPC framing. The current run
+/// API starts fresh sessions, but the real resume capability is recorded here
+/// so a future resume surface cannot guess one common method for every server.
+pub fn acp_provider_policy(kind: &str) -> AcpProviderPolicy {
+    use AcpResumePolicy::{FreshOnly, Load, Resume};
+    use AcpThinkingPolicy::{Advertised, Fixed, None, ProcessArgument};
+
+    match crate::protocol::canonical_harness_id(kind) {
+        "hermes" | "reasonix" => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: Resume,
+            set_model: true,
+            thinking: Advertised,
+        },
+        "kimi" => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: Resume,
+            set_model: true,
+            thinking: Fixed("thinking"),
+        },
+        "qoder" | "qoderclicn" => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: Resume,
+            set_model: true,
+            thinking: None,
+        },
+        "kiro" | "traecli" => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: Load,
+            set_model: true,
+            thinking: None,
+        },
+        "grok" => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: Load,
+            set_model: true,
+            thinking: ProcessArgument,
+        },
+        "qwenpaw" => AcpProviderPolicy {
+            protocol_version: 2,
+            resume: Load,
+            set_model: false,
+            thinking: None,
+        },
+        "mcode" => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: FreshOnly,
+            set_model: false,
+            thinking: None,
+        },
+        _ => AcpProviderPolicy {
+            protocol_version: 1,
+            resume: FreshOnly,
+            set_model: true,
+            thinking: None,
+        },
+    }
+}
+
 pub fn resolve_acp_command(configured: Option<&str>) -> Result<(String, Vec<String>), CoordyError> {
     crate::discovery::resolve_launch("acp", configured, None)
 }
 
+fn apply_acp_tool_access(canonical: &str, access: ToolAccess, args: &mut Vec<String>) {
+    if access != ToolAccess::Auto {
+        return;
+    }
+    args.retain(|arg| {
+        !matches!(
+            (canonical, arg.as_str()),
+            ("kiro", "--trust-all-tools")
+                | ("qoder" | "qoderclicn" | "traecli", "--yolo")
+                | ("grok", "--always-approve")
+        )
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_acp_session(
+    kind: &str,
     bin: &str,
     args: &[String],
     worktree: &str,
     prompt: &str,
     model: &str,
+    thinking: &str,
     secrets: &SecretEnv,
     tool_access: &str,
     run_id: Option<&str>,
     mut on_event: impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
+    let canonical = crate::protocol::canonical_harness_id(kind);
+    let policy = acp_provider_policy(canonical);
+    let access = parse_tool_access(tool_access);
+    let mut launch_args = args.to_vec();
+    apply_acp_tool_access(canonical, access, &mut launch_args);
+    if canonical == "grok" && !thinking.trim().is_empty() {
+        let position = launch_args
+            .iter()
+            .rposition(|arg| arg == "stdio")
+            .unwrap_or(launch_args.len());
+        launch_args.splice(
+            position..position,
+            ["--effort".to_string(), thinking.trim().to_string()],
+        );
+    }
+    if canonical == "qwenpaw" {
+        launch_args.extend([
+            "--workspace".to_string(),
+            if worktree.is_empty() { "." } else { worktree }.to_string(),
+        ]);
+    }
     let mut cmd = Command::new(bin);
-    cmd.args(args)
+    cmd.args(&launch_args)
         .current_dir(if worktree.is_empty() { "." } else { worktree })
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -40,20 +159,31 @@ pub fn spawn_acp_session(
     for (key, value) in secrets.env_pairs() {
         cmd.env(key, value);
     }
+    if canonical == "hermes" && access == ToolAccess::FullAccess {
+        cmd.env("HERMES_YOLO_MODE", "1");
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| CoordyError::unavailable(format!("spawn ACP `{bin}`: {e}")))?;
+    let stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CoordyError::unavailable("ACP stdin"));
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CoordyError::unavailable("ACP stdout"));
+        }
+    };
     if let Some(run_id) = run_id {
         crate::children::register_child(run_id, child.id());
     }
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| CoordyError::unavailable("ACP stdin"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| CoordyError::unavailable("ACP stdout"))?;
     if let Some(mut stderr) = child.stderr.take() {
         thread::spawn(move || {
             let mut sink = std::io::sink();
@@ -61,42 +191,140 @@ pub fn spawn_acp_session(
         });
     }
     let cwd = PathBuf::from(if worktree.is_empty() { "." } else { worktree });
-    let result = drive_session(
+    let require_auth = canonical == "grok";
+    let have_api_key = secrets.provider == "xai"
+        && secrets
+            .api_key
+            .as_deref()
+            .is_some_and(|v| !v.trim().is_empty())
+        || std::env::var("XAI_API_KEY").is_ok_and(|v| !v.trim().is_empty());
+    let session_meta = if canonical == "qwenpaw" {
+        Some(json!({ "qwenpaw.coding_project_dir": cwd.display().to_string() }))
+    } else {
+        None
+    };
+    let (thinking_config, advertised_thinking) = match policy.thinking {
+        AcpThinkingPolicy::Fixed(id) => (Some(id), false),
+        AcpThinkingPolicy::Advertised => (None, true),
+        AcpThinkingPolicy::None | AcpThinkingPolicy::ProcessArgument => (None, false),
+    };
+    let result = drive_session_with_policy(
         stdout,
         stdin,
         prompt,
         model,
         &cwd,
         tool_access,
+        require_auth,
+        have_api_key,
+        policy.protocol_version,
+        policy.set_model,
+        session_meta,
+        thinking,
+        thinking_config,
+        advertised_thinking,
         &mut on_event,
     );
     if let Some(run_id) = run_id {
         crate::children::unregister_child(run_id);
     }
+    let status = child.try_wait().ok().flatten();
     let _ = child.kill();
     let _ = child.wait();
+    if result.is_ok() && status.is_some_and(|status| !status.success()) {
+        return Err(CoordyError::unavailable(format!(
+            "ACP `{kind}` exited {}",
+            status.unwrap()
+        )));
+    }
     result
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn drive_session<R: Read, W: Write>(
     reader: R,
-    mut writer: W,
+    writer: W,
     prompt: &str,
     model: &str,
     cwd: &Path,
     tool_access: &str,
     on_event: &mut impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
+    drive_session_with_auth(
+        reader,
+        writer,
+        prompt,
+        model,
+        cwd,
+        tool_access,
+        false,
+        false,
+        on_event,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn drive_session_with_auth<R: Read, W: Write>(
+    reader: R,
+    writer: W,
+    prompt: &str,
+    model: &str,
+    cwd: &Path,
+    tool_access: &str,
+    require_auth: bool,
+    have_api_key: bool,
+    on_event: &mut impl FnMut(HarnessEvent),
+) -> Result<(), CoordyError> {
+    drive_session_with_policy(
+        reader,
+        writer,
+        prompt,
+        model,
+        cwd,
+        tool_access,
+        require_auth,
+        have_api_key,
+        1,
+        true,
+        None,
+        "",
+        None,
+        false,
+        on_event,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn drive_session_with_policy<R: Read, W: Write>(
+    reader: R,
+    mut writer: W,
+    prompt: &str,
+    model: &str,
+    cwd: &Path,
+    tool_access: &str,
+    require_auth: bool,
+    have_api_key: bool,
+    protocol_version: u8,
+    allow_model: bool,
+    session_meta: Option<Value>,
+    thinking: &str,
+    thinking_config: Option<&str>,
+    advertised_thinking: bool,
+    on_event: &mut impl FnMut(HarnessEvent),
+) -> Result<(), CoordyError> {
     let access = parse_tool_access(tool_access);
     let mut lines = BufReader::new(reader);
     let mut next_id = 1u64;
+    let mut new_params = json!({ "cwd": cwd.display().to_string(), "mcpServers": [] });
+    if let Some(meta) = session_meta {
+        new_params["_meta"] = meta;
+    }
     write_rpc(
         &mut writer,
         next_id,
         "initialize",
         json!({
-            "protocolVersion": 1,
+            "protocolVersion": protocol_version,
             "clientCapabilities": {
                 "fs": { "readTextFile": true, "writeTextFile": true },
                 "terminal": false
@@ -104,23 +332,30 @@ pub fn drive_session<R: Read, W: Write>(
             "clientInfo": { "name": "coordy", "title": "Coordy", "version": env!("CARGO_PKG_VERSION") }
         }),
     )?;
-    let _init = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
+    let init = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
     next_id += 1;
-    write_rpc(
-        &mut writer,
-        next_id,
-        "session/new",
-        json!({ "cwd": cwd.display().to_string(), "mcpServers": [] }),
-    )?;
+    if require_auth {
+        let method = select_auth_method(&init, have_api_key)?;
+        write_rpc(
+            &mut writer,
+            next_id,
+            "authenticate",
+            json!({ "methodId": method, "_meta": { "headless": true } }),
+        )?;
+        let _auth = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
+        next_id += 1;
+    }
+    write_rpc(&mut writer, next_id, "session/new", new_params)?;
     let new_session = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
     let session_id = new_session
         .get("result")
         .and_then(|r| r.get("sessionId"))
         .and_then(|v| v.as_str())
-        .unwrap_or("default")
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| CoordyError::invalid("ACP session/new returned no sessionId"))?
         .to_string();
     next_id += 1;
-    if !model.trim().is_empty() {
+    if allow_model && !model.trim().is_empty() {
         write_rpc(
             &mut writer,
             next_id,
@@ -129,6 +364,30 @@ pub fn drive_session<R: Read, W: Write>(
         )?;
         let _set_model = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
         next_id += 1;
+    }
+    if !thinking.trim().is_empty() {
+        let config_id = thinking_config.map(str::to_string).or_else(|| {
+            advertised_thinking
+                .then(|| {
+                    advertised_thinking_config(&new_session)
+                        .or_else(|| advertised_thinking_config(&init))
+                })
+                .flatten()
+        });
+        if let Some(config_id) = config_id {
+            write_rpc(
+                &mut writer,
+                next_id,
+                "session/set_config_option",
+                json!({
+                    "sessionId": session_id,
+                    "configId": config_id,
+                    "value": thinking.trim()
+                }),
+            )?;
+            let _config = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
+            next_id += 1;
+        }
     }
     write_rpc(
         &mut writer,
@@ -141,6 +400,58 @@ pub fn drive_session<R: Read, W: Write>(
     )?;
     let _done = wait_response(&mut lines, &mut writer, next_id, cwd, access, on_event)?;
     Ok(())
+}
+
+fn advertised_thinking_config(response: &Value) -> Option<String> {
+    response
+        .pointer("/result/configOptions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|option| {
+            option
+                .get("id")
+                .or_else(|| option.get("configId"))
+                .and_then(Value::as_str)
+        })
+        .find(|id| {
+            matches!(
+                id.to_ascii_lowercase().as_str(),
+                "thinking" | "effort" | "reasoning_effort" | "thought_level"
+            )
+        })
+        .map(str::to_string)
+}
+
+fn select_auth_method(init: &Value, have_api_key: bool) -> Result<&'static str, CoordyError> {
+    let methods = init
+        .pointer("/result/authMethods")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.as_str().or_else(|| {
+                item.get("id")
+                    .or_else(|| item.get("methodId"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .collect::<Vec<_>>();
+    if have_api_key && methods.contains(&"xai.api_key") {
+        return Ok("xai.api_key");
+    }
+    if methods.contains(&"cached_token") {
+        return Ok("cached_token");
+    }
+    if methods.contains(&"xai.api_key") {
+        return Err(CoordyError::unavailable(
+            "ACP authentication requires XAI_API_KEY",
+        ));
+    }
+    Err(CoordyError::unavailable(format!(
+        "ACP agent advertised no supported authentication method: {}",
+        methods.join(", ")
+    )))
 }
 
 fn rpc_id_matches(value: Option<&Value>, expect: u64) -> bool {
@@ -352,8 +663,9 @@ fn handle_agent_request<W: Write>(
     }
 }
 
-/// Pick an offered allow option so ACP agents do not stall waiting for a human.
-/// Auto prefers a one-shot grant. Full Access prefers a lasting grant.
+/// Pick a permission response without silently escalating Auto. Full Access
+/// prefers a lasting grant; Auto selects an offered rejection and otherwise
+/// cancels the request.
 fn acp_auto_approve_option_id(params: &Value, access: ToolAccess) -> Option<String> {
     let options: Vec<(String, Option<String>)> = params
         .get("options")
@@ -372,7 +684,7 @@ fn acp_auto_approve_option_id(params: &Value, access: ToolAccess) -> Option<Stri
         .collect();
     let preferred_kinds: &[&str] = match access {
         ToolAccess::FullAccess => &["allow_always", "allow_once"],
-        ToolAccess::Auto => &["allow_once"],
+        ToolAccess::Auto => &["reject_once", "reject_always"],
     };
     for want in preferred_kinds {
         if let Some((id, _)) = options
@@ -382,10 +694,14 @@ fn acp_auto_approve_option_id(params: &Value, access: ToolAccess) -> Option<Stri
             return Some(id.clone());
         }
     }
-    options
-        .into_iter()
-        .find(|(_, kind)| matches!(kind.as_deref(), Some("reject_once" | "reject_always")))
-        .map(|(id, _)| id)
+    if access == ToolAccess::FullAccess {
+        options
+            .into_iter()
+            .find(|(_, kind)| matches!(kind.as_deref(), Some("reject_once" | "reject_always")))
+            .map(|(id, _)| id)
+    } else {
+        None
+    }
 }
 
 fn resolve_fs_path(
@@ -523,13 +839,37 @@ pub fn serve_fake_acp<R: Read, W: Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::{acp_auto_approve_option_id, handle_agent_request};
+    use super::{
+        acp_auto_approve_option_id, acp_provider_policy, apply_acp_tool_access,
+        handle_agent_request, AcpResumePolicy, AcpThinkingPolicy,
+    };
     use crate::protocol::ToolAccess;
     use serde_json::json;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn full_access_prefers_allow_always_auto_keeps_once() {
+    fn provider_policy_does_not_flatten_resume_model_or_thinking_capabilities() {
+        let kimi = acp_provider_policy("kimi");
+        assert_eq!(kimi.resume, AcpResumePolicy::Resume);
+        assert!(kimi.set_model);
+        assert_eq!(kimi.thinking, AcpThinkingPolicy::Fixed("thinking"));
+
+        let kiro = acp_provider_policy("kiro");
+        assert_eq!(kiro.resume, AcpResumePolicy::Load);
+        assert_eq!(kiro.thinking, AcpThinkingPolicy::None);
+
+        let qwenpaw = acp_provider_policy("qwenpaw");
+        assert_eq!(qwenpaw.protocol_version, 2);
+        assert_eq!(qwenpaw.resume, AcpResumePolicy::Load);
+        assert!(!qwenpaw.set_model);
+
+        let mcode = acp_provider_policy("mcode");
+        assert_eq!(mcode.resume, AcpResumePolicy::FreshOnly);
+        assert!(!mcode.set_model);
+    }
+
+    #[test]
+    fn full_access_prefers_allow_always_auto_rejects() {
         let params = json!({
             "options": [
                 { "optionId": "persistent-grant-7", "kind": "allow_always" },
@@ -543,7 +883,7 @@ mod tests {
         );
         assert_eq!(
             acp_auto_approve_option_id(&params, ToolAccess::Auto),
-            Some("single-grant-4".into())
+            Some("reject-9".into())
         );
     }
 
@@ -557,7 +897,7 @@ mod tests {
         });
         assert_eq!(
             acp_auto_approve_option_id(&once, ToolAccess::Auto),
-            Some("single".into())
+            Some("reject".into())
         );
         let only_reject = json!({
             "options": [{ "optionId": "reject", "kind": "reject_once" }]
@@ -579,6 +919,25 @@ mod tests {
         );
         let empty = json!({});
         assert_eq!(acp_auto_approve_option_id(&empty, ToolAccess::Auto), None);
+    }
+
+    #[test]
+    fn auto_strips_provider_bypass_flags_while_full_access_preserves_them() {
+        for (kind, flag) in [
+            ("kiro", "--trust-all-tools"),
+            ("qoder", "--yolo"),
+            ("qoderclicn", "--yolo"),
+            ("traecli", "--yolo"),
+            ("grok", "--always-approve"),
+        ] {
+            let mut auto = vec!["serve".to_string(), flag.to_string()];
+            apply_acp_tool_access(kind, ToolAccess::Auto, &mut auto);
+            assert_eq!(auto, ["serve"], "{kind} Auto retained {flag}");
+
+            let mut full = vec!["serve".to_string(), flag.to_string()];
+            apply_acp_tool_access(kind, ToolAccess::FullAccess, &mut full);
+            assert_eq!(full, ["serve", flag], "{kind} FullAccess lost {flag}");
+        }
     }
 
     #[test]

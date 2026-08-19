@@ -26,7 +26,13 @@ import {
   upsertBuilderSession,
   type BuilderSession,
 } from "../../lib/coordy/builder-sessions";
-import { pickerRuntimes, runtimeChipLabel, selectableRuntimes, harnessIdsMatch } from "../../lib/coordy/labels";
+import {
+  harnessIdsMatch,
+  pickerRuntimes,
+  runtimeChipLabel,
+  runtimeIsLaunchable,
+  selectableRuntimes,
+} from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
 import { AgentConfigurationPanel, CreateAgentFooter, HarnessDropdown, RuntimeCapabilityFields } from "./agent-create-form";
@@ -240,6 +246,10 @@ export function AiBuilderSessionPage() {
 
   const create = async () => {
     if (!session || !workspaceId || !principalId) return;
+    if (!runtimeIsLaunchable(selected)) {
+      setFormError("所选 harness 尚未安装，暂时不能创建智能体。");
+      return;
+    }
     setCreating(true);
     setNameError(null);
     setFormError(null);
@@ -279,7 +289,7 @@ export function AiBuilderSessionPage() {
   };
 
   if (!session) return null;
-  const canCreate = session.draft.name.trim().length > 0 && Boolean(session.draft.harness) && !creating;
+  const canCreate = session.draft.name.trim().length > 0 && runtimeIsLaunchable(selected) && !creating;
 
   return (
     <AgentCreateShell

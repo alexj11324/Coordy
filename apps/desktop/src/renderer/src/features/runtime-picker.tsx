@@ -1,6 +1,6 @@
 import { Badge } from "@coordy/ui";
 import type { DiscoveredAgentView } from "@coordy/protocol";
-import { presenceLabel, presenceLampTone, harnessIdsMatch, runtimeSubtitle } from "../lib/coordy/labels";
+import { presenceLabel, presenceLampTone, harnessIdsMatch } from "../lib/coordy/labels";
 import { ProviderLogo } from "./provider-logo";
 import { StatusLamp } from "./status-lamp";
 
@@ -16,7 +16,7 @@ export function RuntimePicker({
   if (items.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        本机暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。
+        暂无可用 harness。请到「Harness」页刷新检测或安装需要的工具。
       </p>
     );
   }
@@ -25,14 +25,17 @@ export function RuntimePicker({
       {items.map((item) => {
         const selected = harnessIdsMatch(value, item.id);
         const presence = item.installed ? "online" : "offline";
+        const launchable = item.launch_state !== "missing";
         return (
           <button
             key={item.id}
             type="button"
-            onClick={() => onChange(item.id)}
+            disabled={!launchable}
+            onClick={() => launchable && onChange(item.id)}
             className={[
               "flex w-full items-start justify-between gap-3 rounded-xl border px-3 py-3 text-left transition-colors",
               selected ? "border-foreground bg-muted/60" : "border-border hover:bg-muted/40",
+              launchable ? "" : "cursor-not-allowed opacity-55",
             ].join(" ")}
           >
             <div className="min-w-0">
@@ -40,11 +43,10 @@ export function RuntimePicker({
                 <ProviderLogo provider={item.id} className="size-4" />
                 {item.name}
               </p>
-              <p className="truncate text-xs text-muted-foreground">{runtimeSubtitle(item)}</p>
             </div>
             <Badge variant={item.installed ? "outline" : "secondary"}>
               <StatusLamp tone={presenceLampTone(presence)} />
-              {presenceLabel(presence)}
+              {launchable ? presenceLabel(presence) : "未安装"}
             </Badge>
           </button>
         );

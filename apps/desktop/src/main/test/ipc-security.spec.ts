@@ -37,7 +37,7 @@ describe("content security policy", () => {
     delete process.env.ELECTRON_RENDERER_URL;
     expect(contentSecurityPolicy()).toBe(CSP);
     expect(contentSecurityPolicy()).not.toContain("unsafe-eval");
-    expect(contentSecurityPolicy()).toContain("img-src 'self' data:");
+    expect(contentSecurityPolicy()).toContain("img-src 'self' data: https://cdn.agentclientprotocol.com");
     expect(contentSecurityPolicy()).not.toContain("dicebear.com");
   });
 });

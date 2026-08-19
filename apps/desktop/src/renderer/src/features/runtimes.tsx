@@ -16,7 +16,7 @@ import {
 } from "@coordy/ui";
 import { Monitor, RefreshCw } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { presenceLabel, presenceLampTone, runtimeSubtitle } from "../lib/coordy/labels";
+import { presenceLabel, presenceLampTone } from "../lib/coordy/labels";
 import { ProviderLogo } from "./provider-logo";
 import { StatusLamp } from "./status-lamp";
 
@@ -81,10 +81,7 @@ export function RuntimesPage() {
                   {presenceLabel("online")}
                 </Badge>
               </CardTitle>
-              <CardDescription>
-                {runtimeSubtitle(item)}
-                {item.version ? ` · ${item.version}` : ""}
-              </CardDescription>
+              {item.version ? <CardDescription>{item.version}</CardDescription> : null}
               <CardAction>
                 <Button size="sm" variant="secondary" onClick={() => navigate("/agents/new")}>
                   用此 harness 创建智能体
@@ -109,7 +106,6 @@ export function RuntimesPage() {
                     {presenceLabel("offline")}
                   </Badge>
                 </CardTitle>
-                <CardDescription>{runtimeSubtitle(item)}</CardDescription>
               </CardHeader>
             </Card>
           ))}

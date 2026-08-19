@@ -30,7 +30,7 @@ import {
   type HarnessModelOption,
   type ToolAccess,
 } from "../../lib/coordy/agent-draft";
-import { harnessIdsMatch, runtimeChipLabel, runtimeSubtitle } from "../../lib/coordy/labels";
+import { harnessIdsMatch, runtimeChipLabel } from "../../lib/coordy/labels";
 import { AgentAvatarField } from "../agent-avatar";
 import { ProviderLogo } from "../provider-logo";
 
@@ -120,7 +120,7 @@ export function AgentConfigurationPanel({
 
       <SettingsBlock
         title="执行配置"
-        description="选择启动运行时使用的 harness、模型与思考强度。Codex 可开启 Fast。未指定的项使用 CLI 默认值。原生 CLI 通过对应命令行参数下发；ACP 家族仅下发模型。"
+        description="选择 harness、模型与思考强度。Codex 可开启 Fast；未指定的项使用工具默认值。"
       >
         <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
           <HarnessDropdown
@@ -194,23 +194,20 @@ export function HarnessDropdown({
               {selected ? (
                 <span className="flex min-w-0 items-center gap-2">
                   <ProviderLogo provider={selected.id} className="size-4 shrink-0" />
-                  <span className="min-w-0 truncate text-left">
-                    <span className="block truncate">{runtimeChipLabel(selected, os)}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{runtimeSubtitle(selected)}</span>
-                  </span>
+                  <span className="min-w-0 truncate text-left">{runtimeChipLabel(selected, os)}</span>
                 </span>
               ) : null}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {items.map((item) => (
-              <SelectItem key={item.id} value={item.id}>
+              <SelectItem key={item.id} value={item.id} disabled={item.launch_state === "missing"}>
                 <span className="flex min-w-0 items-center gap-2">
                   <ProviderLogo provider={item.id} className="size-4 shrink-0" />
-                  <span className="min-w-0">
-                    <span className="block truncate">{runtimeChipLabel(item, os)}</span>
-                    <span className="block truncate text-xs text-muted-foreground">{runtimeSubtitle(item)}</span>
-                  </span>
+                  <span className="min-w-0 truncate">{runtimeChipLabel(item, os)}</span>
+                  {item.launch_state === "missing" ? (
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">未安装</span>
+                  ) : null}
                 </span>
               </SelectItem>
             ))}

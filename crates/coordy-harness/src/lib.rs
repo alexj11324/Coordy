@@ -7,17 +7,19 @@ mod native;
 mod protocol;
 
 pub use acp::{
-    drive_session, map_session_update, resolve_acp_command, serve_fake_acp, spawn_acp_session,
-    ACP_STUB_REPLY,
+    drive_session, drive_session_with_auth, map_session_update, resolve_acp_command,
+    serve_fake_acp, spawn_acp_session, ACP_STUB_REPLY,
 };
 pub use children::{kill_child, register_child, unregister_child};
 pub use discovery::{
-    discover, extra_bin_dirs, resolve_launch, suggested_acp_stub_command, which_bin,
+    discover, extra_bin_dirs, launch_uses_acp, resolve_launch, suggested_acp_stub_command,
+    which_bin,
 };
 pub use native::{parse_native_line, spawn_native_session};
 pub use protocol::{
     append_cli_args, builtin, canonical_harness_id, display_args, native_launch_args,
     parse_tool_access, protocol_family, BuiltinHarness, ProtocolFamily, ToolAccess, BUILTINS,
+    MULTICA_RUNTIME_IDS,
 };
 
 use coordy_protocol::{CoordyError, HarnessEvent, RunSource};
@@ -40,6 +42,7 @@ impl SecretEnv {
             out.push(("COORDY_ADVISOR_API_KEY".into(), key.clone()));
             match self.provider.as_str() {
                 "anthropic" => out.push(("ANTHROPIC_API_KEY".into(), key.clone())),
+                "xai" => out.push(("XAI_API_KEY".into(), key.clone())),
                 _ => out.push(("OPENAI_API_KEY".into(), key.clone())),
             }
         }

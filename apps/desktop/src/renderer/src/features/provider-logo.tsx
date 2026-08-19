@@ -1,8 +1,127 @@
 import type { ReactNode } from "react";
-import { Monitor, Sparkles } from "lucide-react";
+import { useState } from "react";
+import {
+  Bot,
+  Boxes,
+  Braces,
+  CircleDot,
+  Feather,
+  Hexagon,
+  Monitor,
+  Orbit,
+  PawPrint,
+  Rocket,
+  Sparkles,
+  Terminal,
+  type LucideIcon,
+} from "lucide-react";
 import { providerKey } from "../lib/coordy/labels";
 
 type LogoProps = { className: string };
+
+export const FIRST_CLASS_PROVIDER_IDS = [
+  "claude", "codebuddy", "codex", "copilot", "opencode", "deveco", "openclaw", "hermes",
+  "pi", "omp", "cursor", "kimi", "reasonix", "dsh", "kiro", "antigravity", "qoder",
+  "qoderclicn", "traecli", "grok", "qwen", "qwenpaw", "mcode", "gemini",
+] as const;
+
+const REGISTRY_ICON_IDS: Record<string, string> = {
+  codebuddy: "codebuddy-code",
+  kimi: "kimi",
+  pi: "pi-acp",
+  qoder: "qoder",
+  qoderclicn: "qoder",
+  qwen: "qwen-code",
+};
+
+const LOCAL_MARKS: Record<string, readonly [LucideIcon, string]> = {
+  codebuddy: [Braces, "#2563EB"],
+  pi: [Orbit, "#0891B2"],
+  kimi: [Sparkles, "#7C3AED"],
+  qoder: [Hexagon, "#2563EB"],
+  qoderclicn: [Hexagon, "#DC2626"],
+  qwen: [CircleDot, "#6D28D9"],
+  deveco: [Braces, "#C026D3"],
+  openclaw: [PawPrint, "#DC2626"],
+  omp: [Orbit, "#7C2D12"],
+  reasonix: [CircleDot, "#6D28D9"],
+  dsh: [Terminal, "#0369A1"],
+  kiro: [Hexagon, "#B45309"],
+  traecli: [Rocket, "#4338CA"],
+  qwenpaw: [Feather, "#0E7490"],
+  mcode: [Boxes, "#EA580C"],
+  gemini: [Sparkles, "#4285F4"],
+  copilot: [Bot, "#111827"],
+};
+
+export function firstClassIconSignature(provider: string): string | null {
+  const key = providerKey(provider);
+  if (!FIRST_CLASS_PROVIDER_IDS.includes(key as (typeof FIRST_CLASS_PROVIDER_IDS)[number])) return null;
+  const registry = REGISTRY_ICON_IDS[key];
+  if (registry) return `registry:${registry}:${key}`;
+  const mark = LOCAL_MARKS[key];
+  return mark ? `local:${key}:${mark[1]}` : `brand:${key}`;
+}
+
+function LocalProviderMark({ provider, className }: LogoProps & { provider: string }) {
+  const [Icon, color] = LOCAL_MARKS[provider] ?? [Monitor, "#64748B"];
+  return (
+    <span className={`inline-flex items-center justify-center rounded-[28%] ${className}`} style={{ backgroundColor: color }}>
+      <Icon className="size-[72%] text-white" strokeWidth={2.25} aria-hidden />
+    </span>
+  );
+}
+
+function HermesLogo({ className }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <circle cx="12" cy="12" r="10" fill="#7C3AED" />
+      <path d="M7 6v12M17 6v12M7 12h10" stroke="white" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function AntigravityLogo({ className }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <circle cx="12" cy="12" r="3" fill="#4285F4" />
+      <path d="M3.5 12c2.2-5 14.8-5 17 0-2.2 5-14.8 5-17 0Z" stroke="#34A853" strokeWidth="1.8" />
+      <path d="M12 3.5c5 2.2 5 14.8 0 17-5-2.2-5-14.8 0-17Z" stroke="#EA4335" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function GrokLogo({ className }: LogoProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <rect x="2" y="2" width="20" height="20" rx="6" fill="#111827" />
+      <path d="m7 7 10 10M17 7l-4 4" stroke="white" strokeWidth="2.3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function registryIconUrl(provider: string): string | null {
+  const id = provider.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(id)) return null;
+  return `https://cdn.agentclientprotocol.com/registry/v1/latest/${id}.svg`;
+}
+
+function RegistryLogo({
+  provider,
+  fallbackProvider,
+  className,
+}: LogoProps & { provider: string; fallbackProvider?: string }) {
+  const [failed, setFailed] = useState(false);
+  const src = registryIconUrl(provider);
+  if (!src || failed) {
+    return fallbackProvider ? (
+      <LocalProviderMark provider={fallbackProvider} className={className} />
+    ) : (
+      <Monitor className={className} />
+    );
+  }
+  return <img src={src} alt="" className={className} onError={() => setFailed(true)} />;
+}
 
 // Claude (Anthropic) — official mark, sourced from Bootstrap Icons (bi-claude)
 function ClaudeLogo({ className }: LogoProps) {
@@ -103,10 +222,39 @@ export function ProviderLogo({
       return <CopilotLogo className={cls} />;
     case "cursor":
       return <CursorLogo className={cls} />;
+    case "hermes":
+      return <HermesLogo className={cls} />;
+    case "antigravity":
+      return <AntigravityLogo className={cls} />;
+    case "grok":
+      return <GrokLogo className={cls} />;
+    case "codebuddy":
+    case "pi":
+    case "kimi":
+    case "qoder":
+    case "qoderclicn":
+    case "qwen":
+      return (
+        <RegistryLogo
+          provider={REGISTRY_ICON_IDS[providerKey(provider)]}
+          fallbackProvider={providerKey(provider)}
+          className={cls}
+        />
+      );
+    case "deveco":
+    case "openclaw":
+    case "omp":
+    case "reasonix":
+    case "dsh":
+    case "kiro":
+    case "traecli":
+    case "qwenpaw":
+    case "mcode":
+      return <LocalProviderMark provider={providerKey(provider)} className={cls} />;
     case "coordy":
       return <Sparkles className={cls} />;
     default:
-      return <Monitor className={cls} />;
+      return <RegistryLogo key={provider} provider={provider} className={cls} />;
   }
 }
 
