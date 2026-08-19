@@ -2647,13 +2647,17 @@ pub(crate) fn mark_node_succeeded(world: &mut World, workspace_id: &str, node_id
         GraphEdgeState::Active,
         revision,
     );
+    let fingerprint = {
+        let snap = crate::graph::state_from_world(world, workspace_id);
+        crate::graph::input_fingerprint(&snap, node_id)
+    };
     record_graph_event(
         world,
         workspace_id,
         "task_succeeded",
         None,
         Some(node_id),
-        json!({ "revision": revision }),
+        json!({ "revision": revision, "input_fingerprint": fingerprint }),
     );
 }
 
@@ -2926,9 +2930,13 @@ pub(crate) fn record_dependency_edge(
         json!({
             "source": draft.source.id,
             "target": draft.target.id,
+            "source_kind": draft.source.kind,
+            "target_kind": draft.target.kind,
             "kind": draft.kind,
             "entity": entity,
             "origin_run_id": draft.origin_run_id,
+            "observed_version": version,
+            "current_version": version,
         }),
     );
     emit_changed(world, workspace_id.to_string());

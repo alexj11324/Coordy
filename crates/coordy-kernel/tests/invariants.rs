@@ -1773,6 +1773,31 @@ fn graph_snapshot_unifies_source_to_target_arrows() {
 }
 
 #[test]
+fn graph_evaluation_ready_set_only_includes_upstream() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::GraphEvaluation {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphEvaluation(eval) => {
+            assert!(eval.ready_nodes.contains(&producer));
+            assert!(!eval.ready_nodes.contains(&consumer));
+            assert!(eval.blocked_nodes.iter().any(|row| row.node_id == consumer));
+        }
+        other => panic!("expected graph evaluation, got {other:?}"),
+    }
+}
+
+#[test]
 fn start_run_automation_and_squad_still_run_without_graph_edges() {
     let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
     let task_id = create_open_task(&kernel, &principal_id, &workspace_id, "独立事项");

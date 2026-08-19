@@ -2,6 +2,7 @@
 
 mod authority;
 mod github;
+mod graph;
 mod jsonl;
 mod memory;
 mod ports;
