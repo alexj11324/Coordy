@@ -15,6 +15,7 @@ import {
   Textarea,
   cn,
 } from "@coordy/ui";
+import { DatePickerField } from "./date-picker-field";
 import {
   ArrowLeftRight,
   CalendarDays,
@@ -437,11 +438,16 @@ function ManualCreatePanel({
               <MoreHorizontal />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="min-w-56 p-2">
-              <label className="flex items-center gap-2 px-1 py-1 text-sm">
-                <CalendarDays className="size-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">截止日期</span>
-                <Input type="date" value={dueDate} className="h-7" onChange={(event) => setDueDate(event.target.value)} />
-              </label>
+              <div className="flex items-center gap-2 px-1 py-1 text-sm">
+                <CalendarDays className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="shrink-0 text-muted-foreground">截止日期</span>
+                <DatePickerField
+                  value={dueDate}
+                  placeholder="选择日期"
+                  className="h-7 min-w-0 flex-1 text-sm"
+                  onChange={setDueDate}
+                />
+              </div>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -736,10 +742,15 @@ function AgentCreatePanel({
               ))}
             </SelectContent>
           </Select>
-          <label className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs text-muted-foreground">
-            <CalendarDays className="size-3.5" />
-            <Input type="date" value={dueDate} className="h-6 border-0 px-0 shadow-none" onChange={(event) => setDueDate(event.target.value)} />
-          </label>
+          <div className="flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-xs">
+            <CalendarDays className="size-3.5 shrink-0 text-muted-foreground" />
+            <DatePickerField
+              value={dueDate}
+              placeholder="截止日期"
+              className="h-6 min-w-24 border-0 px-0 text-xs shadow-none"
+              onChange={setDueDate}
+            />
+          </div>
         </div>
         {files.length > 0 ? (
           <p className="text-xs text-muted-foreground">已选 {files.map((file) => file.name).join("、")}</p>

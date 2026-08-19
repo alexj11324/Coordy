@@ -34,9 +34,9 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { DatePickerField } from "./date-picker-field";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
-import { openNativeDatePicker } from "../lib/coordy/date-picker";
 import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
 import { agentDisplayName, listableAgents, runStatusLabel, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { insertAgentMention, mentionsFromBody } from "../lib/coordy/mentions";
@@ -742,8 +742,9 @@ export function TaskDetailPage() {
               </Select>
             </PropertyRow>
             <PropertyRow icon={<CalendarDays />}>
-              <DueDateField
+              <DatePickerField
                 value={task.due_date}
+                placeholder="截止日期"
                 onChange={(due_date) => {
                   void submit({ type: "UpdateTask", task_id: task.id, due_date }).then(refresh);
                 }}
@@ -982,40 +983,6 @@ export function TaskDetailPage() {
         </section>
       </aside>
     </section>
-  );
-}
-
-function DueDateField({
-  value,
-  onChange,
-}: {
-  value?: string | null;
-  onChange: (next: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const day = value?.slice(0, 10) ?? "";
-  return (
-    <div className="relative h-8 w-full">
-      <button
-        type="button"
-        className="flex h-8 w-full items-center text-left"
-        onClick={() => {
-          const input = inputRef.current;
-          if (input) openNativeDatePicker(input);
-        }}
-      >
-        <span className={day ? "text-foreground" : "text-muted-foreground"}>{day || "截止日期"}</span>
-      </button>
-      <input
-        ref={inputRef}
-        type="date"
-        value={day}
-        aria-label="截止日期"
-        tabIndex={-1}
-        className="pointer-events-none absolute inset-0 opacity-0"
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </div>
   );
 }
 
