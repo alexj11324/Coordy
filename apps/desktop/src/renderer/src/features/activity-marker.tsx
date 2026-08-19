@@ -40,7 +40,7 @@ function MarkerRow({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-2 text-sm text-muted-foreground",
+        "inline-flex max-w-full items-center gap-2 text-[13px] text-muted-foreground md:text-[13px]",
         interactive && "cursor-pointer hover:text-foreground",
       )}
     >
@@ -74,7 +74,7 @@ export function ActivityMarker({
         <MarkerRow icon={icon} title={title} pending={busy} interactive />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 font-mono text-[11px] leading-5 text-muted-foreground">
+        <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 font-mono text-[13px] leading-5 text-muted-foreground md:text-[13px]">
           {detail}
         </pre>
       </CollapsibleContent>
@@ -87,8 +87,8 @@ export function ActivityLine({ event }: { event: { kind: string; payload: string
   if (described.tone === "message") {
     return (
       <div className="animate-in fade-in-0 fill-mode-both space-y-1 duration-300">
-        <p className="text-[11px] text-muted-foreground">{described.label}</p>
-        <p className="whitespace-pre-wrap text-sm">{described.body}</p>
+        <p className="text-[13px] text-muted-foreground md:text-[13px]">{described.label}</p>
+        <p className="whitespace-pre-wrap text-[15px] leading-6 md:text-[15px]">{described.body}</p>
       </div>
     );
   }

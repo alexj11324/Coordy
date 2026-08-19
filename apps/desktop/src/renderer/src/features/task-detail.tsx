@@ -1,20 +1,17 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Badge,
   Button,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  Input,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
   Separator,
-  Textarea,
   cn,
 } from "@coordy/ui";
 import {
@@ -34,18 +31,12 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
 import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
-import {
-  agentDisplayName,
-  listableAgents,
-  runStatusLabel,
-  TASK_STATUS_ITEMS,
-  taskStatusLabel,
-} from "../lib/coordy/labels";
+import { agentDisplayName, listableAgents, runStatusLabel, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { insertAgentMention, mentionsFromBody } from "../lib/coordy/mentions";
 import { startAcpOnTask } from "../lib/coordy/start-task";
 import {
@@ -65,11 +56,16 @@ import {
 import { useSession } from "../state/session-store";
 import { useTabTitle } from "../shell/use-tab-title";
 import { ActivityLine } from "./activity-marker";
-import { NamedAgent } from "./agent-avatar";
+import { AgentAvatar, NamedAgent } from "./agent-avatar";
 import { PriorityGlyph, StatusGlyph } from "./issue-status";
 
+const uiText = "text-[13px] leading-5 md:text-[13px]";
+const titleField =
+  "h-auto w-full border-0 bg-transparent px-0 py-1 text-[24px] font-semibold leading-8 tracking-tight outline-none md:text-[24px]";
+const bodyField =
+  "w-full resize-none border-0 bg-transparent text-[15px] leading-6 outline-none placeholder:text-muted-foreground/80 md:text-[15px]";
 const fieldTrigger =
-  "h-7 w-full justify-start gap-2 border-0 bg-transparent px-1.5 shadow-none hover:bg-muted/70 focus-visible:border-transparent focus-visible:ring-0 data-popup-open:bg-muted/70 [&>:last-child]:hidden";
+  "h-8 w-full justify-start border-0 bg-transparent px-0 !text-[13px] shadow-none hover:bg-transparent focus-visible:border-transparent focus-visible:ring-0 md:!text-[13px] [&>:last-child]:hidden [&_[data-slot=select-value]_svg]:hidden";
 
 export function TaskDetailPage() {
   const { taskId } = useParams();
@@ -202,9 +198,9 @@ export function TaskDetailPage() {
   if (!taskId) return null;
   if (board.isFetched && !task) {
     return (
-      <section className="flex h-full flex-col items-start gap-3 p-6">
-        <h1 className="text-lg font-semibold tracking-tight">未找到该事项</h1>
-        <p className="text-sm text-muted-foreground">该事项可能已被删除或移出当前工作区。</p>
+      <section className={cn("flex h-full flex-col items-start gap-3 p-6", uiText)}>
+        <h1 className="text-[24px] font-semibold tracking-tight md:text-[24px]">未找到该事项</h1>
+        <p className="text-muted-foreground">该事项可能已被删除或移出当前工作区。</p>
         <Button variant="secondary" onClick={() => navigate("/board")}>
           回到任务
         </Button>
@@ -214,6 +210,7 @@ export function TaskDetailPage() {
   if (!task) return null;
 
   const assignee = task.assignee_agent_id || "";
+  const assignedAgent = agentList.find((item) => item.id === assignee);
   const agentItems = Object.fromEntries([
     ["none", "未指派"],
     ...agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)]),
@@ -355,10 +352,10 @@ export function TaskDetailPage() {
   };
 
   return (
-    <section className="flex h-full min-h-0 min-w-0 bg-background">
+    <section className={cn("flex h-full min-h-0 min-w-0 bg-background", uiText)}>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border/80 px-5">
-          <nav className="flex min-w-0 items-center gap-1 text-[13px] text-muted-foreground">
+          <nav className="flex min-w-0 items-center gap-1 text-muted-foreground">
             <span className="truncate">{workspaceName}</span>
             <ChevronRight className="size-3.5 shrink-0 opacity-40" />
             <Link to="/board" className="hover:text-foreground">
@@ -403,7 +400,7 @@ export function TaskDetailPage() {
               >
                 <MoreHorizontal />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuContent align="end" className={cn("min-w-44", uiText)}>
                 <DropdownMenuItem disabled={!workPath} onClick={() => workPath && window.coordy.revealFile(workPath)}>
                   <FolderOpen />
                   打开目录
@@ -421,7 +418,7 @@ export function TaskDetailPage() {
           </div>
         </header>
         {confirmDelete ? (
-          <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border/80 px-5 py-1.5 text-[13px]">
+          <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border/80 px-5 py-1.5">
             <span className="text-muted-foreground">删除该事项？此操作不可恢复。</span>
             <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setConfirmDelete(false)}>
               取消
@@ -440,43 +437,43 @@ export function TaskDetailPage() {
 
         <div className="min-h-0 flex-1 overflow-auto">
           <div className="mx-auto w-full max-w-[46rem] px-8 pt-7 pb-4">
-            <Input
+            <input
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               onBlur={persist}
-              className="h-auto border-0 px-0 py-1 text-[1.375rem] font-semibold tracking-tight shadow-none focus-visible:border-transparent focus-visible:ring-0 md:text-[1.375rem]"
+              className={titleField}
             />
-            <Textarea
+            <textarea
               rows={4}
               placeholder="添加说明…"
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               onBlur={persist}
-              className="mt-1 min-h-[4.5rem] resize-none border-0 px-0 py-1 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:border-transparent focus-visible:ring-0"
+              className={cn("mt-1 min-h-[4.5rem] px-0 py-1", bodyField)}
             />
-            {notice ? <p className="mt-2 text-[13px] text-muted-foreground">{notice}</p> : null}
-            {waitingMessage ? <p className="mt-2 text-[13px] text-destructive">{waitingMessage}</p> : null}
+            {notice ? <p className={cn("mt-2 text-muted-foreground", uiText)}>{notice}</p> : null}
+            {waitingMessage ? <p className={cn("mt-2 text-destructive", uiText)}>{waitingMessage}</p> : null}
 
             <div className="mt-5">
               {children.map((child) => (
                 <Link
                   key={child.id}
                   to={`/board/${child.id}`}
-                  className="flex h-8 items-center gap-2 rounded-md px-1 text-sm hover:bg-muted/60"
+                  className={cn("flex h-8 items-center gap-2 rounded-md px-1 hover:bg-muted/60", uiText)}
                 >
                   <StatusGlyph status={child.status} />
-                  <span className="w-[5.25rem] shrink-0 font-mono text-xs text-muted-foreground">
+                  <span className="w-[5.25rem] shrink-0 font-mono text-muted-foreground">
                     {taskIdentifier(child)}
                   </span>
                   <span className="min-w-0 truncate">{child.title}</span>
                 </Link>
               ))}
               {suggestedTitles.map((item) => (
-                <div key={item} className="flex h-8 items-center justify-between gap-2 px-1 text-sm">
+                <div key={item} className={cn("flex h-8 items-center justify-between gap-2 px-1", uiText)}>
                   <span className="truncate text-muted-foreground">{item}</span>
                   <button
                     type="button"
-                    className="text-[13px] text-muted-foreground hover:text-foreground"
+                    className="text-muted-foreground hover:text-foreground"
                     onClick={() => void addSubtask(item)}
                   >
                     创建
@@ -491,11 +488,11 @@ export function TaskDetailPage() {
                     void addSubtask(subtaskTitle);
                   }}
                 >
-                  <Input
+                  <input
                     autoFocus
                     value={subtaskTitle}
                     placeholder="子事项标题"
-                    className="h-7 border-0 px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+                    className="h-8 w-full border-0 bg-transparent px-0 outline-none placeholder:text-muted-foreground"
                     onChange={(event) => setSubtaskTitle(event.target.value)}
                     onBlur={() => {
                       if (!subtaskTitle.trim()) setAddingSubtask(false);
@@ -504,7 +501,7 @@ export function TaskDetailPage() {
                   <button
                     type="submit"
                     disabled={!subtaskTitle.trim()}
-                    className="text-[13px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-40"
                   >
                     添加
                   </button>
@@ -513,7 +510,7 @@ export function TaskDetailPage() {
                 <div className="mt-1 flex items-center gap-3 px-1">
                   <button
                     type="button"
-                    className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+                    className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
                     onClick={() => setAddingSubtask(true)}
                   >
                     <Plus className="size-3.5" />
@@ -522,7 +519,7 @@ export function TaskDetailPage() {
                   <button
                     type="button"
                     disabled={suggestBusy}
-                    className="text-[13px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-40"
                     onClick={() => void suggestSplit()}
                   >
                     {suggestBusy ? "正在建议…" : "建议拆分"}
@@ -534,7 +531,7 @@ export function TaskDetailPage() {
             {(task.attachments ?? []).length > 0 ? (
               <ul className="mt-4 space-y-1">
                 {(task.attachments ?? []).map((file) => (
-                  <li key={file.id} className="flex items-center gap-2 px-1 text-[13px]">
+                  <li key={file.id} className={cn("flex items-center gap-2 px-1", uiText)}>
                     <Paperclip className="size-3.5 text-muted-foreground" />
                     <span className="min-w-0 truncate">{file.name}</span>
                     <button
@@ -552,23 +549,23 @@ export function TaskDetailPage() {
 
           <div className="mx-auto w-full max-w-[46rem] px-8 pb-8">
             <Separator className="mb-4" />
-            <h2 className="mb-3 text-[13px] font-medium text-foreground">活动</h2>
+            <h2 className={cn("mb-3 font-medium text-foreground", uiText)}>活动</h2>
             {comments.length === 0 && activity.length === 0 ? (
-              <p className="text-[13px] text-muted-foreground">
+              <p className={cn("text-muted-foreground", uiText)}>
                 暂无评论或执行记录。发表评论不会改负责人；继续执行才会派发给当前负责人。
               </p>
             ) : null}
             <div className="space-y-4">
               {comments.map((comment) => (
                 <div key={comment.id}>
-                  <p className="text-[13px] text-muted-foreground">
+                  <p className={cn("text-muted-foreground", uiText)}>
                     <span className="text-foreground">
                       {people.find((person) => person.id === comment.author_id)?.name ?? comment.author_id.slice(0, 8)}
                     </span>
                     {" · "}
                     评论
                   </p>
-                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6">{comment.body}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-[15px] leading-6 md:text-[15px]">{comment.body}</p>
                 </div>
               ))}
               {activity.map((event) => (
@@ -578,7 +575,7 @@ export function TaskDetailPage() {
               ))}
               {runList.map((run) =>
                 run.status === "failed" || run.status === "cancelled" ? (
-                  <div key={`retry-${run.id}`} className="flex items-center justify-between gap-2 text-[13px]">
+                  <div key={`retry-${run.id}`} className={cn("flex items-center justify-between gap-2", uiText)}>
                     <span className="text-muted-foreground">
                       {agentList.find((agent) => agent.id === run.agent_id)?.name ?? run.agent_id.slice(0, 8)}
                       · {runStatusLabel(run.status)} · {run.trigger ?? "run"}
@@ -608,7 +605,7 @@ export function TaskDetailPage() {
 
         <form className="shrink-0 px-8 pb-5 pt-1" onSubmit={(event) => void send(event)}>
           <div className="mx-auto w-full max-w-[46rem] rounded-xl border border-border bg-background p-3 shadow-sm">
-            <Textarea
+            <textarea
               rows={3}
               placeholder={mode === "comment" ? "写评论。输入 @ 可提及智能体，不会改负责人。" : "补充指令，让当前负责人继续执行。"}
               value={composer}
@@ -618,7 +615,7 @@ export function TaskDetailPage() {
                 const cursor = event.target.selectionStart ?? value.length;
                 setMentionOpen(mode === "comment" && value.slice(0, cursor).endsWith("@"));
               }}
-              className="min-h-[4.25rem] resize-none border-0 p-0.5 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+              className={cn("min-h-[4.25rem] p-0.5", bodyField)}
             />
             {mentionOpen ? (
               <div className="mt-1 flex flex-wrap gap-2">
@@ -626,7 +623,7 @@ export function TaskDetailPage() {
                   <button
                     key={agent.id}
                     type="button"
-                    className="text-[13px] text-muted-foreground hover:text-foreground"
+                    className="text-muted-foreground hover:text-foreground"
                     onClick={() => {
                       setComposer((current) => {
                         const trimmed = current.endsWith("@") ? current.slice(0, -1) : current;
@@ -641,7 +638,7 @@ export function TaskDetailPage() {
               </div>
             ) : null}
             {heldByBlockers && mode === "run" ? (
-              <p className="mt-1 text-[13px] text-muted-foreground">前置事项完成前不能开始执行。</p>
+              <p className={cn("mt-1 text-muted-foreground", uiText)}>前置事项完成前不能开始执行。</p>
             ) : null}
             <div className="mt-2 flex items-center gap-1">
               <ModeTab active={mode === "comment"} onClick={() => setMode("comment")}>
@@ -685,11 +682,11 @@ export function TaskDetailPage() {
         </form>
       </div>
 
-      <aside className="flex w-[17.5rem] shrink-0 flex-col gap-6 overflow-auto border-l border-border/80 px-4 py-4">
+      <aside className={cn("flex w-[17.5rem] shrink-0 flex-col gap-5 overflow-auto border-l border-border/80 px-3 py-4", uiText)}>
         <section>
-          <h2 className="mb-2 text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">属性</h2>
-          <div className="space-y-0.5">
-            <PropertyRow label="状态">
+          <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">属性</h2>
+          <div>
+            <PropertyRow icon={<StatusGlyph status={task.status} className="size-4" />}>
               <Select
                 value={task.status}
                 items={TASK_STATUS_ITEMS}
@@ -698,29 +695,24 @@ export function TaskDetailPage() {
                   void submit({ type: "SetTaskStatus", task_id: task.id, status: value }).then(refresh);
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
+                <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => (
-                      <span className="flex items-center gap-2">
-                        <StatusGlyph status={value || task.status} />
-                        {taskStatusLabel(value || task.status)}
-                      </span>
-                    )}
+                    {(value: string | null) => TASK_STATUS_ITEMS[value || task.status] ?? ""}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className={uiText}>
                   {Object.entries(TASK_STATUS_ITEMS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
+                    <FieldItem key={value} value={value}>
                       <span className="flex items-center gap-2">
                         <StatusGlyph status={value} />
                         {label}
                       </span>
-                    </SelectItem>
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="优先级">
+            <PropertyRow icon={<PriorityGlyph priority={task.priority} className="size-4" />}>
               <Select
                 value={task.priority || "none"}
                 items={PRIORITY_ITEMS}
@@ -729,35 +721,32 @@ export function TaskDetailPage() {
                   void submit({ type: "UpdateTask", task_id: task.id, priority: value }).then(refresh);
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
+                <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => (
-                      <span className="flex items-center gap-2">
-                        <PriorityGlyph priority={value || task.priority} />
-                        {PRIORITY_ITEMS[value || task.priority || "none"] ?? "无"}
-                      </span>
-                    )}
+                    {(value: string | null) => optionLabel(PRIORITY_ITEMS, value || task.priority)}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent className={uiText}>
                   {Object.entries(PRIORITY_ITEMS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
+                    <FieldItem key={value} value={value}>
                       <span className="flex items-center gap-2">
                         <PriorityGlyph priority={value} />
                         {label}
                       </span>
-                    </SelectItem>
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="截止日期">
-              <label className="flex h-7 cursor-pointer items-center gap-2 rounded-md px-1.5 hover:bg-muted/70">
-                <CalendarDays className="size-3.5 text-muted-foreground" />
-                <Input
+            <PropertyRow icon={<CalendarDays />}>
+              <label className="relative flex h-8 cursor-pointer items-center">
+                <span className={task.due_date ? "text-foreground" : "text-muted-foreground"}>
+                  {task.due_date?.slice(0, 10) || "截止日期"}
+                </span>
+                <input
                   type="date"
                   value={task.due_date?.slice(0, 10) ?? ""}
-                  className="h-7 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+                  className="absolute inset-0 cursor-pointer opacity-0"
                   onChange={(event) => {
                     void submit({
                       type: "UpdateTask",
@@ -768,7 +757,7 @@ export function TaskDetailPage() {
                 />
               </label>
             </PropertyRow>
-            <PropertyRow label="项目">
+            <PropertyRow icon={<FolderKanban />}>
               <Select
                 value={task.project_id || "none"}
                 items={projectItems}
@@ -781,33 +770,25 @@ export function TaskDetailPage() {
                   }).then(refresh);
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
+                <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => {
-                      const project = projectList.find((item) => item.id === value);
-                      return (
-                        <span className="flex items-center gap-2">
-                          <FolderKanban className="size-3.5 text-muted-foreground" />
-                          <span className="truncate">{project?.name ?? "无项目"}</span>
-                        </span>
-                      );
-                    }}
+                    {(value: string | null) => optionLabel(projectItems, value || task.project_id)}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">无项目</SelectItem>
+                <SelectContent className={uiText}>
+                  <FieldItem value="none">无项目</FieldItem>
                   {projectList.map((project) => (
-                    <SelectItem key={project.id} value={project.id}>
+                    <FieldItem key={project.id} value={project.id}>
                       {project.name}
-                    </SelectItem>
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="标签">
+            <PropertyRow icon={<Tag />}>
               <Select
                 value={task.labels?.[0] ?? "none"}
-                items={Object.fromEntries([["none", "无"], ...workspaceLabels.map((label) => [label.name, label.name])])}
+                items={Object.fromEntries([["none", "无标签"], ...workspaceLabels.map((label) => [label.name, label.name])])}
                 onValueChange={(value) => {
                   if (!value) return;
                   void submit({
@@ -817,38 +798,33 @@ export function TaskDetailPage() {
                   }).then(refresh);
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
+                <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
                     {(value: string | null) => {
                       const name = value && value !== "none" ? value : task.labels?.[0];
-                      if (!name) {
-                        return (
-                          <span className="flex items-center gap-2 text-muted-foreground">
-                            <Tag className="size-3.5" />
-                            无
-                          </span>
-                        );
-                      }
-                      return (
-                        <Badge variant="secondary" className="max-w-full">
-                          <span className="size-1.5 rounded-full bg-violet-500" />
-                          <span className="truncate">{name}</span>
-                        </Badge>
-                      );
+                      return name ? name : <span className="text-muted-foreground">无标签</span>;
                     }}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">无</SelectItem>
+                <SelectContent className={uiText}>
+                  <FieldItem value="none">无标签</FieldItem>
                   {workspaceLabels.map((label) => (
-                    <SelectItem key={label.name} value={label.name}>
+                    <FieldItem key={label.name} value={label.name}>
                       {label.name}
-                    </SelectItem>
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="指派给">
+            <PropertyRow
+              icon={
+                assignedAgent ? (
+                  <AgentAvatar agent={assignedAgent} className="size-4" />
+                ) : (
+                  <UserRound />
+                )
+              }
+            >
               <Select
                 value={assignee || "none"}
                 items={agentItems}
@@ -861,33 +837,22 @@ export function TaskDetailPage() {
                   void submit({ type: "AssignTask", task_id: task.id, agent_id: value }).then(refresh);
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
+                <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => {
-                      const agent = agentList.find((item) => item.id === value);
-                      if (!agent) {
-                        return (
-                          <span className="flex items-center gap-2 text-muted-foreground">
-                            <UserRound className="size-3.5" />
-                            未指派
-                          </span>
-                        );
-                      }
-                      return <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />;
-                    }}
+                    {(value: string | null) => optionLabel(agentItems, value || assignee)}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">未指派</SelectItem>
+                <SelectContent className={uiText}>
+                  <FieldItem value="none">未指派</FieldItem>
                   {agentList.map((agent) => (
-                    <SelectItem key={agent.id} value={agent.id}>
-                      <NamedAgent agent={agent} catalog={catalog.data} />
-                    </SelectItem>
+                    <FieldItem key={agent.id} value={agent.id}>
+                      <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="成员">
+            <PropertyRow icon={<UserRound />}>
               <Select
                 value={task.assignee_principal_id || "none"}
                 items={peopleItems}
@@ -900,20 +865,22 @@ export function TaskDetailPage() {
                   }).then(refresh);
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
-                  <SelectValue />
+                <SelectTrigger className={fieldTrigger}>
+                  <SelectValue>
+                    {(value: string | null) => optionLabel(peopleItems, value || task.assignee_principal_id)}
+                  </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">未指派</SelectItem>
+                <SelectContent className={uiText}>
+                  <FieldItem value="none">未指派</FieldItem>
                   {people.map((person) => (
-                    <SelectItem key={person.id} value={person.id}>
+                    <FieldItem key={person.id} value={person.id}>
                       {person.name}
-                    </SelectItem>
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="小队">
+            <PropertyRow icon={<Users />}>
               <Select
                 value={task.assignee_squad_id || "none"}
                 items={squadItems}
@@ -931,52 +898,41 @@ export function TaskDetailPage() {
                   });
                 }}
               >
-                <SelectTrigger size="sm" className={fieldTrigger}>
+                <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => {
-                      const squad = squadList.find((item) => item.id === value);
-                      return (
-                        <span className="flex items-center gap-2">
-                          <Users className="size-3.5 text-muted-foreground" />
-                          <span className="truncate">{squad?.name ?? "未指派"}</span>
-                        </span>
-                      );
-                    }}
+                    {(value: string | null) => optionLabel(squadItems, value || task.assignee_squad_id)}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">未指派</SelectItem>
+                <SelectContent className={uiText}>
+                  <FieldItem value="none">未指派</FieldItem>
                   {squadList.map((squad) => (
-                    <SelectItem key={squad.id} value={squad.id}>
+                    <FieldItem key={squad.id} value={squad.id}>
                       {squad.name}
-                    </SelectItem>
+                    </FieldItem>
                   ))}
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label="运行">
-              <p className="px-1.5 text-[13px] text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
+            <PropertyRow icon={<Play />}>
+              <p className="text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
             </PropertyRow>
           </div>
         </section>
 
         <section>
-          <h2 className="mb-2 text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">前置事项</h2>
-          <p className="mb-2 px-1.5 text-[12px] leading-5 text-muted-foreground">完成后才能开始或完成当前事项。</p>
+          <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">前置事项</h2>
           {blockers.length === 0 ? (
-            <p className="px-1.5 text-[13px] text-muted-foreground">尚未设置。</p>
+            <p className="px-1.5 text-muted-foreground">尚未设置。</p>
           ) : null}
           {blockers.map((blocker) => (
-            <div key={blocker.id} className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60">
-              <Link to={`/board/${blocker.id}`} className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
-                <StatusGlyph status={blocker.status} />
-                <span className="min-w-0 truncate">
-                  <span className="font-mono text-muted-foreground">{taskIdentifier(blocker)}</span> {blocker.title}
-                </span>
+            <div key={blocker.id} className="flex h-8 items-center gap-2 rounded-md px-1.5 hover:bg-muted/60">
+              <StatusGlyph status={blocker.status} className="size-4" />
+              <Link to={`/board/${blocker.id}`} className="min-w-0 flex-1 truncate">
+                <span className="font-mono text-muted-foreground">{taskIdentifier(blocker)}</span> {blocker.title}
               </Link>
               <button
                 type="button"
-                className="shrink-0 text-[12px] text-muted-foreground hover:text-foreground"
+                className="shrink-0 text-muted-foreground hover:text-foreground"
                 onClick={() => {
                   void submit({ type: "RemoveIssueBlocker", task_id: task.id, blocker_id: blocker.id })
                     .then(refresh)
@@ -990,34 +946,38 @@ export function TaskDetailPage() {
             </div>
           ))}
           {blockerCandidates.length > 0 ? (
-            <Select
-              value={blockerPick}
-              items={blockerItems}
-              onValueChange={(value) => {
-                if (!value || value === "none") {
+            <PropertyRow icon={<Plus />}>
+              <Select
+                value={blockerPick}
+                items={blockerItems}
+                onValueChange={(value) => {
+                  if (!value || value === "none") {
+                    setBlockerPick("none");
+                    return;
+                  }
                   setBlockerPick("none");
-                  return;
-                }
-                setBlockerPick("none");
-                void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
-                  .then(refresh)
-                  .catch((error: unknown) => {
-                    setNotice(error instanceof Error ? error.message : String(error));
-                  });
-              }}
-            >
-              <SelectTrigger size="sm" className={cn(fieldTrigger, "mt-1 text-muted-foreground")}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">选择前置事项</SelectItem>
-                {blockerCandidates.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>
-                    {taskIdentifier(item)} {item.title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+                  void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
+                    .then(refresh)
+                    .catch((error: unknown) => {
+                      setNotice(error instanceof Error ? error.message : String(error));
+                    });
+                }}
+              >
+                <SelectTrigger className={cn(fieldTrigger, "text-muted-foreground")}>
+                  <SelectValue>
+                    {() => <span className="text-muted-foreground">选择前置事项</span>}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className={uiText}>
+                  <FieldItem value="none">选择前置事项</FieldItem>
+                  {blockerCandidates.map((item) => (
+                    <FieldItem key={item.id} value={item.id}>
+                      {taskIdentifier(item)} {item.title}
+                    </FieldItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </PropertyRow>
           ) : null}
         </section>
       </aside>
@@ -1025,11 +985,22 @@ export function TaskDetailPage() {
   );
 }
 
-function PropertyRow({ label, children }: { label: string; children: ReactNode }) {
+function optionLabel(items: Record<string, string>, value: string | null | undefined, empty = "none") {
+  const key = !value || value === empty ? empty : value;
+  return <span className={cn("truncate", key === empty && "text-muted-foreground")}>{items[key] ?? ""}</span>;
+}
+
+function FieldItem({ className, ...props }: ComponentProps<typeof SelectItem>) {
+  return <SelectItem className={cn("text-[13px] md:text-[13px]", className)} {...props} />;
+}
+
+function PropertyRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[4.75rem_minmax(0,1fr)] items-center gap-x-1">
-      <span className="px-1.5 text-[13px] text-muted-foreground">{label}</span>
-      <div className="min-w-0">{children}</div>
+    <div className="flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] md:text-[13px] hover:bg-muted/60">
+      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
@@ -1048,7 +1019,7 @@ function ModeTab({
       type="button"
       onClick={onClick}
       className={cn(
-        "rounded-md px-1.5 py-0.5 text-[13px] transition-colors",
+        "rounded-md px-1.5 py-0.5 text-[13px] md:text-[13px] transition-colors",
         active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
