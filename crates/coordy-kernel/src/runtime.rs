@@ -1982,6 +1982,14 @@ impl Kernel {
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("agent"))?;
                 enforce_concurrency(&world, &agent)?;
+                let run_id = ids::new("run");
+                let user_prompt_event = match &source {
+                    RunSource::Codex { prompt }
+                    | RunSource::ClaudeCode { prompt }
+                    | RunSource::OpenCode { prompt }
+                    | RunSource::Acp { prompt } => Some(prompt.clone()),
+                    RunSource::Jsonl { .. } | RunSource::Fixture { .. } => None,
+                };
                 let mut instructions = agent.instructions.clone();
                 if let Some(ws) = world.workspace(&task.workspace_id) {
                     if !ws.context.is_empty() {
@@ -1996,8 +2004,39 @@ impl Kernel {
                         instructions.push_str(&skill.body);
                     }
                 }
+                match (chat_id.as_deref(), trigger.as_str()) {
+                    (Some(chat_id), "chat") => {
+                        let chat = world
+                            .chat(chat_id)
+                            .ok_or_else(|| CoordyError::not_found("chat"))?;
+                        if !product::can_see_chat(&actor, chat) {
+                            return Err(CoordyError::denied("private chat"));
+                        }
+                        if chat.workspace_id != task.workspace_id
+                            || chat.task_id.as_deref() != Some(task.id.as_str())
+                            || chat.agent_id != agent.id
+                        {
+                            return Err(CoordyError::invalid("chat run context mismatch"));
+                        }
+                        instructions.push_str("\n\n");
+                        instructions.push_str(&task_planning_instructions(
+                            &world,
+                            &actor,
+                            &task.workspace_id,
+                            chat_id,
+                            &run_id,
+                            &agent.id,
+                        ));
+                    }
+                    (Some(_), _) => {
+                        return Err(CoordyError::invalid("chat_id is only valid for a chat run"));
+                    }
+                    (None, "chat") => {
+                        return Err(CoordyError::invalid("chat run requires chat_id"));
+                    }
+                    (None, _) => {}
+                }
                 let source = apply_agent_instructions(source, &instructions);
-                let run_id = ids::new("run");
                 let harness: String = match &source {
                     RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl".into(),
                     RunSource::Codex { .. } => "codex".into(),
@@ -2012,7 +2051,7 @@ impl Kernel {
                         }
                     }
                 };
-                let prompt_event = match &source {
+                let dispatched_prompt = match &source {
                     RunSource::Codex { prompt }
                     | RunSource::ClaudeCode { prompt }
                     | RunSource::OpenCode { prompt }
@@ -2037,10 +2076,10 @@ impl Kernel {
                     retry_count: 0,
                     chat_id: chat_id.clone(),
                     trigger: trigger_label.clone(),
-                    prompt: prompt_event.clone().unwrap_or_default(),
+                    prompt: dispatched_prompt.unwrap_or_default(),
                     role: role_for_trigger(&trigger_label),
                 });
-                if let Some(prompt) = prompt_event {
+                if let Some(prompt) = user_prompt_event {
                     ingest_event(
                         &mut world,
                         &self.advisor,
@@ -2112,6 +2151,7 @@ impl Kernel {
                         run.status = "completed".into();
                     }
                 }
+                finalize_task_plan_artifact(&mut world, &run_id);
                 Ok(Outcome::ok("run completed", json!({ "run_id": run_id })))
             }
             Command::CancelRun { run_id } => {
@@ -3371,7 +3411,7 @@ fn ingest_event(
             let ParsedTaskPlanArtifact {
                 draft,
                 error,
-                display,
+                mut display,
             } = parse_task_plan_artifact(&candidate);
             if let Some(error) = error {
                 let chat_id = run.chat_id.clone().expect("chat run");
@@ -3383,6 +3423,8 @@ fn ingest_event(
                     run_id: run.id.clone(),
                     message: error,
                 });
+                remove_superseded_task_plan_chunks(world, &run.id);
+                display = candidate.clone();
             }
             if let Some(draft) = draft {
                 world
@@ -3403,6 +3445,8 @@ fn ingest_event(
                             run_id: run.id.clone(),
                             message: error.message,
                         });
+                        remove_superseded_task_plan_chunks(world, &run.id);
+                        display = candidate.clone();
                     }
                 }
             }
@@ -3614,6 +3658,7 @@ fn record_harness_event(
                             Some(run.task_id.clone()),
                         );
                     }
+                    finalize_task_plan_artifact(world, run_id);
                 }
             }
             if matches!(name.as_str(), "git" | "test" | "patch_apply") {
@@ -3661,6 +3706,39 @@ fn remove_superseded_task_plan_chunks(world: &mut World, run_id: &str) {
     });
 }
 
+fn finalize_task_plan_artifact(world: &mut World, run_id: &str) {
+    let Some(run) = world.run(run_id).cloned() else {
+        return;
+    };
+    let Some(chat_id) = run.chat_id else {
+        return;
+    };
+    if world
+        .task_plan_proposals
+        .iter()
+        .any(|proposal| proposal.draft.source_run_id == run_id)
+        || world
+            .task_plan_artifact_errors
+            .iter()
+            .any(|error| error.run_id == run_id)
+    {
+        return;
+    }
+    let assistant = world
+        .run_events
+        .iter()
+        .filter(|event| event.run_id == run_id && event.kind == "message")
+        .filter_map(|event| event.payload.strip_prefix("assistant: "))
+        .collect::<String>();
+    if assistant.contains("```COORDY_TASK_PLAN_V1") {
+        world.task_plan_artifact_errors.push(TaskPlanArtifactError {
+            chat_id,
+            run_id: run_id.to_string(),
+            message: "任务方案解析失败：COORDY_TASK_PLAN_V1 代码块不完整。".into(),
+        });
+    }
+}
+
 fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
     const OPEN: &str = "```COORDY_TASK_PLAN_V1";
     let matches = content.match_indices(OPEN).collect::<Vec<_>>();
@@ -3682,9 +3760,9 @@ fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
     }
     let start = matches[0].0;
     let body_start = start + OPEN.len();
-    let Some(line_end) = content[body_start..]
+    let Some(line_break) = content[body_start..]
         .find('\n')
-        .map(|offset| body_start + offset + 1)
+        .map(|offset| body_start + offset)
     else {
         return ParsedTaskPlanArtifact {
             draft: None,
@@ -3692,6 +3770,14 @@ fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
             display: content.to_string(),
         };
     };
+    if !matches!(&content[body_start..line_break], "" | "\r") {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: Some("任务方案解析失败：代码块名称必须精确为 COORDY_TASK_PLAN_V1。".into()),
+            display: content.to_string(),
+        };
+    }
+    let line_end = line_break + 1;
     let Some(close_offset) = content[line_end..].find("```") else {
         return ParsedTaskPlanArtifact {
             draft: None,
@@ -3728,8 +3814,11 @@ fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
 
 #[cfg(test)]
 mod task_plan_artifact_tests {
-    use super::{parse_task_plan_artifact, remove_superseded_task_plan_chunks};
-    use crate::world::{RunEvent, World};
+    use super::{
+        parse_task_plan_artifact, remove_superseded_task_plan_chunks, task_planning_instructions,
+    };
+    use crate::world::{Agent, RunEvent, Squad, World};
+    use coordy_protocol::{Actor, TaskPlanDraft};
 
     #[test]
     fn strict_artifact_is_decoded_and_hidden_from_display_copy() {
@@ -3764,6 +3853,132 @@ mod task_plan_artifact_tests {
             ",\"workspace_id\":\"ws\",\"chat_id\":\"chat\",\"source_run_id\":\"run\",\"source_agent_id\":\"agent\",\"parent\":{\"mode\":\"existing\",\"task_id\":\"parent\"},\"children\":[{\"key\":\"a\",\"title\":\"A\",\"description\":\"Do A\",\"acceptance_criteria\":[\"A passes\"],\"priority\":\"medium\",\"stage\":1}]}\n```"
         );
         assert!(parse_task_plan_artifact(&combined).draft.is_some());
+    }
+
+    #[test]
+    fn duplicate_or_non_exact_artifact_fences_are_rejected() {
+        let duplicate = "```COORDY_TASK_PLAN_V1\n{}\n```\n```COORDY_TASK_PLAN_V1\n{}\n```";
+        let duplicated = parse_task_plan_artifact(duplicate);
+        assert!(duplicated.draft.is_none());
+        assert!(duplicated.error.unwrap().contains("只能包含一个"));
+        assert_eq!(duplicated.display, duplicate);
+
+        let mislabeled = "```COORDY_TASK_PLAN_V1_extra\n{}\n```";
+        let parsed = parse_task_plan_artifact(mislabeled);
+        assert!(parsed.draft.is_none());
+        assert!(parsed.error.unwrap().contains("必须精确"));
+        assert_eq!(parsed.display, mislabeled);
+    }
+
+    #[test]
+    fn planning_context_is_bounded_filtered_and_contains_a_decodable_example() {
+        fn agent(id: &str, principal_id: &str, archived: bool, description: String) -> Agent {
+            Agent {
+                id: id.into(),
+                workspace_id: "ws".into(),
+                principal_id: principal_id.into(),
+                name: id.into(),
+                harness: "acp".into(),
+                description,
+                instructions: String::new(),
+                archived,
+                avatar: String::new(),
+                model: String::new(),
+                thinking: String::new(),
+                speed: String::new(),
+                access: "owner".into(),
+                access_member_ids: Vec::new(),
+                concurrency_limit: 6,
+                cli_args: String::new(),
+                tool_access: "auto".into(),
+                mcp_servers: Vec::new(),
+                skill_ids: Vec::new(),
+            }
+        }
+
+        let mut agents = (0..45)
+            .map(|index| {
+                agent(
+                    &format!("a{index:02}"),
+                    "owner",
+                    false,
+                    if index == 0 {
+                        "x".repeat(200)
+                    } else {
+                        String::new()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        agents.push(agent("denied", "other", false, String::new()));
+        agents.push(agent("archived", "owner", true, String::new()));
+        let world = World {
+            agents,
+            squads: vec![
+                Squad {
+                    id: "allowed-squad".into(),
+                    workspace_id: "ws".into(),
+                    name: "Allowed".into(),
+                    leader_agent_id: "a00".into(),
+                    member_agent_ids: Vec::new(),
+                },
+                Squad {
+                    id: "denied-squad".into(),
+                    workspace_id: "ws".into(),
+                    name: "Denied".into(),
+                    leader_agent_id: "denied".into(),
+                    member_agent_ids: Vec::new(),
+                },
+                Squad {
+                    id: "archived-squad".into(),
+                    workspace_id: "ws".into(),
+                    name: "Archived".into(),
+                    leader_agent_id: "archived".into(),
+                    member_agent_ids: Vec::new(),
+                },
+            ],
+            ..World::default()
+        };
+        let prompt = task_planning_instructions(
+            &world,
+            &Actor::Principal { id: "owner".into() },
+            "ws",
+            "chat",
+            "run",
+            "a00",
+        );
+        let context = prompt
+            .split("# Exact run context and bounded assignee catalog\n")
+            .nth(1)
+            .unwrap()
+            .split("\n\n# Exact artifact shape example")
+            .next()
+            .unwrap();
+        let context: serde_json::Value = serde_json::from_str(context).unwrap();
+        let available_agents = context["available_agents"].as_array().unwrap();
+        assert_eq!(available_agents.len(), 40);
+        assert_eq!(available_agents[0]["id"], "a00");
+        assert_eq!(available_agents[39]["id"], "a39");
+        assert_eq!(
+            available_agents[0]["description"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            160
+        );
+        assert_eq!(context["available_squads"].as_array().unwrap().len(), 1);
+        assert_eq!(context["available_squads"][0]["id"], "allowed-squad");
+
+        let example = prompt
+            .split("# Exact artifact shape example\n```COORDY_TASK_PLAN_V1\n")
+            .nth(1)
+            .unwrap()
+            .strip_suffix("\n```")
+            .unwrap();
+        let decoded: TaskPlanDraft = serde_json::from_str(example).unwrap();
+        assert_eq!(decoded.source_run_id, "run");
+        assert_eq!(decoded.source_agent_id, "a00");
     }
 
     #[test]
@@ -3970,6 +4185,115 @@ fn enforce_concurrency(world: &World, agent: &crate::world::Agent) -> Result<(),
         )));
     }
     Ok(())
+}
+
+const BUILT_IN_TASK_PLANNING_SKILL: &str = r#"# Built-in Skill: Conversational task planning
+
+Use this skill only when the user explicitly asks to split, plan, or revise a task plan. For ordinary conversation, answer normally and do not emit a task-plan artifact.
+
+Before proposing a plan, clarify any ambiguity that would materially change the parent, deliverables, ordering, acceptance criteria, or assignees. Otherwise produce the smallest complete plan whose children are independently executable and verifiable.
+
+Plan rules:
+- Give every child a stable local key using only ASCII letters, digits, `_`, or `-` (maximum 64 characters).
+- Give every child a concrete description and at least one observable acceptance criterion.
+- Priority must be one of `urgent`, `high`, `medium`, `low`, or `none`.
+- Stage starts at 1. Tasks in the same stage may run in parallel when their dependencies are satisfied. A dependency must name another child key and may not point to a later stage. Do not create cycles, duplicates, self-dependencies, or unknown dependencies.
+- Use an assignee only when its exact stable ID appears in the available catalog below. Use `{\"type\":\"agent\",\"id\":\"...\"}` or `{\"type\":\"squad\",\"id\":\"...\"}`. Otherwise omit `assignee`.
+- A parent is either `{\"mode\":\"create\",\"title\":\"...\",\"description\":\"...\",\"project_id\":null}` or `{\"mode\":\"existing\",\"task_id\":\"...\"}`.
+
+When the plan is ready, emit exactly one fenced block named `COORDY_TASK_PLAN_V1`. The block must contain one JSON object and no unknown fields. Keep any short explanation outside the block. Copy all five provenance values from the run context exactly. Do not emit partial artifacts.
+
+Only the authenticated user's later confirmation can create or start tasks. You are proposing a reviewable plan: never say that tasks were created, assigned, dispatched, or started merely because you emitted the artifact."#;
+
+fn task_planning_instructions(
+    world: &World,
+    actor: &Actor,
+    workspace_id: &str,
+    chat_id: &str,
+    run_id: &str,
+    agent_id: &str,
+) -> String {
+    const CATALOG_LIMIT: usize = 40;
+    const DESCRIPTION_LIMIT: usize = 160;
+
+    let mut agents = world
+        .agents
+        .iter()
+        .filter(|agent| {
+            !agent.archived
+                && agent.workspace_id == workspace_id
+                && can_command_agent(world, actor, &agent.id)
+        })
+        .map(|agent| {
+            json!({
+                "id": agent.id,
+                "name": agent.name,
+                "description": agent.description.chars().take(DESCRIPTION_LIMIT).collect::<String>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    agents.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    agents.truncate(CATALOG_LIMIT);
+
+    let mut squads = world
+        .squads
+        .iter()
+        .filter(|squad| {
+            squad.workspace_id == workspace_id
+                && world.agent(&squad.leader_agent_id).is_some_and(|leader| {
+                    !leader.archived
+                        && leader.workspace_id == workspace_id
+                        && can_command_agent(world, actor, &leader.id)
+                })
+        })
+        .map(|squad| {
+            json!({
+                "id": squad.id,
+                "name": squad.name,
+                "leader_agent_id": squad.leader_agent_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    squads.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    squads.truncate(CATALOG_LIMIT);
+
+    let context = json!({
+        "version": coordy_protocol::TASK_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "chat_id": chat_id,
+        "source_run_id": run_id,
+        "source_agent_id": agent_id,
+        "available_agents": agents,
+        "available_squads": squads,
+    });
+    let example = json!({
+        "version": coordy_protocol::TASK_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "chat_id": chat_id,
+        "source_run_id": run_id,
+        "source_agent_id": agent_id,
+        "parent": {
+            "mode": "create",
+            "title": "Parent title",
+            "description": "Parent outcome",
+            "project_id": null,
+        },
+        "children": [{
+            "key": "first-step",
+            "title": "First step",
+            "description": "Produce the first deliverable",
+            "acceptance_criteria": ["The deliverable is reviewed"],
+            "priority": "high",
+            "stage": 1,
+            "depends_on": [],
+            "assignee": null,
+        }],
+    });
+    format!(
+        "{BUILT_IN_TASK_PLANNING_SKILL}\n\n# Exact run context and bounded assignee catalog\n{}\n\n# Exact artifact shape example\n```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string_pretty(&context).expect("planning context serializes"),
+        serde_json::to_string_pretty(&example).expect("planning example serializes"),
+    )
 }
 
 fn apply_agent_instructions(source: RunSource, instructions: &str) -> RunSource {

@@ -3,7 +3,7 @@
   "name": "planning-skill-agent-handoff",
   "title": "Built-in planning skill and agent handoff",
   "description": "Add a built-in Coordy planning skill and structured agent handoff so chat agents propose complete plans without directly mutating task state.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

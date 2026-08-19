@@ -223,6 +223,531 @@ fn plan_draft(h: &Harness, parent: TaskPlanParent) -> TaskPlanDraft {
     }
 }
 
+#[test]
+fn built_in_planning_skill_is_scoped_to_private_chat_runs() {
+    let h = setup();
+    let actor = Actor::Principal {
+        id: h.alice.clone(),
+    };
+    let ordinary_task_id = h
+        .kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Ordinary issue".into(),
+                description: "Do the work".into(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::SetTaskStatus {
+                task_id: ordinary_task_id.clone(),
+                status: "open".into(),
+            },
+        ))
+        .unwrap();
+    let ordinary_run_id = h
+        .kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::StartRun {
+                task_id: ordinary_task_id,
+                source: RunSource::Acp {
+                    prompt: "Implement this issue".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: None,
+                trigger: "issue".into(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ordinary_prompt = h
+        .kernel
+        .export_world()
+        .run(&ordinary_run_id)
+        .unwrap()
+        .prompt
+        .clone();
+    assert!(!ordinary_prompt.contains("Built-in Skill: Conversational task planning"));
+
+    let chat_id = h
+        .kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateChat {
+                workspace_id: h.workspace_id.clone(),
+                agent_id: h.a1.clone(),
+                project_id: None,
+            },
+        ))
+        .unwrap()
+        .ids["chat_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let chat_task_id = match h
+        .kernel
+        .view_sync(q(
+            actor.clone(),
+            Query::Chat {
+                chat_id: chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat { chat, .. } => chat.task_id.unwrap(),
+        _ => panic!("chat"),
+    };
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::SetTaskStatus {
+                task_id: chat_task_id.clone(),
+                status: "open".into(),
+            },
+        ))
+        .unwrap();
+    let chat_run_id = h
+        .kernel
+        .submit_sync(cmd(
+            actor,
+            Command::StartRun {
+                task_id: chat_task_id,
+                source: RunSource::Acp {
+                    prompt: "Split this goal".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(chat_id.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let world = h.kernel.export_world();
+    let chat_prompt = &world.run(&chat_run_id).unwrap().prompt;
+    assert!(chat_prompt.contains("Built-in Skill: Conversational task planning"));
+    assert!(chat_prompt.contains(&h.workspace_id));
+    assert!(chat_prompt.contains(&chat_id));
+    assert!(chat_prompt.contains(&chat_run_id));
+    assert!(chat_prompt.contains(&h.a1));
+    assert!(chat_prompt.contains(&h.a2));
+    assert!(!chat_prompt.contains("\"name\": \"B1\""));
+    let chat_events = world
+        .run_events
+        .iter()
+        .filter(|event| event.run_id == chat_run_id)
+        .collect::<Vec<_>>();
+    assert!(chat_events
+        .iter()
+        .any(|event| { event.kind == "message" && event.payload == "user: Split this goal" }));
+    assert!(chat_events
+        .iter()
+        .all(|event| !event.payload.contains("bounded assignee catalog")));
+    assert!(
+        world.skills.is_empty(),
+        "the built-in skill is not workspace data"
+    );
+}
+
+#[test]
+fn chat_run_rejects_missing_mismatched_or_private_context_without_creating_runs() {
+    let h = setup();
+    let alice = Actor::Principal {
+        id: h.alice.clone(),
+    };
+    let mut chats = Vec::new();
+    for _ in 0..2 {
+        let chat_id = h
+            .kernel
+            .submit_sync(cmd(
+                alice.clone(),
+                Command::CreateChat {
+                    workspace_id: h.workspace_id.clone(),
+                    agent_id: h.a1.clone(),
+                    project_id: None,
+                },
+            ))
+            .unwrap()
+            .ids["chat_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let task_id = match h
+            .kernel
+            .view_sync(q(
+                alice.clone(),
+                Query::Chat {
+                    chat_id: chat_id.clone(),
+                },
+            ))
+            .unwrap()
+        {
+            View::Chat { chat, .. } => chat.task_id.unwrap(),
+            _ => panic!("chat"),
+        };
+        h.kernel
+            .submit_sync(cmd(
+                alice.clone(),
+                Command::SetTaskStatus {
+                    task_id: task_id.clone(),
+                    status: "open".into(),
+                },
+            ))
+            .unwrap();
+        chats.push((chat_id, task_id));
+    }
+
+    let run_count = h.kernel.export_world().runs.len();
+    let missing = h
+        .kernel
+        .submit_sync(cmd(
+            alice.clone(),
+            Command::StartRun {
+                task_id: chats[0].1.clone(),
+                source: RunSource::Acp {
+                    prompt: "plan".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: None,
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(missing.code, "invalid");
+
+    let mismatched = h
+        .kernel
+        .submit_sync(cmd(
+            alice.clone(),
+            Command::StartRun {
+                task_id: chats[0].1.clone(),
+                source: RunSource::Acp {
+                    prompt: "plan".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(chats[1].0.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(mismatched.code, "invalid");
+
+    let wrong_trigger = h
+        .kernel
+        .submit_sync(cmd(
+            alice.clone(),
+            Command::StartRun {
+                task_id: chats[0].1.clone(),
+                source: RunSource::Acp {
+                    prompt: "plan".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(chats[0].0.clone()),
+                trigger: "issue".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(wrong_trigger.code, "invalid");
+
+    h.kernel
+        .submit_sync(cmd(
+            alice,
+            Command::UpdateAgent {
+                agent_id: h.a1.clone(),
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: Some("workspace".into()),
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                mcp_servers: None,
+                tool_access: None,
+            },
+        ))
+        .unwrap();
+    let private = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.bob },
+            Command::StartRun {
+                task_id: chats[0].1.clone(),
+                source: RunSource::Acp {
+                    prompt: "steal context".into(),
+                },
+                agent_id: Some(h.a1),
+                chat_id: Some(chats[0].0.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(private.code, "denied");
+    assert_eq!(h.kernel.export_world().runs.len(), run_count);
+}
+
+#[test]
+fn assistant_plan_artifact_creates_reviewable_revision_without_applying_tasks() {
+    let h = setup();
+    let actor = Actor::Principal {
+        id: h.alice.clone(),
+    };
+    let parent_id = h
+        .kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Parent".into(),
+                description: "Parent outcome".into(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    let baseline_task_count = h.kernel.export_world().tasks.len();
+    let content = format!(
+        "我把工作分成两个阶段，请先检查依赖和负责人。\n```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&draft).unwrap()
+    );
+
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content,
+                },
+            },
+        ))
+        .unwrap();
+
+    match h
+        .kernel
+        .view_sync(q(
+            actor,
+            Query::Chat {
+                chat_id: draft.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            let proposal = task_plan.expect("reviewable proposal");
+            assert_eq!(proposal.revision, 1);
+            assert_eq!(proposal.draft, draft);
+            assert!(task_plan_error.is_none());
+        }
+        _ => panic!("chat"),
+    }
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Run {
+                run_id: draft.source_run_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Run { events, .. } => assert!(events.iter().any(|event| {
+            event.kind == "message"
+                && event.payload == "assistant: 我把工作分成两个阶段，请先检查依赖和负责人。"
+        })),
+        _ => panic!("run"),
+    }
+    let world = h.kernel.export_world();
+    assert_eq!(world.tasks.len(), baseline_task_count);
+    assert!(world.task_plan_applications.is_empty());
+}
+
+#[test]
+fn unsupported_plan_artifact_stays_visible_and_inert() {
+    let h = setup();
+    let parent_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Parent".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    draft.version = "COORDY_TASK_PLAN_V2".into();
+    let content = format!(
+        "unsupported\n```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&draft).unwrap()
+    );
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: content.clone(),
+                },
+            },
+        ))
+        .unwrap();
+
+    match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: draft.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert!(task_plan.is_none());
+            assert!(task_plan_error
+                .unwrap()
+                .contains("unsupported task plan version"));
+        }
+        _ => panic!("chat"),
+    }
+    let world = h.kernel.export_world();
+    assert!(world.task_plan_proposals.is_empty());
+    assert!(world.task_plan_applications.is_empty());
+    assert!(world.run_events.iter().any(|event| {
+        event.run_id == draft.source_run_id && event.payload == format!("assistant: {content}")
+    }));
+}
+
+#[test]
+fn incomplete_plan_artifact_errors_only_after_chat_run_finishes() {
+    let h = setup();
+    let parent_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Parent".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: "```COORDY_TASK_PLAN_V1\n{\"version\":".into(),
+                },
+            },
+        ))
+        .unwrap();
+    let before = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: draft.chat_id.clone(),
+            },
+        ))
+        .unwrap();
+    match before {
+        View::Chat {
+            task_plan_error, ..
+        } => assert!(task_plan_error.is_none()),
+        _ => panic!("chat"),
+    }
+
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: draft.source_run_id,
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: String::new(),
+                    output: String::new(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+    let after = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal { id: h.alice },
+            Query::Chat {
+                chat_id: draft.chat_id,
+            },
+        ))
+        .unwrap();
+    match after {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert!(task_plan.is_none());
+            assert!(task_plan_error.unwrap().contains("代码块不完整"));
+        }
+        _ => panic!("chat"),
+    }
+}
+
 fn save_plan(h: &Harness, draft: TaskPlanDraft) -> (String, u64) {
     let saved = h
         .kernel

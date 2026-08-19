@@ -115,7 +115,7 @@ The `Chat` view includes:
 
 ```text
 task_plan?: TaskPlanProposalView
-task_plan_artifact_error?: string
+task_plan_error?: string
 ```
 
 The renderer saves edits with `SaveTaskPlanProposal`, then applies that returned
@@ -184,3 +184,85 @@ the proposal revision that happened to be loaded when the user clicked.
 Wait for the complete assistant output, strictly decode and persist it in the
 kernel, project one reviewable proposal, save every edit as a revision, and let
 the authenticated member apply that exact revision atomically.
+
+## Scenario: System-owned planning skill and identity handoff
+
+### 1. Scope / Trigger
+
+Inject this guidance only into an authenticated `StartRun` whose trigger is
+`chat` and whose private chat, hidden chat task, workspace, and selected agent
+all match. It is system-owned runtime context, not a workspace Skill record.
+
+### 2. Signatures
+
+The injected context contains exact values for:
+
+```text
+version, workspace_id, chat_id, source_run_id, source_agent_id,
+available_agents[], available_squads[]
+```
+
+The run ID is allocated before prompt decoration so the model can copy the
+actual immutable source ID into its artifact.
+
+### 3. Contracts
+
+- Ordinary issue, graph, automation, mention, and squad runs receive no
+  planning-only instruction or identity catalog.
+- The catalog is deterministic, capped at 40 agents and 40 squads, and contains
+  only active same-workspace identities the initiating actor can command.
+- A squad is listed only when its leader is active, same-workspace, and
+  commandable. Descriptions are capped at 160 characters.
+- The built-in skill instructs the model to clarify material ambiguity, produce
+  independently verifiable children, use valid priorities/stages/dependencies,
+  copy only catalog IDs, and emit exactly one strict artifact.
+- The skill explicitly states that artifact emission creates, assigns,
+  dispatches, and starts nothing; only later authenticated member confirmation
+  can apply a proposal.
+- No built-in prompt or catalog is persisted as a user-editable `Skill`.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| `chat` trigger without `chat_id` | Reject before run creation |
+| `chat_id` on a non-chat trigger | Reject before run creation |
+| Chat not visible to actor | `denied`; no planning context leaks |
+| Workspace, task, or agent differs from chat | `invalid`; no run creation |
+| Archived/inaccessible agent or squad leader | Omit from catalog |
+| Ordinary issue run | Preserve existing prompt decoration only |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a private chat run receives its exact provenance plus two commandable
+  agents, emits an artifact and explanation, and creates revision 1 without
+  applying any task.
+- Base: an ordinary issue run receives the agent/workspace Skills it already
+  had but no task-planning instructions.
+- Bad: associating another chat with an issue run is rejected before dispatch.
+
+### 6. Tests Required
+
+- Assert exact workspace/chat/run/agent IDs and commandable identities appear in
+  chat prompt context while inaccessible identities do not.
+- Assert ordinary issue prompts contain no built-in planning marker and the
+  World has no synthetic Skill record.
+- Feed an assistant explanation plus valid artifact through the harness event
+  boundary; assert one reviewable proposal revision, preserved explanation, no
+  application record, and no created plan children.
+- Retain malformed, duplicate, incomplete-stream, unsupported-version,
+  provenance, and member-confirmation tests from the two scenarios above.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Bind a mutable workspace Skill to every agent and ask the model to guess current
+run IDs or assignee names; ordinary work becomes noisy and proposed assignments
+cannot be validated reliably.
+
+#### Correct
+
+For each private chat run, allocate the run ID first and inject one bounded,
+actor-filtered context containing exact stable IDs. Keep all mutation behind the
+kernel's later authenticated confirmation command.
