@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { acpRunSource, chatTurnCommands } from "../lib/coordy/start-task";
+import {
+  acpRunSource,
+  chatTurnCommands,
+  taskSplitRequest,
+} from "../lib/coordy/start-task";
 import { draftAgentFromGoal } from "../lib/coordy/agent-draft";
 import {
   agentDisplayName,
@@ -12,8 +16,18 @@ import {
   selectableRuntimes,
   taskStatusLabel,
 } from "../lib/coordy/labels";
-import { boardIssues, isChatIssue, tasksAssignedToMe } from "../lib/coordy/issues";
-import { asTasks, boardColumn, isPlaceholderHarness, latestRunForTask, outcomeId } from "../lib/coordy/views";
+import {
+  boardIssues,
+  isChatIssue,
+  tasksAssignedToMe,
+} from "../lib/coordy/issues";
+import {
+  asTasks,
+  boardColumn,
+  isPlaceholderHarness,
+  latestRunForTask,
+  outcomeId,
+} from "../lib/coordy/views";
 import type { AgentView, RunView, TaskView, View } from "@coordy/protocol";
 
 describe("board view helpers", () => {
@@ -41,6 +55,20 @@ describe("board view helpers", () => {
     expect(acpRunSource("hello")).toEqual({ type: "Acp", prompt: "hello" });
   });
 
+  it("asks the assigned Harness for a split without a second model or key payload", () => {
+    expect(
+      taskSplitRequest({
+        workspaceId: "ws",
+        taskId: "task",
+        principalId: "principal",
+      }),
+    ).toEqual({
+      workspace_id: "ws",
+      task_id: "task",
+      principal_id: "principal",
+    });
+  });
+
   it("puts running and review tasks in kanban columns", () => {
     expect(boardColumn("open")).toBe("open");
     expect(boardColumn("running")).toBe("running");
@@ -50,52 +78,137 @@ describe("board view helpers", () => {
 
   it("picks the latest run for a task", () => {
     const runs: RunView[] = [
-      { id: "run_1", task_id: "t1", agent_id: "a", status: "completed", harness: "claude-acp", compaction_count: 0 },
-      { id: "run_2", task_id: "t1", agent_id: "a", status: "running", harness: "claude-acp", compaction_count: 0 },
-      { id: "run_3", task_id: "t2", agent_id: "a", status: "completed", harness: "claude-acp", compaction_count: 0 },
+      {
+        id: "run_1",
+        task_id: "t1",
+        agent_id: "a",
+        status: "completed",
+        harness: "claude-acp",
+        compaction_count: 0,
+      },
+      {
+        id: "run_2",
+        task_id: "t1",
+        agent_id: "a",
+        status: "running",
+        harness: "claude-acp",
+        compaction_count: 0,
+      },
+      {
+        id: "run_3",
+        task_id: "t2",
+        agent_id: "a",
+        status: "completed",
+        harness: "claude-acp",
+        compaction_count: 0,
+      },
     ];
     expect(latestRunForTask(runs, "t1")?.id).toBe("run_2");
   });
 
   it("hides leftover placeholder agents that are not a real CLI", () => {
     const agents: AgentView[] = [
-      { id: "ag_1", workspace_id: "ws", principal_id: "p", name: "助手", harness: "acp" },
-      { id: "ag_2", workspace_id: "ws", principal_id: "p", name: "助手", harness: "acp" },
-      { id: "ag_3", workspace_id: "ws", principal_id: "p", name: "Coordy 演示", harness: "coordy-stub" },
+      {
+        id: "ag_1",
+        workspace_id: "ws",
+        principal_id: "p",
+        name: "助手",
+        harness: "acp",
+      },
+      {
+        id: "ag_2",
+        workspace_id: "ws",
+        principal_id: "p",
+        name: "助手",
+        harness: "acp",
+      },
+      {
+        id: "ag_3",
+        workspace_id: "ws",
+        principal_id: "p",
+        name: "Coordy 演示",
+        harness: "coordy-stub",
+      },
     ];
-    expect(agents.filter((agent) => isPlaceholderHarness(agent.harness))).toHaveLength(2);
-    expect(listableAgents(agents).map((agent) => agent.harness)).toEqual(["coordy-stub"]);
+    expect(
+      agents.filter((agent) => isPlaceholderHarness(agent.harness)),
+    ).toHaveLength(2);
+    expect(listableAgents(agents).map((agent) => agent.harness)).toEqual([
+      "coordy-stub",
+    ]);
   });
 
   it("keeps a custom 智能体 name instead of replacing it with the CLI", () => {
-    expect(agentDisplayName({ name: "前端审查", harness: "claude-acp" })).toBe("前端审查");
-    expect(agentDisplayName({ name: "助手", harness: "acp" })).toBe("未对应任何 CLI");
+    expect(agentDisplayName({ name: "前端审查", harness: "claude-acp" })).toBe(
+      "前端审查",
+    );
+    expect(agentDisplayName({ name: "助手", harness: "acp" })).toBe(
+      "未对应任何 CLI",
+    );
     expect(
-      agentDisplayName(
-        { name: "助手", harness: "claude-acp" },
-        [{ id: "claude", name: "Claude Code", installed: true, command: "claude -p --output-format stream-json", source: "path", protocol_family: "claude" }],
-      ),
+      agentDisplayName({ name: "助手", harness: "claude-acp" }, [
+        {
+          id: "claude",
+          name: "Claude Code",
+          installed: true,
+          command: "claude -p --output-format stream-json",
+          source: "path",
+          protocol_family: "claude",
+        },
+      ]),
     ).toBe("Claude Code");
     expect(
       catalogItemForHarness(
-        [{ id: "claude", name: "Claude Code", installed: true, command: "claude -p", source: "path" }],
+        [
+          {
+            id: "claude",
+            name: "Claude Code",
+            installed: true,
+            command: "claude -p",
+            source: "path",
+          },
+        ],
         "claude-acp",
       )?.id,
     ).toBe("claude");
   });
 
-  it("offers installed and on-demand registry tools as selectable harnesses", () => {
+  it("offers only locally installed tools as selectable harnesses", () => {
     expect(
       selectableRuntimes([
-        { id: "claude", name: "Claude Code", installed: true, command: "claude -p --output-format stream-json", source: "path" },
-        { id: "made-up", name: "Made Up", installed: false, command: "npx -y made-up", source: "registry" },
+        {
+          id: "claude",
+          name: "Claude Code",
+          installed: true,
+          command: "claude -p --output-format stream-json",
+          source: "path",
+        },
+        {
+          id: "made-up",
+          name: "Made Up",
+          installed: false,
+          command: "npx -y made-up",
+          source: "registry",
+        },
       ]).map((item) => item.id),
-    ).toEqual(["claude", "made-up"]);
+    ).toEqual(["claude"]);
     expect(
       pickerRuntimes(
         [
-          { id: "claude", name: "Claude Code", installed: true, command: "claude -p", source: "path" },
-          { id: "codex", name: "Codex", installed: true, command: "codex exec --json", source: "path" },
+          {
+            id: "claude",
+            name: "Claude Code",
+            installed: true,
+            command: "claude -p",
+            source: "path",
+          },
+          {
+            id: "codex",
+            name: "Codex",
+            installed: true,
+            command: "codex exec --json",
+            source: "path",
+          },
         ],
         "claude-acp",
       ).map((item) => item.id),
@@ -103,7 +216,9 @@ describe("board view helpers", () => {
   });
 
   it("drafts 智能体 fields from a goal description", () => {
-    const draft = draftAgentFromGoal("审查前端 Pull Request。\n只看 TypeScript。");
+    const draft = draftAgentFromGoal(
+      "审查前端 Pull Request。\n只看 TypeScript。",
+    );
     expect(draft.name).toBe("审查前端 Pull Request");
     expect(draft.description).toContain("审查前端");
     expect(draft.instructions).toContain("只看 TypeScript");
@@ -131,22 +246,54 @@ describe("board view helpers", () => {
 
   it("keeps my-task lists to the current principal or agent", () => {
     const tasks: TaskView[] = [
-      { id: "task_1", workspace_id: "ws", title: "我的", status: "open", assignee_principal_id: "p1" },
-      { id: "task_2", workspace_id: "ws", title: "智能体的", status: "open", assignee_agent_id: "a1" },
-      { id: "task_3", workspace_id: "ws", title: "别人的", status: "open", assignee_principal_id: "p2" },
+      {
+        id: "task_1",
+        workspace_id: "ws",
+        title: "我的",
+        status: "open",
+        assignee_principal_id: "p1",
+      },
+      {
+        id: "task_2",
+        workspace_id: "ws",
+        title: "智能体的",
+        status: "open",
+        assignee_agent_id: "a1",
+      },
+      {
+        id: "task_3",
+        workspace_id: "ws",
+        title: "别人的",
+        status: "open",
+        assignee_principal_id: "p2",
+      },
     ];
-    expect(tasksAssignedToMe(tasks, { principalId: "p1", agentId: null }).map((task) => task.id)).toEqual(["task_1"]);
-    expect(tasksAssignedToMe(tasks, { principalId: "p1", agentId: "a1" }).map((task) => task.id)).toEqual([
-      "task_1",
-      "task_2",
-    ]);
-    expect(tasksAssignedToMe(tasks, { principalId: null, agentId: null })).toEqual([]);
+    expect(
+      tasksAssignedToMe(tasks, { principalId: "p1", agentId: null }).map(
+        (task) => task.id,
+      ),
+    ).toEqual(["task_1"]);
+    expect(
+      tasksAssignedToMe(tasks, { principalId: "p1", agentId: "a1" }).map(
+        (task) => task.id,
+      ),
+    ).toEqual(["task_1", "task_2"]);
+    expect(
+      tasksAssignedToMe(tasks, { principalId: null, agentId: null }),
+    ).toEqual([]);
   });
 
   it("keeps chat-backed tasks off the issue board", () => {
     const tasks: TaskView[] = [
       { id: "task_1", workspace_id: "ws", title: "修登录", status: "open" },
-      { id: "task_2", workspace_id: "ws", title: "对话", status: "backlog", stage: "chat", labels: ["chat"] },
+      {
+        id: "task_2",
+        workspace_id: "ws",
+        title: "对话",
+        status: "backlog",
+        stage: "chat",
+        labels: ["chat"],
+      },
     ];
     expect(isChatIssue(tasks[1]!)).toBe(true);
     expect(boardIssues(tasks).map((task) => task.id)).toEqual(["task_1"]);

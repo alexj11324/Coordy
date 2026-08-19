@@ -32,6 +32,7 @@ export function DesktopShell() {
     retry: false,
   });
   const path = `${location.pathname}${location.search}`;
+  const showFloatingChat = shouldShowFloatingChat(location.pathname);
 
   useLayoutEffect(() => {
     useTabStore.getState().sync(path);
@@ -57,23 +58,27 @@ export function DesktopShell() {
 
   return (
     <TooltipProvider>
-    <SidebarProvider
-      className="relative h-svh overflow-hidden"
-      open={!collapsed}
-      onOpenChange={(open) => setCollapsed(!open)}
-    >
-      <GlobalShortcuts />
-      <AppTitlebar />
-      <AppSidebar os={appInfo.data?.os} />
-      <SidebarInset className="relative min-h-0 overflow-hidden pt-11">
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          <Outlet />
-        </div>
-        <FloatingChat />
-      </SidebarInset>
-      <IssueCreateDialog os={appInfo.data?.os} />
-      <CommandPalette os={appInfo.data?.os} />
-    </SidebarProvider>
+      <SidebarProvider
+        className="relative h-svh overflow-hidden"
+        open={!collapsed}
+        onOpenChange={(open) => setCollapsed(!open)}
+      >
+        <GlobalShortcuts />
+        <AppTitlebar />
+        <AppSidebar os={appInfo.data?.os} />
+        <SidebarInset className="relative min-h-0 overflow-hidden pt-11">
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <Outlet />
+          </div>
+          {showFloatingChat ? <FloatingChat /> : null}
+        </SidebarInset>
+        <IssueCreateDialog os={appInfo.data?.os} />
+        <CommandPalette os={appInfo.data?.os} />
+      </SidebarProvider>
     </TooltipProvider>
   );
+}
+
+export function shouldShowFloatingChat(pathname: string): boolean {
+  return !pathname.startsWith("/agents/new");
 }

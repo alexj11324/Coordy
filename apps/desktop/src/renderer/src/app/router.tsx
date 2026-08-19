@@ -5,14 +5,14 @@ import { BoardPage } from "../features/board";
 import { TaskDetailPage } from "../features/task-detail";
 import { GraphPage } from "../features/graph";
 import { AgentsPage } from "../features/agents";
-import {
-  AiBuilderSessionPage,
-  AiCreateAgentPage,
-  ChooseCreateMethodPage,
-  ManualCreateAgentPage,
-} from "../features/create-agent";
+import { ManualCreateAgentPage } from "../features/create-agent";
 import { AgentDetailPage } from "../features/agent-detail";
-import { AutomationsPage, ProjectsPage, SkillsPage, SquadsPage } from "../features/catalog-pages";
+import {
+  AutomationsPage,
+  ProjectsPage,
+  SkillsPage,
+  SquadsPage,
+} from "../features/catalog-pages";
 import {
   AutomationDetailPage,
   ProjectDetailPage,
@@ -64,16 +64,28 @@ export function AppRouter() {
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="/automations" element={<AutomationsPage />} />
-          <Route path="/automations/:automationId" element={<AutomationDetailPage />} />
+          <Route
+            path="/automations/:automationId"
+            element={<AutomationDetailPage />}
+          />
           <Route path="/squads" element={<SquadsPage />} />
           <Route path="/squads/:squadId" element={<SquadDetailPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/skills/:skillId" element={<SkillDetailPage />} />
-          <Route path="/agents/new" element={<ChooseCreateMethodPage />} />
-          <Route path="/agents/new/blank" element={<ManualCreateAgentPage />} />
-          <Route path="/agents/new/ai" element={<AiCreateAgentPage />} />
-          <Route path="/agents/new/ai/:sessionId" element={<AiBuilderSessionPage />} />
+          <Route path="/agents/new" element={<ManualCreateAgentPage />} />
+          <Route
+            path="/agents/new/blank"
+            element={<Navigate to="/agents/new" replace />}
+          />
+          <Route
+            path="/agents/new/ai"
+            element={<Navigate to="/agents/new" replace />}
+          />
+          <Route
+            path="/agents/new/ai/:sessionId"
+            element={<Navigate to="/agents/new" replace />}
+          />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route element={<PaddedCanvas />}>
@@ -83,7 +95,10 @@ export function AppRouter() {
           <Route path="/agents" element={<AgentsPage />} />
           <Route path="/agents/:agentId" element={<AgentDetailPage />} />
           <Route path="/harnesses" element={<RuntimesPage />} />
-          <Route path="/runtimes" element={<Navigate to="/harnesses" replace />} />
+          <Route
+            path="/runtimes"
+            element={<Navigate to="/harnesses" replace />}
+          />
           <Route path="/authority" element={<AuthorityPage />} />
           <Route path="/memory" element={<MemoryPage />} />
           <Route path="/contracts" element={<ContractsPage />} />

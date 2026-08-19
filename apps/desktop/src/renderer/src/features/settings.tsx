@@ -17,7 +17,6 @@ import {
   Bell,
   FolderGit2,
   Keyboard,
-  KeyRound,
   ListTodo,
   MessageCircle,
   Plug,
@@ -63,7 +62,12 @@ import {
 import { StatusLamp } from "./status-lamp";
 import { updateWorkspaceConductorCommand } from "./graph/graph-commands";
 import { useSession } from "../state/session-store";
-import { applyTheme, FONT_SIZE_OPTIONS, useThemeStore, type ThemePreference } from "../state/theme-store";
+import {
+  applyTheme,
+  FONT_SIZE_OPTIONS,
+  useThemeStore,
+  type ThemePreference,
+} from "../state/theme-store";
 import type { GithubView } from "@coordy/protocol";
 
 const ACCOUNT_TABS = [
@@ -73,7 +77,6 @@ const ACCOUNT_TABS = [
   { id: "issue", label: "任务", icon: ListTodo },
   { id: "chat", label: "聊天", icon: MessageCircle },
   { id: "notifications", label: "通知", icon: Bell },
-  { id: "tokens", label: "模型密钥", icon: KeyRound },
   { id: "daemon", label: "Daemon", icon: Server },
   { id: "updates", label: "更新", icon: RefreshCw },
 ] as const;
@@ -91,9 +94,14 @@ const WORKSPACE_TABS = [
   { id: "mcp", label: "MCP", icon: Server },
 ] as const;
 
-type SettingsTab = (typeof ACCOUNT_TABS)[number]["id"] | (typeof WORKSPACE_TABS)[number]["id"];
+type SettingsTab =
+  | (typeof ACCOUNT_TABS)[number]["id"]
+  | (typeof WORKSPACE_TABS)[number]["id"];
 
-const ALL_TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [...ACCOUNT_TABS, ...WORKSPACE_TABS];
+const ALL_TABS: { id: SettingsTab; label: string; icon: LucideIcon }[] = [
+  ...ACCOUNT_TABS,
+  ...WORKSPACE_TABS,
+];
 
 const NOTICE_KINDS = [
   "assignment",
@@ -122,7 +130,8 @@ function isSettingsTab(value: string | null): value is SettingsTab {
 function initials(name: string): string {
   const trimmed = name.trim() || "我";
   const parts = trimmed.split(/\s+/);
-  if (parts.length >= 2) return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
+  if (parts.length >= 2)
+    return `${parts[0]![0] ?? ""}${parts[1]![0] ?? ""}`.toUpperCase();
   return Array.from(trimmed).slice(0, 2).join("");
 }
 
@@ -130,11 +139,7 @@ export function SettingsPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const tab: SettingsTab =
-    raw === "integrations"
-      ? "github"
-      : isSettingsTab(raw)
-        ? raw
-        : "profile";
+    raw === "integrations" ? "github" : isSettingsTab(raw) ? raw : "profile";
   const workspaceId = useSession((s) => s.workspaceId);
   const principalId = useSession((s) => s.principalId);
   const qc = useQueryClient();
@@ -146,11 +151,21 @@ export function SettingsPage() {
   return (
     <section className="flex h-full min-h-0">
       <nav className="flex w-[13.5rem] shrink-0 flex-col gap-4 overflow-auto border-r border-border px-3 py-4">
-        <SettingsNavGroup title="我的账号" items={ACCOUNT_TABS} tab={tab} onSelect={setTab} />
+        <SettingsNavGroup
+          title="我的账号"
+          items={ACCOUNT_TABS}
+          tab={tab}
+          onSelect={setTab}
+        />
         <WorkspaceNavGroup tab={tab} onSelect={setTab} />
       </nav>
       <div className="min-h-0 min-w-0 flex-1 overflow-auto px-8 py-6">
-        <SettingsPane tab={tab} workspaceId={workspaceId} principalId={principalId} invalidate={() => qc.invalidateQueries()} />
+        <SettingsPane
+          tab={tab}
+          workspaceId={workspaceId}
+          principalId={principalId}
+          invalidate={() => qc.invalidateQueries()}
+        />
       </div>
     </section>
   );
@@ -169,7 +184,9 @@ function SettingsNavGroup({
 }) {
   return (
     <div>
-      <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">{title}</p>
+      <p className="px-2 pb-1 text-[11px] font-medium text-muted-foreground">
+        {title}
+      </p>
       <div className="flex flex-col gap-0.5">
         {items.map((item) => (
           <button
@@ -177,7 +194,9 @@ function SettingsNavGroup({
             type="button"
             className={cn(
               "flex h-8 items-center gap-2 rounded-md px-2 text-sm",
-              tab === item.id ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+              tab === item.id
+                ? "bg-muted font-medium text-foreground"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
             )}
             onClick={() => onSelect(item.id)}
           >
@@ -190,14 +209,29 @@ function SettingsNavGroup({
   );
 }
 
-function WorkspaceNavGroup({ tab, onSelect }: { tab: SettingsTab; onSelect: (id: SettingsTab) => void }) {
+function WorkspaceNavGroup({
+  tab,
+  onSelect,
+}: {
+  tab: SettingsTab;
+  onSelect: (id: SettingsTab) => void;
+}) {
   const workspaceId = useSession((s) => s.workspaceId);
   const workspaces = useQuery({
     queryKey: ["workspaces-settings"],
     queryFn: () => view({ type: "Workspaces" }),
   });
-  const name = asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)?.name ?? "coordy";
-  return <SettingsNavGroup title={name} items={WORKSPACE_TABS} tab={tab} onSelect={onSelect} />;
+  const name =
+    asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)
+      ?.name ?? "coordy";
+  return (
+    <SettingsNavGroup
+      title={name}
+      items={WORKSPACE_TABS}
+      tab={tab}
+      onSelect={onSelect}
+    />
+  );
 }
 
 function SettingsPane({
@@ -217,7 +251,11 @@ function SettingsPane({
     queryFn: () => view({ type: "Settings", workspace_id: workspaceId! }),
   });
   const workspace = useQuery({
-    queryKey: ["view", { type: "Workspace", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Workspace", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Workspace", workspace_id: workspaceId! }),
   });
@@ -227,12 +265,20 @@ function SettingsPane({
     queryFn: () => view({ type: "Account" }),
   });
   const principals = useQuery({
-    queryKey: ["view", { type: "Principals", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Principals", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Principals", workspace_id: workspaceId! }),
   });
   const labels = useQuery({
-    queryKey: ["view", { type: "Labels", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Labels", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId) && tab === "labels",
     queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
   });
@@ -244,14 +290,13 @@ function SettingsPane({
     retry: false,
   });
   const agents = useQuery({
-    queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Agents", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId) && (tab === "chat" || tab === "general"),
     queryFn: () => view({ type: "Agents", workspace_id: workspaceId! }),
-  });
-  const secrets = useQuery({
-    queryKey: ["secrets"],
-    enabled: tab === "tokens",
-    queryFn: () => window.coordy.secretsStatus(),
   });
   const appInfo = useQuery({
     queryKey: ["app-info"],
@@ -263,45 +308,78 @@ function SettingsPane({
   const me = asAccount(account.data);
   const person = people.find((item) => item.id === principalId);
   const name = me?.name || person?.name || "我";
-  const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : ws?.repo_path;
-  const enabled = settings.data?.type === "Settings" ? settings.data.llm_advisor_enabled : false;
-  const noticeKinds = settings.data?.type === "Settings" ? (settings.data.notification_kinds ?? []) : [];
+  const repoPath =
+    settings.data?.type === "Settings"
+      ? settings.data.repo_path
+      : ws?.repo_path;
+  const enabled =
+    settings.data?.type === "Settings"
+      ? settings.data.llm_advisor_enabled
+      : false;
+  const noticeKinds =
+    settings.data?.type === "Settings"
+      ? (settings.data.notification_kinds ?? [])
+      : [];
   const info = appInfo.data;
   const mod = shortcutMod(info?.os);
 
   switch (tab) {
     case "profile":
-      return <ProfilePane name={name} principalId={principalId} onSaved={invalidate} />;
+      return (
+        <ProfilePane
+          name={name}
+          principalId={principalId}
+          onSaved={invalidate}
+        />
+      );
     case "preferences":
       return <PreferencesPane />;
     case "shortcuts":
       return <ShortcutsPane os={info?.os} />;
     case "issue":
       return (
-        <Pane title="任务" description="看板列与优先级由 Coordy 内置，不支持自定义工作流引擎。">
+        <Pane
+          title="任务"
+          description="看板列与优先级由 Coordy 内置，不支持自定义工作流引擎。"
+        >
           <ul className="grid gap-2 sm:grid-cols-2">
             {ISSUE_BOARD_COLUMNS.map((column) => (
-              <li key={column.id} className="rounded-lg border border-border px-3 py-2 text-sm">
-              {column.title}
+              <li
+                key={column.id}
+                className="rounded-lg border border-border px-3 py-2 text-sm"
+              >
+                {column.title}
               </li>
             ))}
           </ul>
           <div className="pt-4">
             <h3 className="mb-2 text-sm font-medium">优先级</h3>
-            <p className="text-sm text-muted-foreground">{Object.values(PRIORITY_ITEMS).join(" · ")}</p>
+            <p className="text-sm text-muted-foreground">
+              {Object.values(PRIORITY_ITEMS).join(" · ")}
+            </p>
           </div>
         </Pane>
       );
     case "chat":
       return (
-        <Pane title="聊天" description="右下角悬浮窗调用 CreateChat / SendChatMessage，不打开浏览器页面。">
+        <Pane
+          title="聊天"
+          description="右下角悬浮窗调用 CreateChat / SendChatMessage，不打开浏览器页面。"
+        >
           <p className="text-sm text-muted-foreground">
             {mod}+J 显示或隐藏悬浮聊天。带 chat 标签的任务不进入看板。
           </p>
           {listableAgents(asAgents(agents.data)).length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无智能体。悬浮聊天会提示先创建智能体。</p>
+            <p className="text-sm text-muted-foreground">
+              暂无智能体。悬浮聊天会提示先创建智能体。
+            </p>
           ) : (
-            <p className="text-sm">可聊对象：{listableAgents(asAgents(agents.data)).map((agent) => agentDisplayName(agent)).join("、")}</p>
+            <p className="text-sm">
+              可聊对象：
+              {listableAgents(asAgents(agents.data))
+                .map((agent) => agentDisplayName(agent))
+                .join("、")}
+            </p>
           )}
         </Pane>
       );
@@ -312,16 +390,21 @@ function SettingsPane({
           disabled={!workspaceId}
           onSave={(next) => {
             if (!workspaceId) return;
-            void submit({ type: "SetNotificationPrefs", workspace_id: workspaceId, kinds: next }).then(invalidate);
+            void submit({
+              type: "SetNotificationPrefs",
+              workspace_id: workspaceId,
+              kinds: next,
+            }).then(invalidate);
           }}
         />
       );
-    case "tokens":
-      return <TokensPane status={secrets.data} />;
     case "daemon":
       return (
         <DaemonPane
-          live={asHealth(health.data) ?? (health.isError ? null : asHealth(settings.data))}
+          live={
+            asHealth(health.data) ??
+            (health.isError ? null : asHealth(settings.data))
+          }
           isError={health.isError}
           os={info?.os}
           hostname={info?.hostname}
@@ -333,7 +416,9 @@ function SettingsPane({
         <Pane title="更新" description="当前为本机构建，没有应用商店更新通道。">
           <p className="text-sm">Coordy {info?.version ?? "…"}</p>
           <p className="text-sm text-muted-foreground">
-            {info ? `${info.os}${info.cliPath ? ` · ${info.cliPath}` : ""}` : "读取应用信息…"}
+            {info
+              ? `${info.os}${info.cliPath ? ` · ${info.cliPath}` : ""}`
+              : "读取应用信息…"}
           </p>
           <InstallCliButton />
         </Pane>
@@ -349,14 +434,21 @@ function SettingsPane({
       );
     case "repositories":
       return (
-        <Pane title="代码仓库" description="绑定本机目录。智能体在该目录中执行，路径不会上传。">
+        <Pane
+          title="代码仓库"
+          description="绑定本机目录。智能体在该目录中执行，路径不会上传。"
+        >
           <p className="text-sm">{repoPath ?? "未绑定"}</p>
           <Button
             variant="secondary"
             onClick={async () => {
               const path = await window.coordy.chooseRepository();
               if (path && workspaceId) {
-                await submit({ type: "BindRepository", workspace_id: workspaceId, path });
+                await submit({
+                  type: "BindRepository",
+                  workspace_id: workspaceId,
+                  path,
+                });
                 invalidate();
               }
             }}
@@ -370,21 +462,32 @@ function SettingsPane({
         <GithubPane
           workspaceId={workspaceId}
           repoPath={repoPath ?? null}
-          github={settings.data?.type === "Settings" ? settings.data.github : undefined}
+          github={
+            settings.data?.type === "Settings"
+              ? settings.data.github
+              : undefined
+          }
           onSaved={invalidate}
         />
       );
     case "cloud":
       return (
-        <Pane title="云通道" description="本机桌面不提供公网入站或即时通讯云通道。">
+        <Pane
+          title="云通道"
+          description="本机桌面不提供公网入站或即时通讯云通道。"
+        >
           <p className="text-sm text-muted-foreground">
-            不提供飞书 / Slack / 钉钉 / 企业微信。GitHub 已改走本机 GitHub CLI，入口在「GitHub」。仓库绑定入口位于「代码仓库」。模型密钥位于「模型密钥」。
+            不提供飞书 / Slack / 钉钉 / 企业微信。GitHub 已改走本机 GitHub
+            CLI，入口在「GitHub」。仓库绑定入口位于「代码仓库」。
           </p>
         </Pane>
       );
     case "labs":
       return (
-        <Pane title="实验室" description="顾问不得提交状态变更；确定性门禁始终启用。">
+        <Pane
+          title="实验室"
+          description="顾问不得提交状态变更；确定性门禁始终启用。"
+        >
           <Row label="可选 LLM 顾问" hint="仅提供建议，不可提交 commit。">
             <Switch
               checked={enabled}
@@ -401,29 +504,56 @@ function SettingsPane({
         </Pane>
       );
     case "members":
-      return <MembersPane workspaceId={workspaceId} people={people} onSaved={invalidate} />;
+      return (
+        <MembersPane
+          workspaceId={workspaceId}
+          people={people}
+          onSaved={invalidate}
+        />
+      );
     case "labels":
-      return <LabelsPane workspaceId={workspaceId} items={asLabels(labels.data)} onSaved={invalidate} />;
+      return (
+        <LabelsPane
+          workspaceId={workspaceId}
+          items={asLabels(labels.data)}
+          onSaved={invalidate}
+        />
+      );
     case "properties":
       return (
-        <Pane title="属性" description="内核可保存自定义字段定义，但事项创建与详情尚未读写该字段，因此本页不提供编辑入口。">
-          <p className="text-sm text-muted-foreground">事项页接入自定义字段后，再在此管理字段定义。</p>
+        <Pane
+          title="属性"
+          description="内核可保存自定义字段定义，但事项创建与详情尚未读写该字段，因此本页不提供编辑入口。"
+        >
+          <p className="text-sm text-muted-foreground">
+            事项页接入自定义字段后，再在此管理字段定义。
+          </p>
         </Pane>
       );
     case "quick_actions":
       return (
-        <Pane title="快捷操作" description="Coordy 使用命令面板，不提供云端工作流按钮。">
+        <Pane
+          title="快捷操作"
+          description="Coordy 使用命令面板，不提供云端工作流按钮。"
+        >
           <ShortcutRow keys={`${mod}K`} action="搜索 / 命令面板" />
           <ShortcutRow keys="C" action="新建任务" />
           <ShortcutRow keys={`${mod}J`} action="显示或隐藏悬浮聊天" />
-          <p className="pt-2 text-sm text-muted-foreground">也可通过命令面板新建智能体、小队、项目、自动化和 Skill。</p>
+          <p className="pt-2 text-sm text-muted-foreground">
+            也可通过命令面板新建智能体、小队、项目、自动化和 Skill。
+          </p>
         </Pane>
       );
     case "mcp":
       return (
-        <Pane title="MCP" description="原生 CLI harness 读取各自的 MCP 配置。ACP 家族的 session/new 仍发送空的 mcpServers，Coordy 不注入、不托管 MCP。">
+        <Pane
+          title="MCP"
+          description="原生 CLI harness 读取各自的 MCP 配置。ACP 家族的 session/new 仍发送空的 mcpServers，Coordy 不注入、不托管 MCP。"
+        >
           <p className="text-sm text-muted-foreground">
-            因此本页不提供可保存的 MCP 配置。请在对应 CLI 的配置文件中管理服务器，例如 Claude Code 的 ~/.claude.json、Codex 的 ~/.codex/config.toml。
+            因此本页不提供可保存的 MCP 配置。请在对应 CLI
+            的配置文件中管理服务器，例如 Claude Code 的 ~/.claude.json、Codex 的
+            ~/.codex/config.toml。
           </p>
         </Pane>
       );
@@ -446,7 +576,11 @@ function DaemonPane({
   workspaceId: string | null;
 }) {
   const computers = useQuery({
-    queryKey: ["view", { type: "Computers", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Computers", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Computers", workspace_id: workspaceId! }),
   });
@@ -467,7 +601,11 @@ function DaemonPane({
         }
       >
         <span className="inline-flex items-center justify-end gap-2 text-sm">
-          <StatusLamp tone={conn.tone} label={conn.label} className="size-2.5" />
+          <StatusLamp
+            tone={conn.tone}
+            label={conn.label}
+            className="size-2.5"
+          />
           {host} · {conn.label}
         </span>
       </Row>
@@ -487,14 +625,21 @@ function DaemonPane({
       <div className="pt-4">
         <h3 className="mb-2 text-sm font-medium">已登记电脑</h3>
         {registered.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Daemon 绿灯后会以主机名登记当前电脑。</p>
+          <p className="text-sm text-muted-foreground">
+            Daemon 绿灯后会以主机名登记当前电脑。
+          </p>
         ) : (
           <ul className="space-y-2">
             {registered.map((computer) => (
-              <li key={computer.id} className="rounded-lg border border-border px-3 py-2 text-sm">
+              <li
+                key={computer.id}
+                className="rounded-lg border border-border px-3 py-2 text-sm"
+              >
                 {computer.name}
                 {computer.kind ? ` · ${computer.kind}` : ""}
-                {computer.concurrency_limit ? ` · 并发 ${computer.concurrency_limit}` : ""}
+                {computer.concurrency_limit
+                  ? ` · 并发 ${computer.concurrency_limit}`
+                  : ""}
               </li>
             ))}
           </ul>
@@ -504,19 +649,39 @@ function DaemonPane({
   );
 }
 
-function Pane({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+function Pane({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <header>
         <h2 className="text-xl font-semibold tracking-tight">{title}</h2>
-        {description ? <p className="mt-1 text-sm leading-6 text-muted-foreground">{description}</p> : null}
+        {description ? (
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+            {description}
+          </p>
+        ) : null}
       </header>
       {children}
     </div>
   );
 }
 
-function Row({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+function Row({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-2 border-b border-border py-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
@@ -543,20 +708,30 @@ function ProfilePane({
   }, [name]);
   const dirty = draft.trim() !== name && draft.trim().length > 0;
   return (
-    <Pane title="个人资料" description="名称保存在本机工作区成员表中，不是云账号。">
+    <Pane
+      title="个人资料"
+      description="名称保存在本机工作区成员表中，不是云账号。"
+    >
       <Row label="头像" hint="使用姓名首字母生成，不支持上传照片。">
         <span className="inline-flex size-12 items-center justify-center rounded-full bg-emerald-600 text-sm font-medium text-white">
           {initials(draft.trim() || name)}
         </span>
       </Row>
       <Row label="姓名">
-        <Input value={draft} onChange={(event) => setDraft(event.target.value)} />
+        <Input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+        />
       </Row>
       <Button
         disabled={!principalId || !dirty}
         onClick={() => {
           if (!principalId) return;
-          void submit({ type: "UpdatePrincipal", principal_id: principalId, name: draft.trim() }).then(onSaved);
+          void submit({
+            type: "UpdatePrincipal",
+            principal_id: principalId,
+            name: draft.trim(),
+          }).then(onSaved);
         }}
       >
         保存姓名
@@ -581,7 +756,9 @@ function PreferencesPane() {
               type="button"
               className={cn(
                 "rounded-xl border px-3 py-3 text-left",
-                preference === item.id ? "border-foreground bg-muted/60" : "border-border hover:bg-muted/40",
+                preference === item.id
+                  ? "border-foreground bg-muted/60"
+                  : "border-border hover:bg-muted/40",
               )}
               onClick={() => {
                 setPreference(item.id);
@@ -596,7 +773,9 @@ function PreferencesPane() {
       </div>
       <div>
         <Label>界面字号</Label>
-        <p className="mt-1 text-xs text-muted-foreground">默认 18px。也可使用 Ctrl/⌘ +、−、0 调整。</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          默认 18px。也可使用 Ctrl/⌘ +、−、0 调整。
+        </p>
         <div className="mt-2 flex flex-wrap gap-2">
           {FONT_SIZE_OPTIONS.map((item) => (
             <button
@@ -604,12 +783,16 @@ function PreferencesPane() {
               type="button"
               className={cn(
                 "rounded-lg border px-3 py-2 text-sm",
-                fontSizePx === item.px ? "border-foreground bg-muted/60" : "border-border hover:bg-muted/40",
+                fontSizePx === item.px
+                  ? "border-foreground bg-muted/60"
+                  : "border-border hover:bg-muted/40",
               )}
               onClick={() => setFontSizePx(item.px)}
             >
               {item.label}
-              <span className="ml-1 text-xs text-muted-foreground">{item.px}px</span>
+              <span className="ml-1 text-xs text-muted-foreground">
+                {item.px}px
+              </span>
             </button>
           ))}
         </div>
@@ -623,13 +806,22 @@ function PreferencesPane() {
 
 function ShortcutsPane({ os }: { os?: string }) {
   return (
-    <Pane title="快捷键" description="在输入框内键入时，仅允许在编辑区触发的快捷键会生效。">
+    <Pane
+      title="快捷键"
+      description="在输入框内键入时，仅允许在编辑区触发的快捷键会生效。"
+    >
       {SHORTCUT_CATEGORIES.map((category) => (
         <div key={category.id} className="space-y-2">
           <h3 className="text-sm font-medium">{category.label}</h3>
-          {SHORTCUTS.filter((item) => item.category === category.id).map((item) => (
-            <ShortcutRow key={item.id} keys={formatShortcut(item.chord, os)} action={item.label} />
-          ))}
+          {SHORTCUTS.filter((item) => item.category === category.id).map(
+            (item) => (
+              <ShortcutRow
+                key={item.id}
+                keys={formatShortcut(item.chord, os)}
+                action={item.label}
+              />
+            ),
+          )}
         </div>
       ))}
     </Pane>
@@ -656,12 +848,20 @@ function GithubPane({
     : !github.cli_available
       ? { tone: "red" as const, label: "未安装 gh" }
       : github.authenticated
-        ? { tone: "green" as const, label: github.account ? `已登录 · ${github.account}` : "已登录" }
+        ? {
+            tone: "green" as const,
+            label: github.account ? `已登录 · ${github.account}` : "已登录",
+          }
         : { tone: "yellow" as const, label: "未登录" };
 
   async function setFlag(kind: string, next: boolean) {
     if (!workspaceId) return;
-    await submit({ type: "SetIntegration", workspace_id: workspaceId, kind, enabled: next });
+    await submit({
+      type: "SetIntegration",
+      workspace_id: workspaceId,
+      kind,
+      enabled: next,
+    });
     onSaved();
   }
 
@@ -670,13 +870,30 @@ function GithubPane({
       title="GitHub"
       description="通过本机 GitHub CLI（gh）读取 PR 状态与 CI。不需要在 Coordy 里做 GitHub OAuth 或安装 GitHub App。"
     >
-      <Row label="GitHub CLI" hint={github?.last_error || (repoPath ? repoPath : "先在「代码仓库」绑定本机目录")}>
+      <Row
+        label="GitHub CLI"
+        hint={
+          github?.last_error ||
+          (repoPath ? repoPath : "先在「代码仓库」绑定本机目录")
+        }
+      >
         <span className="inline-flex items-center justify-end gap-2 text-sm">
-          <StatusLamp tone={lamp.tone} label={lamp.label} className="size-2.5" />
+          <StatusLamp
+            tone={lamp.tone}
+            label={lamp.label}
+            className="size-2.5"
+          />
           {lamp.label}
         </span>
       </Row>
-      <Row label="上次同步" hint={github?.last_synced_at ? github.last_synced_at.replace("T", " ").slice(0, 19) : "尚未同步"}>
+      <Row
+        label="上次同步"
+        hint={
+          github?.last_synced_at
+            ? github.last_synced_at.replace("T", " ").slice(0, 19)
+            : "尚未同步"
+        }
+      >
         <Button
           variant="secondary"
           disabled={!workspaceId || busy}
@@ -684,7 +901,10 @@ function GithubPane({
             if (!workspaceId) return;
             setBusy(true);
             try {
-              await submit({ type: "RefreshGithub", workspace_id: workspaceId });
+              await submit({
+                type: "RefreshGithub",
+                workspace_id: workspaceId,
+              });
               onSaved();
             } finally {
               setBusy(false);
@@ -694,25 +914,44 @@ function GithubPane({
           {busy ? "同步中…" : "立即同步"}
         </Button>
       </Row>
-      <Row label="GitHub 集成" hint="关闭后停止自动关联与 CI 刷新，已关联的 PR 仍保留。">
-        <Switch checked={enabled} disabled={!workspaceId} onCheckedChange={(next) => void setFlag("github", Boolean(next))} />
+      <Row
+        label="GitHub 集成"
+        hint="关闭后停止自动关联与 CI 刷新，已关联的 PR 仍保留。"
+      >
+        <Switch
+          checked={enabled}
+          disabled={!workspaceId}
+          onCheckedChange={(next) => void setFlag("github", Boolean(next))}
+        />
       </Row>
-      <Row label="PR 侧栏" hint="在事项详情显示关联的 pull request、CI 与可合并性。">
+      <Row
+        label="PR 侧栏"
+        hint="在事项详情显示关联的 pull request、CI 与可合并性。"
+      >
         <Switch
           checked={sidebar}
           disabled={!workspaceId || !enabled}
-          onCheckedChange={(next) => void setFlag("github_pr_sidebar", Boolean(next))}
+          onCheckedChange={(next) =>
+            void setFlag("github_pr_sidebar", Boolean(next))
+          }
         />
       </Row>
-      <Row label="自动关联 PR" hint="从分支名、标题识别事项编号；正文需使用 Closes / Fixes / Resolves 紧跟编号。">
+      <Row
+        label="自动关联 PR"
+        hint="从分支名、标题识别事项编号；正文需使用 Closes / Fixes / Resolves 紧跟编号。"
+      >
         <Switch
           checked={autoLink}
           disabled={!workspaceId || !enabled}
-          onCheckedChange={(next) => void setFlag("github_auto_link", Boolean(next))}
+          onCheckedChange={(next) =>
+            void setFlag("github_auto_link", Boolean(next))
+          }
         />
       </Row>
       <p className="pt-2 text-sm text-muted-foreground">
-        未安装时：安装 GitHub CLI 后运行 `gh auth login`。CI 来自 `gh pr list` 的 statusCheckRollup；没有检查不会显示为通过。已合并且带关闭语句的 PR 会在没有其他 Open/Draft 工作 PR 时把事项标为完成。
+        未安装时：安装 GitHub CLI 后运行 `gh auth login`。CI 来自 `gh pr list`
+        的 statusCheckRollup；没有检查不会显示为通过。已合并且带关闭语句的 PR
+        会在没有其他 Open/Draft 工作 PR 时把事项标为完成。
       </p>
     </Pane>
   );
@@ -727,7 +966,8 @@ function NotificationsPane({
   disabled: boolean;
   onSave: (kinds: string[]) => void;
 }) {
-  const selected = kinds.length === 0 ? new Set<string>(NOTICE_KINDS) : new Set(kinds);
+  const selected =
+    kinds.length === 0 ? new Set<string>(NOTICE_KINDS) : new Set(kinds);
   const toggle = (kind: string, on: boolean) => {
     const next = new Set(selected);
     if (on) next.add(kind);
@@ -736,102 +976,19 @@ function NotificationsPane({
     onSave(allOn ? [] : NOTICE_KINDS.filter((item) => next.has(item)));
   };
   return (
-    <Pane title="通知" description="这些开关仅影响收件箱写入，不会向操作系统发送推送。">
+    <Pane
+      title="通知"
+      description="这些开关仅影响收件箱写入，不会向操作系统发送推送。"
+    >
       {NOTICE_KINDS.map((kind) => (
         <Row key={kind} label={inboxKindLabel(kind)} hint={kind}>
-          <Switch checked={selected.has(kind)} disabled={disabled} onCheckedChange={(on) => toggle(kind, Boolean(on))} />
+          <Switch
+            checked={selected.has(kind)}
+            disabled={disabled}
+            onCheckedChange={(on) => toggle(kind, Boolean(on))}
+          />
         </Row>
       ))}
-    </Pane>
-  );
-}
-
-function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?: string | null } }) {
-  const qc = useQueryClient();
-  const [provider, setProvider] = useState("openai");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [notice, setNotice] = useState("");
-  const save = useMutation({
-    mutationFn: () =>
-      window.coordy.setSecret({
-        provider,
-        api_key: apiKey.trim() ? apiKey.trim() : null,
-        base_url: baseUrl.trim() ? baseUrl.trim() : null,
-      }),
-    onSuccess: async () => {
-      setApiKey("");
-      setNotice("密钥已保存在本机，不会上传。");
-      await qc.invalidateQueries({ queryKey: ["secrets"] });
-    },
-    onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
-  });
-  return (
-    <Pane
-      title="模型密钥"
-      description="本机 harness 使用的模型密钥。不是云账号登录用的 API Token。"
-    >
-      <p className="text-sm text-muted-foreground">
-        Coordy 没有云账号，也不会签发个人访问令牌。CLI 通过本机 Unix socket 通信。此处密钥写入本机 0600 文件，启动运行时注入环境变量，不写入 SQLite。
-      </p>
-      <div className="flex items-center gap-2 text-sm">
-        {status?.key_configured ? <Badge>密钥已保存</Badge> : <Badge variant="secondary">未配置密钥</Badge>}
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label>服务商</Label>
-          <Select
-            value={provider}
-            items={{ openai: "OpenAI 兼容", anthropic: "Anthropic", custom: "自定义" }}
-            onValueChange={(value) => value && setProvider(value)}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="openai">OpenAI 兼容</SelectItem>
-              <SelectItem value="anthropic">Anthropic</SelectItem>
-              <SelectItem value="custom">自定义</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="settings-key">API 密钥</Label>
-          <Input
-            id="settings-key"
-            type="password"
-            autoComplete="off"
-            placeholder={status?.key_configured ? "已保存，留空则保持原值" : "sk-…"}
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5 md:col-span-2">
-          <Label htmlFor="settings-base">接口地址</Label>
-          <Input
-            id="settings-base"
-            placeholder={status?.base_url ?? "https://api.openai.com/v1"}
-            value={baseUrl}
-            onChange={(event) => setBaseUrl(event.target.value)}
-          />
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={() => save.mutate()} disabled={save.isPending}>
-          保存
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={async () => {
-            await window.coordy.clearSecret();
-            setNotice("已清除本机密钥。");
-            await qc.invalidateQueries({ queryKey: ["secrets"] });
-          }}
-        >
-          清除密钥
-        </Button>
-      </div>
-      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
     </Pane>
   );
 }
@@ -851,7 +1008,9 @@ function GeneralPane({
   const [description, setDescription] = useState(workspace?.description ?? "");
   const [context, setContext] = useState(workspace?.context ?? "");
   const [prefix, setPrefix] = useState(workspace?.issue_prefix ?? "COOR");
-  const [conductor, setConductor] = useState(workspace?.conductor_agent_id || "none");
+  const [conductor, setConductor] = useState(
+    workspace?.conductor_agent_id || "none",
+  );
   useEffect(() => {
     setName(workspace?.name ?? "");
     setDescription(workspace?.description ?? "");
@@ -874,18 +1033,32 @@ function GeneralPane({
     conductor !== (workspace?.conductor_agent_id || "none");
   const conductorItems = {
     none: "未指定",
-    ...Object.fromEntries(agents.map((agent) => [agent.id, agentDisplayName(agent)])),
+    ...Object.fromEntries(
+      agents.map((agent) => [agent.id, agentDisplayName(agent)]),
+    ),
   };
   const selectedConductor = agents.find((agent) => agent.id === conductor);
   return (
-    <Pane title="常规" description="工作区名称、智能体背景上下文、事项前缀与图总管保存在本机内核。">
+    <Pane
+      title="常规"
+      description="工作区名称、智能体背景上下文、事项前缀与图总管保存在本机内核。"
+    >
       <div className="space-y-1.5">
         <Label htmlFor="ws-name">名称</Label>
-        <Input id="ws-name" value={name} onChange={(event) => setName(event.target.value)} />
+        <Input
+          id="ws-name"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="ws-desc">说明</Label>
-        <Textarea id="ws-desc" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
+        <Textarea
+          id="ws-desc"
+          rows={3}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="ws-context">智能体背景上下文</Label>
@@ -899,7 +1072,11 @@ function GeneralPane({
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="ws-prefix">事项前缀</Label>
-        <Input id="ws-prefix" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
+        <Input
+          id="ws-prefix"
+          value={prefix}
+          onChange={(event) => setPrefix(event.target.value)}
+        />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="ws-conductor">图总管</Label>
@@ -909,7 +1086,11 @@ function GeneralPane({
           onValueChange={(value) => value && setConductor(value)}
         >
           <SelectTrigger id="ws-conductor">
-            <SelectValue>{selectedConductor ? agentDisplayName(selectedConductor) : "未指定"}</SelectValue>
+            <SelectValue>
+              {selectedConductor
+                ? agentDisplayName(selectedConductor)
+                : "未指定"}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="none">未指定</SelectItem>
@@ -959,19 +1140,30 @@ function MembersPane({
 }) {
   const [name, setName] = useState("");
   return (
-    <Pane title="成员" description="成员拥有智能体和契约投票权。这是本机工作区名单，不是云账号邀请。">
+    <Pane
+      title="成员"
+      description="成员拥有智能体和契约投票权。这是本机工作区名单，不是云账号邀请。"
+    >
       <form
         className="flex gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           if (!workspaceId || !name.trim()) return;
-          void submit({ type: "CreatePrincipal", workspace_id: workspaceId, name: name.trim() }).then(() => {
+          void submit({
+            type: "CreatePrincipal",
+            workspace_id: workspaceId,
+            name: name.trim(),
+          }).then(() => {
             setName("");
             onSaved();
           });
         }}
       >
-        <Input placeholder="姓名" value={name} onChange={(event) => setName(event.target.value)} />
+        <Input
+          placeholder="姓名"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
         <Button type="submit">添加</Button>
       </form>
       {people.length === 0 ? (
@@ -980,7 +1172,11 @@ function MembersPane({
         people.map((person) => (
           <p key={person.id} className="border-b border-border py-2 text-sm">
             {person.name}
-            {person.role ? <span className="ml-2 text-xs text-muted-foreground">{person.role}</span> : null}
+            {person.role ? (
+              <span className="ml-2 text-xs text-muted-foreground">
+                {person.role}
+              </span>
+            ) : null}
           </p>
         ))
       )}
@@ -1005,20 +1201,31 @@ function LabelsPane({
         onSubmit={(event) => {
           event.preventDefault();
           if (!workspaceId || !name.trim()) return;
-          void submit({ type: "CreateLabel", workspace_id: workspaceId, name: name.trim() }).then(() => {
+          void submit({
+            type: "CreateLabel",
+            workspace_id: workspaceId,
+            name: name.trim(),
+          }).then(() => {
             setName("");
             onSaved();
           });
         }}
       >
-        <Input placeholder="标签名" value={name} onChange={(event) => setName(event.target.value)} />
+        <Input
+          placeholder="标签名"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
         <Button type="submit">添加</Button>
       </form>
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">暂无标签。</p>
       ) : (
         items.map((item) => (
-          <div key={item.name} className="flex items-center justify-between border-b border-border py-2">
+          <div
+            key={item.name}
+            className="flex items-center justify-between border-b border-border py-2"
+          >
             <span className="text-sm">{item.name}</span>
             <Button
               size="sm"
@@ -1026,7 +1233,11 @@ function LabelsPane({
               disabled={!workspaceId}
               onClick={() => {
                 if (!workspaceId) return;
-                void submit({ type: "DeleteLabel", workspace_id: workspaceId, name: item.name }).then(onSaved);
+                void submit({
+                  type: "DeleteLabel",
+                  workspace_id: workspaceId,
+                  name: item.name,
+                }).then(onSaved);
               }}
             >
               删除
@@ -1051,7 +1262,9 @@ function InstallCliButton() {
       >
         安装命令行
       </Button>
-      {notice ? <p className="text-sm text-muted-foreground">{notice}</p> : null}
+      {notice ? (
+        <p className="text-sm text-muted-foreground">{notice}</p>
+      ) : null}
     </div>
   );
 }
@@ -1060,7 +1273,9 @@ function ShortcutRow({ keys, action }: { keys: string; action: string }) {
   return (
     <div className="flex items-center justify-between gap-4 rounded-xl border border-border px-3 py-2.5">
       <p className="text-sm">{action}</p>
-      <kbd className="rounded-md border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-xs">{keys}</kbd>
+      <kbd className="rounded-md border border-border bg-muted/50 px-1.5 py-0.5 font-mono text-xs">
+        {keys}
+      </kbd>
     </div>
   );
 }

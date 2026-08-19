@@ -4,14 +4,12 @@ import type { ReactNode } from "react";
 
 export function AgentCreateShell({
   title,
-  step,
   onBack,
   backDisabled = false,
   chips,
   children,
 }: {
   title: string;
-  step: string;
   onBack: () => void;
   backDisabled?: boolean;
   chips?: ReactNode;
@@ -32,10 +30,11 @@ export function AgentCreateShell({
         </Button>
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold">{title}</h1>
-          <p className="truncate text-xs text-muted-foreground">{step}</p>
         </div>
         {chips ? (
-          <div className="ml-auto hidden items-center gap-2 text-xs text-muted-foreground sm:flex">{chips}</div>
+          <div className="ml-auto hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
+            {chips}
+          </div>
         ) : null}
       </header>
       {children}
@@ -43,6 +42,16 @@ export function AgentCreateShell({
   );
 }
 
-export function AgentCreateChip({ children, className }: { children: ReactNode; className?: string }) {
-  return <span className={cn("rounded-full bg-muted px-2 py-1", className)}>{children}</span>;
+export function AgentCreateChip({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <span className={cn("rounded-full bg-muted px-2 py-1", className)}>
+      {children}
+    </span>
+  );
 }

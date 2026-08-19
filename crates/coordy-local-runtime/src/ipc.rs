@@ -187,9 +187,20 @@ async fn dispatch(runtime: &Runtime, req: RpcRequest) -> RpcResponse {
                 Err(e) => err(id, e),
             }
         }
-        RpcRequest::CompleteDraft { id, kind, prompt } => {
-            let store = crate::SecretStore::open(&runtime.data_dir);
-            match crate::draft::complete_draft(&store, &kind, &prompt).await {
+        RpcRequest::SuggestTaskSplit {
+            id,
+            workspace_id,
+            task_id,
+            principal_id,
+        } => {
+            match crate::suggest::suggest_task_split(
+                runtime,
+                &workspace_id,
+                &task_id,
+                &principal_id,
+            )
+            .await
+            {
                 Ok(result) => ok(id, serde_json::to_value(result).unwrap()),
                 Err(e) => err(id, e),
             }

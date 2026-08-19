@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::protocol::{parse_tool_access, ToolAccess};
 use crate::SecretEnv;
 
-pub const ACP_STUB_REPLY: &str = "内置演示智能体已就绪。这不是云端模型：在「新建智能体」中选择本机 harness，并配置模型密钥后即可使用真实智能体。";
+pub const ACP_STUB_REPLY: &str = "内置演示智能体已就绪。要使用真实智能体，请先安装并登录对应的本机 Harness，然后在「新建智能体」中选择它。";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AcpResumePolicy {

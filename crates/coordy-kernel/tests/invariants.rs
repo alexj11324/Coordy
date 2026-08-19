@@ -4065,6 +4065,85 @@ fn agent_name_must_be_unique_in_workspace() {
 }
 
 #[test]
+fn create_configured_agent_persists_the_complete_configuration_atomically() {
+    let h = setup();
+    let before = h.kernel.export_world().agents.len();
+    let outcome = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateConfiguredAgent {
+                workspace_id: h.workspace_id.clone(),
+                principal_id: h.alice.clone(),
+                name: "  Reviewer  ".into(),
+                harness: " claude ".into(),
+                description: "Reviews changes".into(),
+                instructions: "Run tests first".into(),
+                avatar: "asset:reviewer".into(),
+                model: "sonnet".into(),
+                thinking: "high".into(),
+                speed: "fast".into(),
+                access: "workspace".into(),
+                tool_access: "full_access".into(),
+            },
+        ))
+        .unwrap();
+    let agent_id = outcome.ids["agent_id"].as_str().unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(world.agents.len(), before + 1);
+    let agent = world
+        .agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .unwrap();
+    assert_eq!(agent.name, "Reviewer");
+    assert_eq!(agent.harness, "claude");
+    assert_eq!(agent.description, "Reviews changes");
+    assert_eq!(agent.instructions, "Run tests first");
+    assert_eq!(agent.avatar, "asset:reviewer");
+    assert_eq!(agent.model, "sonnet");
+    assert_eq!(agent.thinking, "high");
+    assert_eq!(agent.speed, "fast");
+    assert_eq!(agent.access, "workspace");
+    assert_eq!(agent.tool_access, "full_access");
+}
+
+#[test]
+fn create_configured_agent_prevalidates_before_mutating_world() {
+    let h = setup();
+    let before = h.kernel.export_world();
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateConfiguredAgent {
+                workspace_id: h.workspace_id,
+                principal_id: h.alice,
+                name: "Never persisted".into(),
+                harness: "claude".into(),
+                description: "description".into(),
+                instructions: "instructions".into(),
+                avatar: String::new(),
+                model: "sonnet".into(),
+                thinking: "high".into(),
+                speed: String::new(),
+                access: "owner".into(),
+                tool_access: "unsafe".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid");
+    let after = h.kernel.export_world();
+    assert_eq!(after.agents.len(), before.agents.len());
+    assert_eq!(after.audit.len(), before.audit.len());
+    assert_eq!(after.effects.len(), before.effects.len());
+}
+
+#[test]
 fn update_agent_stores_description_and_instructions() {
     let h = setup();
     h.kernel

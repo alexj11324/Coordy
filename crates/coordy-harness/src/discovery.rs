@@ -86,6 +86,13 @@ pub fn extra_bin_dirs() -> Vec<PathBuf> {
     if let Some(home) = dirs_home() {
         dirs.push(home.join(".local/bin"));
         dirs.push(home.join(".cargo/bin"));
+        dirs.push(home.join(".npm-global/bin"));
+        dirs.push(home.join(".opencode/bin"));
+        dirs.push(home.join(".grok/bin"));
+        dirs.push(home.join(".antigravity/antigravity/bin"));
+        dirs.push(home.join(".antigravity-ide/antigravity-ide/bin"));
+        dirs.push(home.join(".bun/bin"));
+        dirs.push(home.join("Library/pnpm"));
         dirs.push(home.join("bin"));
         let nvm = home.join(".nvm/versions/node");
         if nvm.is_dir() {
@@ -117,12 +124,30 @@ pub fn which_bin(name: &str) -> Option<PathBuf> {
     search.extend(extra_bin_dirs());
     for dir in search {
         for candidate in [dir.join(name), dir.join(format!("{name}.exe"))] {
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return Some(candidate);
             }
         }
     }
     None
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

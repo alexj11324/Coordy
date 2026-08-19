@@ -104,7 +104,11 @@ pub async fn import_agents(
     let wanted: Vec<&DiscoveredAgentView> = match ids {
         Some(list) if !list.is_empty() => catalog
             .iter()
-            .filter(|agent| list.iter().any(|id| id == &agent.id))
+            .filter(|agent| {
+                agent.installed
+                    && !agent.command.trim().is_empty()
+                    && list.iter().any(|id| id == &agent.id)
+            })
             .collect(),
         _ => catalog
             .iter()
@@ -113,14 +117,16 @@ pub async fn import_agents(
     };
     let mut imported = Vec::new();
     let mut skipped = Vec::new();
-    for agent in &existing {
-        if matches!(agent.harness.as_str(), "acp" | "jsonl") {
-            let _ = runtime.kernel.submit_sync(AuthenticatedCommand {
-                actor: Actor::Daemon,
-                command: Command::ArchiveAgent {
-                    agent_id: agent.id.clone(),
-                },
-            });
+    if !wanted.is_empty() {
+        for agent in &existing {
+            if matches!(agent.harness.as_str(), "acp" | "jsonl") {
+                let _ = runtime.kernel.submit_sync(AuthenticatedCommand {
+                    actor: Actor::Daemon,
+                    command: Command::ArchiveAgent {
+                        agent_id: agent.id.clone(),
+                    },
+                });
+            }
         }
     }
     for agent in wanted {

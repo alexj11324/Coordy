@@ -11,9 +11,12 @@ import {
   Switch,
   Textarea,
 } from "@coordy/ui";
-import type { DiscoveredAgentView } from "@coordy/protocol";
+import type {
+  DiscoveredAgentView,
+  HarnessModelCatalog,
+} from "@coordy/protocol";
 import { Loader2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   applyDraftFastChange,
   applyDraftModelChange,
@@ -23,27 +26,43 @@ import {
   harnessHasFastToggle,
   isCodexFast,
   modelSelectValue,
-  modelsForHarness,
-  thinkingForHarness,
   type AgentAccess,
   type AgentDraft,
   type HarnessModelOption,
   type ToolAccess,
 } from "../../lib/coordy/agent-draft";
-import { harnessIdsMatch, runtimeChipLabel } from "../../lib/coordy/labels";
+import {
+  harnessIdsMatch,
+  runtimeChipLabel,
+  runtimeReadinessLabel,
+  runtimeIsLaunchable,
+} from "../../lib/coordy/labels";
 import { AgentAvatarField } from "../agent-avatar";
 import { ProviderLogo } from "../provider-logo";
 
-const ACCESS_OPTIONS: { id: AgentAccess; title: string; description: string }[] = [
+const ACCESS_OPTIONS: {
+  id: AgentAccess;
+  title: string;
+  description: string;
+}[] = [
   { id: "owner", title: "仅自己", description: "仅创建者可运行此智能体。" },
-  { id: "workspace", title: "整个工作区", description: "工作区全体成员均可运行。" },
+  {
+    id: "workspace",
+    title: "整个工作区",
+    description: "工作区全体成员均可运行。",
+  },
 ];
 
-const TOOL_ACCESS_OPTIONS: { id: ToolAccess; title: string; description: string }[] = [
+const TOOL_ACCESS_OPTIONS: {
+  id: ToolAccess;
+  title: string;
+  description: string;
+}[] = [
   {
     id: "auto",
     title: "Auto",
-    description: "常见操作自动放行，但仍拦危险或越界的步骤。Claude 用分类器判断每一步；Codex 只能改当前工作区。",
+    description:
+      "常见操作自动放行，但仍拦危险或越界的步骤。Claude 用分类器判断每一步；Codex 只能改当前工作区。",
   },
   {
     id: "full_access",
@@ -69,12 +88,16 @@ export function AgentConfigurationPanel({
   os?: string | null;
   compact?: boolean;
 }) {
-  const set = <K extends keyof AgentDraft>(key: K, value: AgentDraft[K]) => onChange({ ...draft, [key]: value });
+  const set = <K extends keyof AgentDraft>(key: K, value: AgentDraft[K]) =>
+    onChange({ ...draft, [key]: value });
   return (
     <div className={cn("space-y-8", compact && "space-y-6")}>
-      <SettingsBlock title="身份" description="名称、头像与用途构成智能体身份。头像由 DiceBear bottts-neutral 在本机生成。">
+      <SettingsBlock title="身份">
         <FieldRow label="头像" htmlFor="agent-create-avatar" compact={compact}>
-          <AgentAvatarField value={draft.avatar} onChange={(avatar) => set("avatar", avatar)} />
+          <AgentAvatarField
+            value={draft.avatar}
+            onChange={(avatar) => set("avatar", avatar)}
+          />
         </FieldRow>
         <FieldRow label="名称" htmlFor="agent-create-name" compact={compact}>
           <div>
@@ -82,18 +105,28 @@ export function AgentConfigurationPanel({
               id="agent-create-name"
               value={draft.name}
               aria-invalid={nameError ? true : undefined}
-              aria-describedby={nameError ? "agent-create-name-error" : undefined}
+              aria-describedby={
+                nameError ? "agent-create-name-error" : undefined
+              }
               onChange={(event) => set("name", event.target.value)}
               placeholder="例如：深度研究智能体"
             />
             {nameError ? (
-              <p id="agent-create-name-error" className="mt-1.5 text-xs text-destructive">
+              <p
+                id="agent-create-name-error"
+                className="mt-1.5 text-xs text-destructive"
+              >
                 {nameError}
               </p>
             ) : null}
           </div>
         </FieldRow>
-        <FieldRow label="描述" htmlFor="agent-create-description" compact={compact} align="start">
+        <FieldRow
+          label="描述"
+          htmlFor="agent-create-description"
+          compact={compact}
+          align="start"
+        >
           <Textarea
             id="agent-create-description"
             rows={compact ? 3 : 4}
@@ -105,8 +138,13 @@ export function AgentConfigurationPanel({
         </FieldRow>
       </SettingsBlock>
 
-      <SettingsBlock title="行为与能力" description="定义工作方式。仅属于该智能体的长期要求写入指令。">
-        <FieldRow label="指令" htmlFor="agent-create-instructions" compact={compact} align="start">
+      <SettingsBlock title="行为与能力">
+        <FieldRow
+          label="指令"
+          htmlFor="agent-create-instructions"
+          compact={compact}
+          align="start"
+        >
           <Textarea
             id="agent-create-instructions"
             rows={compact ? 9 : 12}
@@ -118,17 +156,18 @@ export function AgentConfigurationPanel({
         </FieldRow>
       </SettingsBlock>
 
-      <SettingsBlock
-        title="执行配置"
-        description="选择 harness、模型与思考强度。Codex 可开启 Fast；未指定的项使用工具默认值。"
-      >
-        <div className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}>
+      <SettingsBlock title="执行配置">
+        <div
+          className={cn("grid gap-4 px-4 py-4", !compact && "sm:grid-cols-2")}
+        >
           <HarnessDropdown
             items={runtimes}
             loading={runtimesLoading}
             value={draft.harness}
             os={os}
-            onChange={(harness) => onChange(applyDraftRuntimeChange(draft, harness))}
+            onChange={(harness) =>
+              onChange(applyDraftRuntimeChange(draft, harness))
+            }
           />
           <RuntimeCapabilityFields
             harness={draft.harness}
@@ -136,21 +175,25 @@ export function AgentConfigurationPanel({
             thinking={draft.thinking}
             speed={draft.speed}
             disabled={!draft.harness}
-            onModelChange={(model) => onChange(applyDraftModelChange(draft, model))}
-            onThinkingChange={(thinking) => onChange(applyDraftThinkingChange(draft, thinking))}
+            onModelChange={(model) =>
+              onChange(applyDraftModelChange(draft, model))
+            }
+            onThinkingChange={(thinking) =>
+              onChange(applyDraftThinkingChange(draft, thinking))
+            }
             onFastChange={(on) => onChange(applyDraftFastChange(draft, on))}
           />
         </div>
       </SettingsBlock>
 
-      <SettingsBlock
-        title="工具权限"
-        description="Auto 和 Full Access 不是同一档。选好后，这个智能体下次跑任务就会按对应方式处理工具审批。"
-      >
-        <ToolAccessField value={draft.toolAccess} onChange={(toolAccess) => set("toolAccess", toolAccess)} />
+      <SettingsBlock title="工具权限">
+        <ToolAccessField
+          value={draft.toolAccess}
+          onChange={(toolAccess) => set("toolAccess", toolAccess)}
+        />
       </SettingsBlock>
 
-      <SettingsBlock title="访问权限" description="启动运行时按此权限校验。保存后可在详情页改为指定成员、并发上限与 CLI 参数。">
+      <SettingsBlock title="访问权限">
         <ChoiceRadios
           ariaLabel="访问权限"
           value={draft.access}
@@ -179,35 +222,61 @@ export function HarnessDropdown({
 }) {
   const selected = items.find((item) => harnessIdsMatch(item.id, value));
   const resolved = selected?.id ?? value;
-  const itemMap = Object.fromEntries(items.map((item) => [item.id, runtimeChipLabel(item, os)]));
+  const itemMap = Object.fromEntries(
+    items.map((item) => [item.id, runtimeChipLabel(item, os)]),
+  );
   return (
     <div className="min-w-0 space-y-1.5">
       <Label>Harness</Label>
       {items.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          {loading ? "正在读取 harness…" : "暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。"}
+          {loading
+            ? "正在读取 harness…"
+            : "暂无可用 harness。请到「Harness」页刷新检测，或先安装 Claude Code、Codex 或 Gemini CLI。"}
         </p>
       ) : (
-        <Select value={resolved || undefined} items={itemMap} onValueChange={(next) => next && onChange(next)} disabled={disabled}>
+        <Select
+          value={resolved || undefined}
+          items={itemMap}
+          onValueChange={(next) => next && onChange(next)}
+          disabled={disabled}
+        >
           <SelectTrigger className="h-auto min-h-10 py-1.5">
             <SelectValue placeholder="选择 harness">
               {selected ? (
                 <span className="flex min-w-0 items-center gap-2">
-                  <ProviderLogo provider={selected.id} className="size-4 shrink-0" />
-                  <span className="min-w-0 truncate text-left">{runtimeChipLabel(selected, os)}</span>
+                  <ProviderLogo
+                    provider={selected.id}
+                    className="size-4 shrink-0"
+                  />
+                  <span className="min-w-0 truncate text-left">
+                    {runtimeChipLabel(selected, os)}
+                  </span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    {runtimeReadinessLabel(selected)}
+                  </span>
                 </span>
               ) : null}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {items.map((item) => (
-              <SelectItem key={item.id} value={item.id} disabled={item.launch_state === "missing"}>
+              <SelectItem
+                key={item.id}
+                value={item.id}
+                disabled={!runtimeIsLaunchable(item)}
+              >
                 <span className="flex min-w-0 items-center gap-2">
-                  <ProviderLogo provider={item.id} className="size-4 shrink-0" />
-                  <span className="min-w-0 truncate">{runtimeChipLabel(item, os)}</span>
-                  {item.launch_state === "missing" ? (
-                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">未安装</span>
-                  ) : null}
+                  <ProviderLogo
+                    provider={item.id}
+                    className="size-4 shrink-0"
+                  />
+                  <span className="min-w-0 truncate">
+                    {runtimeChipLabel(item, os)}
+                  </span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    {runtimeReadinessLabel(item)}
+                  </span>
                 </span>
               </SelectItem>
             ))}
@@ -237,10 +306,50 @@ export function RuntimeCapabilityFields({
   onThinkingChange: (thinking: string) => void;
   onFastChange: (on: boolean) => void;
 }) {
-  const thinkingOptions = thinkingForHarness(harness, model);
+  const [catalog, setCatalog] = useState<HarnessModelCatalog | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setCatalog(null);
+    if (!harness || typeof window.coordy.discoverHarnessModels !== "function")
+      return () => {
+        active = false;
+      };
+    setLoadingModels(true);
+    void window.coordy
+      .discoverHarnessModels(harness)
+      .then((next) => {
+        if (active) setCatalog(next);
+      })
+      .catch(() => {
+        if (active)
+          setCatalog({
+            models: [],
+            model_selection_supported: false,
+            source: "runtime",
+          });
+      })
+      .finally(() => {
+        if (active) setLoadingModels(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [harness]);
+  const discoveredThinking = catalog?.models.find(
+    (item) => item.id === model,
+  )?.thinking;
+  const thinkingOptions = discoveredThinking ?? [];
   return (
     <>
-      <ModelDropdown harness={harness} value={model} disabled={disabled} onChange={onModelChange} />
+      <ModelDropdown
+        value={model}
+        presets={catalog?.models ?? []}
+        loading={loadingModels}
+        modelSelectionSupported={catalog?.model_selection_supported ?? false}
+        disabled={disabled}
+        onChange={onModelChange}
+      />
       {thinkingOptions.length > 0 ? (
         <TokenDropdown
           label="思考强度"
@@ -255,7 +364,6 @@ export function RuntimeCapabilityFields({
         <div className="flex min-h-10 min-w-0 items-center justify-between gap-3">
           <div className="min-w-0">
             <Label htmlFor="agent-codex-fast">Fast</Label>
-            <p className="text-xs text-muted-foreground">开启后向 Codex 传入 service_tier=fast。</p>
           </div>
           <Switch
             id="agent-codex-fast"
@@ -270,17 +378,36 @@ export function RuntimeCapabilityFields({
 }
 
 export function ModelDropdown({
-  harness,
   value,
+  presets,
+  loading,
+  modelSelectionSupported,
   onChange,
   disabled,
 }: {
-  harness: string;
   value: string;
+  presets: HarnessModelOption[];
+  loading?: boolean;
+  modelSelectionSupported?: boolean;
   onChange: (model: string) => void;
   disabled?: boolean;
 }) {
-  const presets = modelsForHarness(harness);
+  if (!modelSelectionSupported) {
+    return (
+      <div className="min-w-0 space-y-1.5">
+        <Label>模型</Label>
+        <Input value="由 harness 管理" disabled />
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div className="min-w-0 space-y-1.5">
+        <Label>模型</Label>
+        <Input value="正在读取 harness 模型…" disabled />
+      </div>
+    );
+  }
   if (presets.length === 0) {
     return (
       <div className="min-w-0 space-y-1.5">
@@ -289,7 +416,9 @@ export function ModelDropdown({
           value={value}
           disabled={disabled}
           autoComplete="off"
-          placeholder={disabled ? "请先选择 harness" : "模型 id，留空则用 CLI 默认"}
+          placeholder={
+            disabled ? "请先选择 harness" : "模型 id，留空则用 CLI 默认"
+          }
           onChange={(event) => onChange(event.target.value)}
         />
       </div>
@@ -334,11 +463,17 @@ function TokenDropdown({
       <Select
         value={modelSelectValue(value)}
         items={items}
-        onValueChange={(next) => next && onChange(next === DEFAULT_MODEL_VALUE ? "" : next)}
+        onValueChange={(next) =>
+          next && onChange(next === DEFAULT_MODEL_VALUE ? "" : next)
+        }
         disabled={disabled}
       >
         <SelectTrigger>
-          <SelectValue placeholder={disabled ? disabledPlaceholder || emptyLabel : emptyLabel} />
+          <SelectValue
+            placeholder={
+              disabled ? disabledPlaceholder || emptyLabel : emptyLabel
+            }
+          />
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={DEFAULT_MODEL_VALUE}>{emptyLabel}</SelectItem>
@@ -374,7 +509,10 @@ export function CreateAgentFooter({
   return (
     <div className="sticky bottom-0 mt-8 flex items-center justify-between gap-3 border-t bg-background/95 py-3 pr-20 pl-5 backdrop-blur">
       {error ? (
-        <p role="alert" className="min-w-0 flex-1 break-words text-sm text-destructive">
+        <p
+          role="alert"
+          className="min-w-0 flex-1 break-words text-sm text-destructive"
+        >
           {error}
         </p>
       ) : (
@@ -391,7 +529,12 @@ export function CreateAgentFooter({
           放弃创建
         </Button>
       ) : null}
-      <Button type="button" className={cn("shrink-0", !onDiscard && "ml-auto")} onClick={onCreate} disabled={!canCreate}>
+      <Button
+        type="button"
+        className={cn("shrink-0", !onDiscard && "ml-auto")}
+        onClick={onCreate}
+        disabled={!canCreate}
+      >
         {creating ? <Loader2 className="size-4 animate-spin" /> : null}
         {creating ? "正在创建…" : "创建并打开"}
       </Button>
@@ -399,14 +542,26 @@ export function CreateAgentFooter({
   );
 }
 
-function SettingsBlock({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+function SettingsBlock({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
   return (
     <section className="space-y-3">
       <div>
         <h3 className="text-sm font-semibold">{title}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+        {description ? (
+          <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+        ) : null}
       </div>
-      <div className="overflow-hidden rounded-xl border bg-card">{children}</div>
+      <div className="overflow-hidden rounded-xl border bg-card">
+        {children}
+      </div>
     </section>
   );
 }
@@ -419,7 +574,12 @@ export function ToolAccessField({
   onChange: (value: ToolAccess) => void;
 }) {
   return (
-    <ChoiceRadios ariaLabel="工具权限" value={value} onChange={onChange} options={TOOL_ACCESS_OPTIONS} />
+    <ChoiceRadios
+      ariaLabel="工具权限"
+      value={value}
+      onChange={onChange}
+      options={TOOL_ACCESS_OPTIONS}
+    />
   );
 }
 
@@ -456,11 +616,15 @@ function ChoiceRadios<T extends string>({
                 selected ? "border-foreground" : "border-muted-foreground/40",
               )}
             >
-              {selected ? <span className="size-2 rounded-full bg-foreground" /> : null}
+              {selected ? (
+                <span className="size-2 rounded-full bg-foreground" />
+              ) : null}
             </span>
             <span>
               <span className="block text-sm font-medium">{option.title}</span>
-              <span className="block text-xs text-muted-foreground">{option.description}</span>
+              <span className="block text-xs text-muted-foreground">
+                {option.description}
+              </span>
             </span>
           </button>
         );

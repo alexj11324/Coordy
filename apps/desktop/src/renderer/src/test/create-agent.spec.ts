@@ -3,7 +3,6 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyBuilderTurn,
-  applyDraftCompletion,
   applyDraftFastChange,
   applyDraftModelChange,
   applyDraftRuntimeChange,
@@ -14,7 +13,6 @@ import {
   EMPTY_AGENT_DRAFT,
   emptyAgentDraft,
   harnessHasFastToggle,
-  modelsForHarness,
   modelSelectValue,
   parseToolAccess,
   thinkingForHarness,
@@ -33,15 +31,30 @@ import {
 import {
   catalogItemForHarness,
   harnessIdsMatch,
+  initialRuntimeId,
   osShortLabel,
   pickerRuntimes,
   runtimeChipLabel,
+  runtimeIsLaunchable,
+  runtimeReadinessLabel,
   runtimeSubtitle,
 } from "../lib/coordy/labels";
-import { FIRST_CLASS_PROVIDER_IDS, firstClassIconSignature, registryIconUrl } from "../features/provider-logo";
+import {
+  FIRST_CLASS_PROVIDER_IDS,
+  FIRST_CLASS_ICON_FILES,
+  firstClassIconSignature,
+  registryIconUrl,
+} from "../features/provider-logo";
 import { RuntimePicker } from "../features/runtime-picker";
+import {
+  HarnessDropdown,
+  ModelDropdown,
+} from "../features/create-agent/agent-create-form";
+import { partitionRuntimeCatalog } from "../features/runtimes";
 
-function session(partial: Partial<BuilderSession> & Pick<BuilderSession, "id">): BuilderSession {
+function session(
+  partial: Partial<BuilderSession> & Pick<BuilderSession, "id">,
+): BuilderSession {
   return {
     workspaceId: "ws",
     draft: { ...EMPTY_AGENT_DRAFT, name: "审查员" },
@@ -52,15 +65,36 @@ function session(partial: Partial<BuilderSession> & Pick<BuilderSession, "id">):
 }
 
 describe("agent creation studio helpers", () => {
+  it("shows runtime-managed model semantics without an arbitrary text field", () => {
+    const html = renderToStaticMarkup(
+      createElement(ModelDropdown, {
+        value: "",
+        presets: [],
+        modelSelectionSupported: false,
+        onChange: () => {},
+      }),
+    );
+    expect(html).toContain("由 harness 管理");
+    expect(html).not.toContain("模型 id");
+  });
+
   it("keeps the first-line name seed from a goal", () => {
-    const draft = draftAgentFromGoal("审查前端 Pull Request。\n只看 TypeScript。");
+    const draft = draftAgentFromGoal(
+      "审查前端 Pull Request。\n只看 TypeScript。",
+    );
     expect(draft.name).toBe("审查前端 Pull Request");
     expect(draft.instructions).toContain("只看 TypeScript");
   });
 
   it("clears the model, thinking, and speed when the harness changes", () => {
     const next = applyDraftRuntimeChange(
-      { ...EMPTY_AGENT_DRAFT, harness: "claude-acp", model: "opus", thinking: "high", speed: "fast" },
+      {
+        ...EMPTY_AGENT_DRAFT,
+        harness: "claude-acp",
+        model: "opus",
+        thinking: "high",
+        speed: "fast",
+      },
       "codex-acp",
     );
     expect(next.harness).toBe("codex-acp");
@@ -71,7 +105,12 @@ describe("agent creation studio helpers", () => {
 
   it("drops thinking that the next model does not accept", () => {
     const next = applyDraftModelChange(
-      { ...EMPTY_AGENT_DRAFT, harness: "claude", model: "claude-opus-4-8", thinking: "xhigh" },
+      {
+        ...EMPTY_AGENT_DRAFT,
+        harness: "claude",
+        model: "claude-opus-4-8",
+        thinking: "xhigh",
+      },
       "claude-haiku-4-5-20251001",
     );
     expect(next.model).toBe("claude-haiku-4-5-20251001");
@@ -84,7 +123,11 @@ describe("agent creation studio helpers", () => {
   });
 
   it("fills the live draft locally without calling a harness", () => {
-    const first = applyBuilderTurn(EMPTY_AGENT_DRAFT, 0, "审查前端 Pull Request");
+    const first = applyBuilderTurn(
+      EMPTY_AGENT_DRAFT,
+      0,
+      "审查前端 Pull Request",
+    );
     expect(first.draft.name).toBe("审查前端 Pull Request");
     expect(first.reply).toContain("禁止事项");
     const second = applyBuilderTurn(first.draft, 1, "不要直接改代码");
@@ -95,30 +138,26 @@ describe("agent creation studio helpers", () => {
     expect(third.reply).toContain("右侧草稿");
   });
 
-  it("merges a model draft completion into the live form", () => {
-    const next = applyDraftCompletion(
-      { ...EMPTY_AGENT_DRAFT, name: "旧名", harness: "claude" },
-      { name: "审查员", description: "看 PR", instructions: "只评论" },
-    );
-    expect(next.name).toBe("审查员");
-    expect(next.description).toBe("看 PR");
-    expect(next.instructions).toBe("只评论");
-    expect(next.harness).toBe("claude");
-    const kept = applyDraftCompletion(next, { name: "", description: "", instructions: "" });
-    expect(kept.name).toBe("审查员");
-  });
-
   it("maps a unique-name kernel error onto the name field", () => {
-    expect(classifyCreateAgentError(new Error("agent name must be unique in this workspace"))).toEqual({
+    expect(
+      classifyCreateAgentError(
+        new Error("agent name must be unique in this workspace"),
+      ),
+    ).toEqual({
       nameError: "工作区中已存在同名智能体。",
       formError: null,
     });
-    expect(classifyCreateAgentError(new Error("daemon handshake failed")).formError).toContain("handshake");
+    expect(
+      classifyCreateAgentError(new Error("daemon handshake failed")).formError,
+    ).toContain("handshake");
   });
 
   it("persists unfinished builder conversations per workspace", () => {
     const store = memoryStore();
-    upsertBuilderSession(session({ id: "a", updatedAt: "2026-08-18T01:00:00.000Z" }), store);
+    upsertBuilderSession(
+      session({ id: "a", updatedAt: "2026-08-18T01:00:00.000Z" }),
+      store,
+    );
     upsertBuilderSession(
       session({
         id: "b",
@@ -147,47 +186,194 @@ describe("agent creation studio helpers", () => {
     const draft = emptyAgentDraft();
     expect(draft.avatar.startsWith("dicebear:bottts-neutral:")).toBe(true);
     const store = memoryStore();
-    writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "审查员", avatar: "dicebear:bottts-neutral:kept" }, store);
-    expect(readManualDraft("ws", store)?.avatar).toBe("dicebear:bottts-neutral:kept");
+    writeManualDraft(
+      "ws",
+      {
+        ...EMPTY_AGENT_DRAFT,
+        name: "审查员",
+        avatar: "dicebear:bottts-neutral:kept",
+      },
+      store,
+    );
+    expect(readManualDraft("ws", store)?.avatar).toBe(
+      "dicebear:bottts-neutral:kept",
+    );
     writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "审查员" }, store);
-    expect(readManualDraft("ws", store)?.avatar).toBe("dicebear:bottts-neutral:审查员");
+    expect(readManualDraft("ws", store)?.avatar).toBe(
+      "dicebear:bottts-neutral:审查员",
+    );
   });
 
   it("shows only the harness identity in the picker", () => {
     expect(osShortLabel("darwin")).toBe("Mac");
-    expect(runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin")).toBe("Claude Code");
-    expect(runtimeSubtitle({ command: "claude -p", protocol_family: "claude" })).toBe("");
+    expect(
+      runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin"),
+    ).toBe("Claude Code");
+    expect(
+      runtimeSubtitle({ command: "claude -p", protocol_family: "claude" }),
+    ).toBe("");
   });
 
-  it("has a distinct local icon mapping for every first-class runtime", () => {
+  it("records an auditable icon source for every first-class runtime", () => {
     const expected = [
-      "antigravity", "claude", "codebuddy", "codex", "copilot", "cursor", "deveco", "dsh",
-      "gemini", "grok", "hermes", "kimi", "kiro", "mcode", "omp", "openclaw", "opencode",
-      "pi", "qoder", "qoderclicn", "qwen", "qwenpaw", "reasonix", "traecli",
+      "antigravity",
+      "claude",
+      "codebuddy",
+      "codex",
+      "copilot",
+      "cursor",
+      "deveco",
+      "dsh",
+      "gemini",
+      "grok",
+      "hermes",
+      "kimi",
+      "kiro",
+      "mcode",
+      "omp",
+      "openclaw",
+      "opencode",
+      "pi",
+      "qoder",
+      "qoderclicn",
+      "qwen",
+      "qwenpaw",
+      "reasonix",
+      "traecli",
     ];
     expect(FIRST_CLASS_PROVIDER_IDS).toHaveLength(24);
     expect(new Set(FIRST_CLASS_PROVIDER_IDS).size).toBe(24);
     expect([...FIRST_CLASS_PROVIDER_IDS].sort()).toEqual(expected);
-    const signatures = FIRST_CLASS_PROVIDER_IDS.map((id) => firstClassIconSignature(id));
-    expect(signatures.every(Boolean)).toBe(true);
-    expect(new Set(signatures).size).toBe(24);
+    expect(Object.keys(FIRST_CLASS_ICON_FILES).sort()).toEqual(expected);
+    for (const id of FIRST_CLASS_PROVIDER_IDS) {
+      expect(FIRST_CLASS_ICON_FILES[id]).toMatch(/\.(svg|png|webp)$/);
+      expect(firstClassIconSignature(id)).toBe(
+        `multica-local:${FIRST_CLASS_ICON_FILES[id]}`,
+      );
+    }
+    expect(firstClassIconSignature("copilot")).toBe(
+      "multica-local:copilot.svg",
+    );
   });
 
-  it("keeps missing first-class runtimes visible while only ready and on-demand runtimes are selectable", () => {
+  it("keeps every runtime visible but launches only installed entries", () => {
     const catalog = [
-      { id: "hermes", name: "Hermes Agent", installed: false, launch_state: "missing", command: "hermes acp", source: "builtin", protocol_family: "acp" },
-      { id: "grok", name: "Grok Build", installed: false, launch_state: "on_demand", command: "npx grok", source: "registry", protocol_family: "acp" },
+      {
+        id: "hermes",
+        name: "Hermes Agent",
+        installed: false,
+        launch_state: "missing",
+        command: "hermes acp",
+        source: "builtin",
+        protocol_family: "acp",
+      },
+      {
+        id: "grok",
+        name: "Grok Build",
+        installed: false,
+        launch_state: "on_demand",
+        command: "npx grok",
+        source: "registry",
+        protocol_family: "acp",
+      },
     ];
-    expect(pickerRuntimes(catalog).map((item) => item.id)).toEqual(["hermes", "grok"]);
-    const html = renderToStaticMarkup(createElement(RuntimePicker, {
-      items: catalog,
-      value: "grok",
-      onChange: () => undefined,
-    }));
+    expect(pickerRuntimes(catalog).map((item) => item.id)).toEqual([
+      "hermes",
+      "grok",
+    ]);
+    const html = renderToStaticMarkup(
+      createElement(RuntimePicker, {
+        items: catalog,
+        value: "grok",
+        onChange: () => undefined,
+      }),
+    );
     expect(html).toContain("Hermes Agent");
     expect(html).toContain("Grok Build");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*Hermes Agent/);
+    expect(html.match(/disabled=""/g)).toHaveLength(2);
     expect(html).toContain("未安装");
+    expect(html).not.toContain("按需运行");
+
+    const dropdown = renderToStaticMarkup(
+      createElement(HarnessDropdown, {
+        items: catalog,
+        value: "grok",
+        onChange: () => undefined,
+      }),
+    );
+    expect(dropdown).toContain("Grok Build");
+    expect(dropdown).not.toContain("按需运行");
+    expect(runtimeReadinessLabel(catalog[1])).toBe("未安装");
+    expect(runtimeReadinessLabel(catalog[0])).toBe("未安装");
+    expect(runtimeIsLaunchable(catalog[1])).toBe(false);
+    expect(runtimeIsLaunchable(catalog[0])).toBe(false);
+  });
+
+  it("treats every runtime missing from this Mac as uninstalled", () => {
+    const grouped = partitionRuntimeCatalog([
+      {
+        id: "claude",
+        name: "Claude Code",
+        installed: true,
+        launch_state: "ready",
+        command: "claude",
+        source: "path",
+        protocol_family: "claude",
+      },
+      {
+        id: "grok",
+        name: "Grok Build",
+        installed: false,
+        launch_state: "on_demand",
+        command: "npx grok",
+        source: "registry",
+        protocol_family: "acp",
+      },
+      {
+        id: "hermes",
+        name: "Hermes Agent",
+        installed: false,
+        launch_state: "missing",
+        command: "hermes acp",
+        source: "builtin",
+        protocol_family: "acp",
+      },
+    ]);
+    expect(grouped.ready.map((item) => item.id)).toEqual(["claude"]);
+    expect(grouped.missing.map((item) => item.id)).toEqual(["grok", "hermes"]);
+  });
+
+  it("prefers a valid Harness CTA over a saved draft and rejects stale IDs", () => {
+    const catalog = [
+      {
+        id: "claude",
+        name: "Claude",
+        installed: true,
+        launch_state: "ready",
+        command: "claude",
+        source: "path",
+      },
+      {
+        id: "grok",
+        name: "Grok",
+        installed: false,
+        launch_state: "on_demand",
+        command: "npx grok",
+        source: "registry",
+      },
+      {
+        id: "hermes",
+        name: "Hermes",
+        installed: false,
+        launch_state: "missing",
+        command: "hermes",
+        source: "builtin",
+      },
+    ];
+    expect(initialRuntimeId(catalog, "grok", "claude")).toBe("claude");
+    expect(initialRuntimeId(catalog, "hermes", "claude")).toBe("claude");
+    expect(initialRuntimeId(catalog, "gone", "gone-too")).toBe("claude");
   });
 
   it("builds registry icons only from a stable registry identity", () => {
@@ -198,32 +384,23 @@ describe("agent creation studio helpers", () => {
     expect(registryIconUrl("../escape")).toBeNull();
   });
 
-  it("offers vendor model ids, thinking tokens, and Codex speed tiers", () => {
-    expect(modelsForHarness("claude-acp").map((item) => item.id)).toContain("claude-opus-4-6");
-    expect(modelsForHarness("claude").map((item) => item.id)).toEqual(
-      expect.arrayContaining(["claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]),
-    );
-    expect(modelsForHarness("codex-acp").map((item) => item.id)).toEqual(
-      expect.arrayContaining(["gpt-5.6-sol", "gpt-5.4", "gpt-5.3-codex"]),
-    );
-    expect(modelsForHarness("gemini-cli").map((item) => item.id)).toContain("gemini-2.5-pro");
-    expect(modelsForHarness("copilot").map((item) => item.id)).toContain("claude-sonnet-4.6");
-    expect(modelsForHarness("copilot").map((item) => item.id)).not.toContain("claude-sonnet-4-6");
-    expect(modelsForHarness("cursor").map((item) => item.id)).toContain("auto");
-    expect(modelsForHarness("coordy-stub")).toEqual([]);
-
-    expect(thinkingForHarness("claude", "claude-opus-4-8").map((item) => item.id)).toEqual(
-      expect.arrayContaining(["low", "high", "xhigh", "max"]),
-    );
-    expect(thinkingForHarness("claude", "claude-haiku-4-5-20251001").map((item) => item.id)).toEqual([
-      "low",
-      "medium",
-      "high",
-    ]);
-    expect(thinkingForHarness("codex", "gpt-5.6-sol").map((item) => item.id)).toEqual(
+  it("keeps thinking tokens and Codex speed tiers without baking model catalogs into the renderer", () => {
+    expect(
+      thinkingForHarness("claude", "claude-opus-4-8").map((item) => item.id),
+    ).toEqual(expect.arrayContaining(["low", "high", "xhigh", "max"]));
+    expect(
+      thinkingForHarness("claude", "claude-haiku-4-5-20251001").map(
+        (item) => item.id,
+      ),
+    ).toEqual(["low", "medium", "high"]);
+    expect(
+      thinkingForHarness("codex", "gpt-5.6-sol").map((item) => item.id),
+    ).toEqual(
       expect.arrayContaining(["none", "high", "xhigh", "max", "ultra"]),
     );
-    expect(thinkingForHarness("codex", "gpt-5.3-codex").map((item) => item.id)).not.toContain("ultra");
+    expect(
+      thinkingForHarness("codex", "gpt-5.3-codex").map((item) => item.id),
+    ).not.toContain("ultra");
     expect(thinkingForHarness("gemini", "gemini-2.5-pro")).toEqual([]);
     expect(harnessHasFastToggle("codex")).toBe(true);
     expect(harnessHasFastToggle("codex-acp")).toBe(true);
@@ -231,7 +408,10 @@ describe("agent creation studio helpers", () => {
   });
 
   it("toggles Codex Fast on and off", () => {
-    const on = applyDraftFastChange({ ...EMPTY_AGENT_DRAFT, harness: "codex" }, true);
+    const on = applyDraftFastChange(
+      { ...EMPTY_AGENT_DRAFT, harness: "codex" },
+      true,
+    );
     expect(on.speed).toBe(CODEX_FAST_SPEED);
     expect(applyDraftFastChange(on, false).speed).toBe("");
   });
@@ -242,7 +422,11 @@ describe("agent creation studio helpers", () => {
     expect(parseToolAccess("bypass")).toBe("auto");
     expect(parseToolAccess("full-access")).toBe("auto");
     const store = memoryStore();
-    writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "助手", toolAccess: "full_access" }, store);
+    writeManualDraft(
+      "ws",
+      { ...EMPTY_AGENT_DRAFT, name: "助手", toolAccess: "full_access" },
+      store,
+    );
     expect(readManualDraft("ws", store)?.toolAccess).toBe("full_access");
   });
 
@@ -267,6 +451,8 @@ describe("agent creation studio helpers", () => {
     ];
     expect(harnessIdsMatch("claude-acp", "claude")).toBe(true);
     expect(catalogItemForHarness(catalog, "claude-acp")?.id).toBe("claude");
-    expect(pickerRuntimes(catalog, "claude-acp").map((item) => item.id)).toEqual(["claude", "made-up-acp"]);
+    expect(
+      pickerRuntimes(catalog, "claude-acp").map((item) => item.id),
+    ).toEqual(["claude", "made-up-acp"]);
   });
 });
