@@ -8,7 +8,8 @@ use coordy_protocol::{CoordyError, HarnessEvent};
 use serde_json::Value;
 
 use crate::protocol::{
-    append_cli_args, native_launch_args, protocol_family, resolve_builtin_bin, ProtocolFamily,
+    append_cli_args, native_launch_args, parse_tool_access, protocol_family, resolve_builtin_bin,
+    ProtocolFamily,
 };
 use crate::{parse_codex_jsonl_line, SecretEnv};
 
@@ -35,7 +36,7 @@ pub fn spawn_native_session(
     let bin = resolve_builtin_bin(kind)
         .ok_or_else(|| CoordyError::unavailable(format!("{kind} is not installed")))?;
     let mut args = native_launch_args(family, prompt, model, thinking, speed, tool_access);
-    append_cli_args(family, &mut args, cli_args);
+    append_cli_args(family, parse_tool_access(tool_access), &mut args, cli_args)?;
     let mut cmd = Command::new(&bin);
     cmd.args(args)
         .current_dir(if worktree.is_empty() { "." } else { worktree })

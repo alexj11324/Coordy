@@ -14,6 +14,7 @@ import {
   harnessHasFastToggle,
   modelsForHarness,
   modelSelectValue,
+  parseToolAccess,
   thinkingForHarness,
 } from "../lib/coordy/agent-draft";
 import {
@@ -197,6 +198,9 @@ describe("agent creation studio helpers", () => {
 
   it("defaults tool access to Auto and keeps Full Access on a saved draft", () => {
     expect(EMPTY_AGENT_DRAFT.toolAccess).toBe("auto");
+    expect(parseToolAccess("full_access")).toBe("full_access");
+    expect(parseToolAccess("bypass")).toBe("auto");
+    expect(parseToolAccess("full-access")).toBe("auto");
     const store = memoryStore();
     writeManualDraft("ws", { ...EMPTY_AGENT_DRAFT, name: "助手", toolAccess: "full_access" }, store);
     expect(readManualDraft("ws", store)?.toolAccess).toBe("full_access");

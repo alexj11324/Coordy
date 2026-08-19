@@ -2,6 +2,7 @@
 //! headless interface; ACP is only used for the demo stub and ACP-registry agents.
 
 use crate::which_bin;
+use coordy_protocol::CoordyError;
 
 /// How Coordy talks to a discovered harness.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,7 +132,7 @@ pub enum ToolAccess {
 
 pub fn parse_tool_access(value: &str) -> ToolAccess {
     match value.trim() {
-        "full_access" | "full-access" | "bypass" => ToolAccess::FullAccess,
+        "full_access" => ToolAccess::FullAccess,
         _ => ToolAccess::Auto,
     }
 }
@@ -150,17 +151,13 @@ fn unattended_auto_approve_args(
         (ProtocolFamily::Codex, ToolAccess::Auto) => &[
             "--sandbox",
             "workspace-write",
-            "--ask-for-approval",
-            "never",
+            "--approve-for-me",
             "-c",
             "sandbox_workspace_write.network_access=true",
         ],
-        (ProtocolFamily::Codex, ToolAccess::FullAccess) => &[
-            "--sandbox",
-            "danger-full-access",
-            "--ask-for-approval",
-            "never",
-        ],
+        (ProtocolFamily::Codex, ToolAccess::FullAccess) => {
+            &["--dangerously-bypass-approvals-and-sandbox"]
+        }
         (ProtocolFamily::Copilot, ToolAccess::FullAccess) => &["--allow-all"],
         (ProtocolFamily::OpenCode, ToolAccess::FullAccess) => &["--dangerously-skip-permissions"],
         (ProtocolFamily::Cursor, ToolAccess::FullAccess) => &["--trust"],
@@ -292,15 +289,92 @@ pub fn native_launch_args(
     }
 }
 
-pub fn append_cli_args(family: ProtocolFamily, args: &mut Vec<String>, extra_cli: &str) {
+pub fn append_cli_args(
+    family: ProtocolFamily,
+    access: ToolAccess,
+    args: &mut Vec<String>,
+    extra_cli: &str,
+) -> Result<(), CoordyError> {
     if family.uses_acp() {
-        return;
+        return Ok(());
     }
-    for token in extra_cli.split_whitespace() {
+    let tokens: Vec<&str> = extra_cli.split_whitespace().collect();
+    if access == ToolAccess::Auto {
+        for (index, token) in tokens.iter().enumerate() {
+            let denied = match family {
+                ProtocolFamily::Codex => {
+                    flag_is(token, "--dangerously-bypass-approvals-and-sandbox")
+                        || flag_is(token, "--approve-for-me")
+                        || flag_is(token, "--ask-for-approval")
+                        || flag_is(token, "--sandbox")
+                        || flag_is(token, "--full-auto")
+                        || flag_is(token, "--cd")
+                        || flag_is(token, "--add-dir")
+                        || flag_is(token, "--profile")
+                        || short_option_is(token, "-s")
+                        || short_option_is(token, "-a")
+                        || short_option_is(token, "-C")
+                        || short_option_is(token, "-p")
+                        || codex_config_overrides_access(token, tokens.get(index + 1).copied())
+                }
+                ProtocolFamily::Claude => {
+                    flag_is(token, "--permission-mode")
+                        || flag_is(token, "--dangerously-skip-permissions")
+                        || flag_is(token, "--allow-dangerously-skip-permissions")
+                }
+                ProtocolFamily::Gemini => {
+                    flag_is(token, "--yolo") || flag_is(token, "--approval-mode") || *token == "-y"
+                }
+                ProtocolFamily::Copilot => flag_is(token, "--allow-all"),
+                ProtocolFamily::OpenCode => flag_is(token, "--dangerously-skip-permissions"),
+                ProtocolFamily::Cursor => flag_is(token, "--trust"),
+                ProtocolFamily::Acp | ProtocolFamily::Stub => false,
+            };
+            if denied {
+                return Err(CoordyError::invalid(format!(
+                    "cli_args cannot override {family:?} tool access while tool_access is auto: {token}"
+                )));
+            }
+        }
+    }
+    for token in tokens {
         if !token.is_empty() {
             args.push(token.to_string());
         }
     }
+    Ok(())
+}
+
+fn flag_is(token: &str, flag: &str) -> bool {
+    token == flag
+        || token
+            .strip_prefix(flag)
+            .is_some_and(|rest| rest.starts_with('='))
+}
+
+fn short_option_is(token: &str, flag: &str) -> bool {
+    token == flag
+        || token
+            .strip_prefix(flag)
+            .is_some_and(|rest| !rest.is_empty())
+}
+
+fn codex_config_overrides_access(token: &str, next: Option<&str>) -> bool {
+    let value = if token == "-c" || token == "--config" {
+        next
+    } else {
+        token.strip_prefix("--config=").or_else(|| {
+            token
+                .strip_prefix("-c")
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| rest.strip_prefix('=').unwrap_or(rest))
+        })
+    };
+    let Some(key) = value.and_then(|value| value.split('=').next()) else {
+        return false;
+    };
+    let key = key.trim().to_ascii_lowercase();
+    key.contains("sandbox") || key.contains("approval")
 }
 
 pub fn resolve_builtin_bin(kind: &str) -> Option<std::path::PathBuf> {

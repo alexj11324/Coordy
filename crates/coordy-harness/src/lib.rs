@@ -93,7 +93,7 @@ pub fn spawn_command(
     let mut cmd = std::process::Command::new(bin);
     cmd.current_dir(worktree);
     let mut args = native_launch_args(family, prompt, model, thinking, speed, tool_access);
-    crate::protocol::append_cli_args(family, &mut args, cli_args);
+    crate::protocol::append_cli_args(family, parse_tool_access(tool_access), &mut args, cli_args)?;
     cmd.args(args);
     Ok(cmd)
 }

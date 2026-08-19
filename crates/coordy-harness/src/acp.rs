@@ -315,7 +315,10 @@ fn handle_agent_request<W: Write>(
     match method {
         "fs/read_text_file" => {
             let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            let resolved = resolve_under_cwd(cwd, path);
+            let resolved = match resolve_fs_path(cwd, path, access, false) {
+                Ok(path) => path,
+                Err(message) => return write_error(writer, &id, &message),
+            };
             match std::fs::read_to_string(&resolved) {
                 Ok(content) => write_result(writer, &id, json!({ "content": content })),
                 Err(e) => write_error(writer, &id, &e.to_string()),
@@ -324,10 +327,10 @@ fn handle_agent_request<W: Write>(
         "fs/write_text_file" => {
             let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let content = params.get("content").and_then(|v| v.as_str()).unwrap_or("");
-            let resolved = resolve_under_cwd(cwd, path);
-            if !resolved.starts_with(cwd) {
-                return write_error(writer, &id, "write outside worktree is not allowed");
-            }
+            let resolved = match resolve_fs_path(cwd, path, access, true) {
+                Ok(path) => path,
+                Err(message) => return write_error(writer, &id, &message),
+            };
             if let Some(parent) = resolved.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -339,12 +342,11 @@ fn handle_agent_request<W: Write>(
             write_result(writer, &id, json!({}))
         }
         "session/request_permission" => {
-            let option_id = acp_auto_approve_option_id(&params, access);
-            write_result(
-                writer,
-                &id,
-                json!({ "outcome": { "outcome": "selected", "optionId": option_id } }),
-            )
+            let outcome = match acp_auto_approve_option_id(&params, access) {
+                Some(option_id) => json!({ "outcome": "selected", "optionId": option_id }),
+                None => json!({ "outcome": "cancelled" }),
+            };
+            write_result(writer, &id, json!({ "outcome": outcome }))
         }
         _ => write_error(writer, &id, &format!("unsupported method {method}")),
     }
@@ -352,53 +354,104 @@ fn handle_agent_request<W: Write>(
 
 /// Pick an offered allow option so ACP agents do not stall waiting for a human.
 /// Auto prefers a one-shot grant. Full Access prefers a lasting grant.
-fn acp_auto_approve_option_id(params: &Value, access: ToolAccess) -> String {
-    let ids: Vec<String> = params
+fn acp_auto_approve_option_id(params: &Value, access: ToolAccess) -> Option<String> {
+    let options: Vec<(String, Option<String>)> = params
         .get("options")
         .and_then(|v| v.as_array())
         .into_iter()
         .flatten()
         .filter_map(|opt| {
-            opt.get("optionId")
+            let id = opt
+                .get("optionId")
                 .or_else(|| opt.get("option_id"))
                 .and_then(|v| v.as_str())
-                .map(str::to_string)
+                .map(str::to_string)?;
+            let kind = opt.get("kind").and_then(Value::as_str).map(str::to_string);
+            Some((id, kind))
         })
         .collect();
-    let preferred: &[&str] = match access {
-        ToolAccess::FullAccess => &[
-            "allow-always",
-            "allow_always",
-            "allow-session",
-            "allow_session",
-            "allow-once",
-            "allow_once",
-        ],
-        ToolAccess::Auto => &["allow-once", "allow_once", "allow-session", "allow_session"],
+    let preferred_kinds: &[&str] = match access {
+        ToolAccess::FullAccess => &["allow_always", "allow_once"],
+        ToolAccess::Auto => &["allow_once"],
     };
-    for want in preferred {
-        if let Some(id) = ids.iter().find(|id| id.eq_ignore_ascii_case(want)) {
-            return id.clone();
+    for want in preferred_kinds {
+        if let Some((id, _)) = options
+            .iter()
+            .find(|(_, kind)| kind.as_deref() == Some(*want))
+        {
+            return Some(id.clone());
         }
     }
-    if let Some(id) = ids.iter().find(|id| {
-        let lower = id.to_ascii_lowercase();
-        lower.starts_with("allow") || lower.contains("approve") || lower == "accept"
-    }) {
-        return id.clone();
-    }
-    ids.into_iter()
-        .next()
-        .unwrap_or_else(|| "allow-once".into())
+    options
+        .into_iter()
+        .find(|(_, kind)| matches!(kind.as_deref(), Some("reject_once" | "reject_always")))
+        .map(|(id, _)| id)
 }
 
-fn resolve_under_cwd(cwd: &Path, path: &str) -> PathBuf {
-    let p = PathBuf::from(path);
-    if p.is_absolute() {
-        p
-    } else {
-        cwd.join(p)
+fn resolve_fs_path(
+    cwd: &Path,
+    path: &str,
+    access: ToolAccess,
+    for_write: bool,
+) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("file path is required".into());
     }
+    let p = PathBuf::from(path);
+    let candidate = if p.is_absolute() { p } else { cwd.join(p) };
+    if access == ToolAccess::FullAccess {
+        return Ok(candidate);
+    }
+
+    let workspace = std::fs::canonicalize(cwd)
+        .map_err(|_| "cannot resolve the worktree for Auto access".to_string())?;
+    let candidate = lexical_normalize(&candidate);
+    let resolved = if for_write && !candidate.exists() {
+        let mut existing = candidate.as_path();
+        let mut missing = Vec::new();
+        loop {
+            match std::fs::symlink_metadata(existing) {
+                Ok(_) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    let Some(name) = existing.file_name() else {
+                        return Err("cannot resolve file path".into());
+                    };
+                    missing.push(name.to_os_string());
+                    let Some(parent) = existing.parent() else {
+                        return Err("cannot resolve file path".into());
+                    };
+                    existing = parent;
+                }
+                Err(_) => return Err("cannot resolve file path".into()),
+            }
+        }
+        let mut resolved =
+            std::fs::canonicalize(existing).map_err(|_| "cannot resolve file path".to_string())?;
+        for part in missing.into_iter().rev() {
+            resolved.push(part);
+        }
+        resolved
+    } else {
+        std::fs::canonicalize(&candidate).map_err(|_| "cannot resolve file path".to_string())?
+    };
+    if !resolved.starts_with(&workspace) {
+        return Err("Auto access cannot read or write outside the worktree".into());
+    }
+    Ok(resolved)
+}
+
+fn lexical_normalize(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 /// Test helper: a tiny ACP agent that answers initialize / session/new / session/prompt.
@@ -470,45 +523,194 @@ pub fn serve_fake_acp<R: Read, W: Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::acp_auto_approve_option_id;
+    use super::{acp_auto_approve_option_id, handle_agent_request};
     use crate::protocol::ToolAccess;
     use serde_json::json;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn full_access_prefers_allow_always_auto_keeps_once() {
         let params = json!({
             "options": [
-                { "optionId": "reject" },
-                { "optionId": "allow-once" },
-                { "optionId": "allow-always" }
+                { "optionId": "persistent-grant-7", "kind": "allow_always" },
+                { "optionId": "reject-9", "kind": "reject_once" },
+                { "optionId": "single-grant-4", "kind": "allow_once" }
             ]
         });
         assert_eq!(
             acp_auto_approve_option_id(&params, ToolAccess::FullAccess),
-            "allow-always"
+            Some("persistent-grant-7".into())
         );
         assert_eq!(
             acp_auto_approve_option_id(&params, ToolAccess::Auto),
-            "allow-once"
+            Some("single-grant-4".into())
         );
     }
 
     #[test]
-    fn falls_back_to_allow_once_then_first_id() {
-        let once = json!({ "options": [{ "optionId": "allow-once" }, { "optionId": "reject" }] });
+    fn falls_back_to_offered_rejection_and_cancels_when_empty() {
+        let once = json!({
+            "options": [
+                { "optionId": "single", "kind": "allow_once" },
+                { "optionId": "reject", "kind": "reject_once" }
+            ]
+        });
         assert_eq!(
             acp_auto_approve_option_id(&once, ToolAccess::Auto),
-            "allow-once"
+            Some("single".into())
         );
-        let only_reject = json!({ "options": [{ "optionId": "reject" }] });
+        let only_reject = json!({
+            "options": [{ "optionId": "reject", "kind": "reject_once" }]
+        });
         assert_eq!(
             acp_auto_approve_option_id(&only_reject, ToolAccess::Auto),
-            "reject"
+            Some("reject".into())
+        );
+        let persistent_only = json!({
+            "options": [{ "optionId": "persistent", "kind": "allow_always" }]
+        });
+        assert_eq!(
+            acp_auto_approve_option_id(&persistent_only, ToolAccess::Auto),
+            None
+        );
+        assert_eq!(
+            acp_auto_approve_option_id(&persistent_only, ToolAccess::FullAccess),
+            Some("persistent".into())
         );
         let empty = json!({});
+        assert_eq!(acp_auto_approve_option_id(&empty, ToolAccess::Auto), None);
+    }
+
+    #[test]
+    fn auto_file_access_stays_in_worktree_while_full_access_can_leave() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("coordy-acp-access-{suffix}"));
+        let cwd = root.join("worktree");
+        std::fs::create_dir_all(&cwd).unwrap();
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+
+        let read = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "fs/read_text_file",
+            "params": { "path": "../outside.txt" }
+        });
+        let mut auto_reply = Vec::new();
+        handle_agent_request(&mut auto_reply, &read, &cwd, ToolAccess::Auto, &mut |_| {}).unwrap();
+        assert!(String::from_utf8(auto_reply)
+            .unwrap()
+            .contains("outside the worktree"));
+
+        let mut full_reply = Vec::new();
+        handle_agent_request(
+            &mut full_reply,
+            &read,
+            &cwd,
+            ToolAccess::FullAccess,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert!(String::from_utf8(full_reply).unwrap().contains("secret"));
+
+        let write = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "fs/write_text_file",
+            "params": { "path": "../created.txt", "content": "created" }
+        });
+        let mut auto_reply = Vec::new();
+        handle_agent_request(&mut auto_reply, &write, &cwd, ToolAccess::Auto, &mut |_| {}).unwrap();
+        assert!(!root.join("created.txt").exists());
+
+        let inside_write = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "fs/write_text_file",
+            "params": { "path": "nested/new.txt", "content": "inside" }
+        });
+        let mut inside_reply = Vec::new();
+        handle_agent_request(
+            &mut inside_reply,
+            &inside_write,
+            &cwd,
+            ToolAccess::Auto,
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(
-            acp_auto_approve_option_id(&empty, ToolAccess::Auto),
-            "allow-once"
+            std::fs::read_to_string(cwd.join("nested/new.txt")).unwrap(),
+            "inside"
         );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let dangling_target = root.join("missing-target.txt");
+            symlink(&dangling_target, cwd.join("dangling.txt")).unwrap();
+            let dangling_write = json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "fs/write_text_file",
+                "params": { "path": "dangling.txt", "content": "escape" }
+            });
+            let mut reply = Vec::new();
+            handle_agent_request(
+                &mut reply,
+                &dangling_write,
+                &cwd,
+                ToolAccess::Auto,
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(String::from_utf8(reply)
+                .unwrap()
+                .contains("cannot resolve file path"));
+            assert!(!dangling_target.exists());
+
+            let outside_dir = root.join("outside-dir");
+            std::fs::create_dir_all(&outside_dir).unwrap();
+            symlink(&outside_dir, cwd.join("outside-link")).unwrap();
+            symlink(cwd.join("outside-link"), cwd.join("link-chain")).unwrap();
+            let chain_write = json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "fs/write_text_file",
+                "params": { "path": "link-chain/escaped.txt", "content": "escape" }
+            });
+            let mut reply = Vec::new();
+            handle_agent_request(
+                &mut reply,
+                &chain_write,
+                &cwd,
+                ToolAccess::Auto,
+                &mut |_| {},
+            )
+            .unwrap();
+            assert!(String::from_utf8(reply)
+                .unwrap()
+                .contains("outside the worktree"));
+            assert!(!outside_dir.join("escaped.txt").exists());
+        }
+
+        let mut full_reply = Vec::new();
+        handle_agent_request(
+            &mut full_reply,
+            &write,
+            &cwd,
+            ToolAccess::FullAccess,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("created.txt")).unwrap(),
+            "created"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

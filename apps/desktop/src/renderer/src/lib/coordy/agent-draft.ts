@@ -43,7 +43,7 @@ export function emptyAgentDraft(): AgentDraft {
 }
 
 export function parseToolAccess(value: unknown): ToolAccess {
-  return value === "full_access" || value === "full-access" ? "full_access" : "auto";
+  return value === "full_access" ? "full_access" : "auto";
 }
 
 export type BuilderMessage = {

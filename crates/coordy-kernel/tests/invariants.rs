@@ -2649,6 +2649,66 @@ fn tool_access_defaults_to_auto_and_full_access_reaches_spawn() {
 }
 
 #[test]
+fn invalid_agent_fields_do_not_partially_update_agent() {
+    let (kernel, _ports, workspace_id, principal_id, agent_id) = live_fixture();
+
+    let invalid_update = |name: Option<&str>,
+                          harness: Option<&str>,
+                          access: Option<&str>,
+                          tool_access: Option<&str>| {
+        Command::UpdateAgent {
+            agent_id: agent_id.clone(),
+            name: name.map(str::to_string),
+            description: Some("也不应保存".into()),
+            instructions: None,
+            harness: harness.map(str::to_string),
+            avatar: None,
+            model: None,
+            thinking: None,
+            speed: None,
+            access: access.map(str::to_string),
+            access_member_ids: None,
+            concurrency_limit: None,
+            cli_args: None,
+            tool_access: tool_access.map(str::to_string),
+            mcp_servers: None,
+        }
+    };
+    for command in [
+        invalid_update(Some(""), None, None, None),
+        invalid_update(Some("不应保存"), Some("  "), None, None),
+        invalid_update(Some("不应保存"), None, Some("public"), None),
+        invalid_update(Some("不应保存"), None, None, Some("yolo")),
+    ] {
+        let err = kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: principal_id.clone(),
+                },
+                command,
+            ))
+            .unwrap_err();
+        assert_eq!(err.code, "invalid");
+    }
+
+    let View::Agents { items } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Agents { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    let agent = items.iter().find(|item| item.id == agent_id).unwrap();
+    assert_eq!(agent.name, "执行者");
+    assert!(agent.description.is_empty());
+    assert_eq!(agent.harness, "claude");
+    assert_eq!(agent.access, "owner");
+    assert_eq!(agent.tool_access, "auto");
+}
+
+#[test]
 fn sweep_automations_arms_then_fires_after_interval() {
     let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
     kernel

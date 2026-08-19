@@ -1,5 +1,6 @@
 use coordy_harness::{
-    canonical_harness_id, display_args, native_launch_args, protocol_family, ProtocolFamily,
+    canonical_harness_id, display_args, native_launch_args, parse_tool_access, protocol_family,
+    ProtocolFamily, ToolAccess,
 };
 
 fn launch(
@@ -14,6 +15,21 @@ fn launch(
 
 fn launch_full(family: ProtocolFamily, prompt: &str) -> Vec<String> {
     native_launch_args(family, prompt, "", "", "", "full_access")
+}
+
+#[test]
+fn tool_access_fails_closed_for_noncanonical_values() {
+    assert_eq!(parse_tool_access("full_access"), ToolAccess::FullAccess);
+    for value in [
+        "",
+        "auto",
+        "full-access",
+        "bypass",
+        "FULL_ACCESS",
+        "unknown",
+    ] {
+        assert_eq!(parse_tool_access(value), ToolAccess::Auto, "{value}");
+    }
 }
 
 #[test]
@@ -105,13 +121,16 @@ fn auto_keeps_safety_checks_full_access_skips_them() {
     assert!(codex_auto
         .windows(2)
         .any(|w| w == ["--sandbox", "workspace-write"]));
+    assert!(codex_auto.iter().any(|a| a == "--approve-for-me"));
     assert!(codex_auto.iter().any(|a| a.contains("network_access=true")));
     assert!(!codex_auto.iter().any(|a| a == "danger-full-access"));
+    assert!(!codex_auto.iter().any(|a| a == "--ask-for-approval"));
 
     let codex_full = launch_full(ProtocolFamily::Codex, "review this");
     assert!(codex_full
-        .windows(2)
-        .any(|w| w == ["--sandbox", "danger-full-access"]));
+        .iter()
+        .any(|a| a == "--dangerously-bypass-approvals-and-sandbox"));
+    assert!(!codex_full.iter().any(|a| a == "--ask-for-approval"));
     assert_eq!(codex_full.last().map(String::as_str), Some("review this"));
 
     let gemini_auto = launch(ProtocolFamily::Gemini, "review this", "", "", "");
@@ -214,10 +233,88 @@ fn native_launch_args_inject_vendor_thinking_and_speed_tokens() {
 #[test]
 fn native_launch_args_append_cli_args_except_acp() {
     let mut claude = launch(ProtocolFamily::Claude, "review this", "", "", "");
-    coordy_harness::append_cli_args(ProtocolFamily::Claude, &mut claude, "--foo bar");
+    coordy_harness::append_cli_args(
+        ProtocolFamily::Claude,
+        ToolAccess::Auto,
+        &mut claude,
+        "--foo bar",
+    )
+    .unwrap();
     assert!(claude.windows(2).any(|w| w == ["--foo", "bar"]));
 
     let mut acp = launch(ProtocolFamily::Acp, "review this", "", "", "");
-    coordy_harness::append_cli_args(ProtocolFamily::Acp, &mut acp, "--foo bar");
+    coordy_harness::append_cli_args(ProtocolFamily::Acp, ToolAccess::Auto, &mut acp, "--foo bar")
+        .unwrap();
     assert!(acp.is_empty());
+}
+
+#[test]
+fn auto_cli_args_cannot_override_provider_tool_access() {
+    let denied = [
+        (
+            ProtocolFamily::Codex,
+            "--dangerously-bypass-approvals-and-sandbox",
+        ),
+        (ProtocolFamily::Codex, "--sandbox=danger-full-access"),
+        (ProtocolFamily::Codex, "-s=danger-full-access"),
+        (ProtocolFamily::Codex, "-sdanger-full-access"),
+        (ProtocolFamily::Codex, "-a=never"),
+        (ProtocolFamily::Codex, "-anever"),
+        (ProtocolFamily::Codex, "-c approval_policy=never"),
+        (ProtocolFamily::Codex, "-capproval_policy=never"),
+        (ProtocolFamily::Codex, "-c=sandbox=\"danger-full-access\""),
+        (
+            ProtocolFamily::Codex,
+            "--config=sandbox=\"danger-full-access\"",
+        ),
+        (ProtocolFamily::Codex, "--cd /tmp/outside"),
+        (ProtocolFamily::Codex, "--cd=/tmp/outside"),
+        (ProtocolFamily::Codex, "-C /tmp/outside"),
+        (ProtocolFamily::Codex, "-C=/tmp/outside"),
+        (ProtocolFamily::Codex, "-C/tmp/outside"),
+        (ProtocolFamily::Codex, "--add-dir /tmp/outside"),
+        (ProtocolFamily::Codex, "--add-dir=/tmp/outside"),
+        (ProtocolFamily::Codex, "--profile unsafe"),
+        (ProtocolFamily::Codex, "--profile=unsafe"),
+        (ProtocolFamily::Codex, "-punsafe"),
+        (
+            ProtocolFamily::Claude,
+            "--permission-mode bypassPermissions",
+        ),
+        (ProtocolFamily::Claude, "--dangerously-skip-permissions"),
+        (ProtocolFamily::Gemini, "--yolo"),
+        (ProtocolFamily::Gemini, "--approval-mode yolo"),
+        (ProtocolFamily::Copilot, "--allow-all"),
+        (ProtocolFamily::OpenCode, "--dangerously-skip-permissions"),
+        (ProtocolFamily::Cursor, "--trust"),
+    ];
+    for (family, cli_args) in denied {
+        let mut args = launch(family, "review this", "", "", "");
+        let err = coordy_harness::append_cli_args(family, ToolAccess::Auto, &mut args, cli_args)
+            .unwrap_err();
+        assert_eq!(err.code, "invalid", "{family:?}: {cli_args}");
+    }
+
+    let mut benign = launch(ProtocolFamily::Codex, "review this", "", "", "");
+    coordy_harness::append_cli_args(
+        ProtocolFamily::Codex,
+        ToolAccess::Auto,
+        &mut benign,
+        "--ephemeral --color never -cservice_tier=fast",
+    )
+    .unwrap();
+    assert!(benign.iter().any(|arg| arg == "--ephemeral"));
+    assert!(benign.iter().any(|arg| arg == "-cservice_tier=fast"));
+
+    let mut full = launch_full(ProtocolFamily::Claude, "review this");
+    coordy_harness::append_cli_args(
+        ProtocolFamily::Claude,
+        ToolAccess::FullAccess,
+        &mut full,
+        "--dangerously-skip-permissions",
+    )
+    .unwrap();
+    assert!(full
+        .iter()
+        .any(|arg| arg == "--dangerously-skip-permissions"));
 }

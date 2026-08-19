@@ -561,13 +561,45 @@ impl Kernel {
                 if agent.archived {
                     return Err(CoordyError::invalid("archived agents cannot be updated"));
                 }
-                if let Some(name) = name {
-                    let name = normalize_agent_name(&name)?;
-                    if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
-                        return Err(CoordyError::invalid(
-                            "agent name must be unique in this workspace",
-                        ));
+                // Normalize every fallible field before the first mutation so an
+                // invalid combined update cannot leave unaudited partial state.
+                let name = match name {
+                    Some(name) => {
+                        let name = normalize_agent_name(&name)?;
+                        if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
+                            return Err(CoordyError::invalid(
+                                "agent name must be unique in this workspace",
+                            ));
+                        }
+                        Some(name)
                     }
+                    None => None,
+                };
+                let harness = match harness {
+                    Some(harness) => {
+                        let harness = harness.trim();
+                        if harness.is_empty() {
+                            return Err(CoordyError::invalid("runtime is required"));
+                        }
+                        Some(harness.to_string())
+                    }
+                    None => None,
+                };
+                let access = match access {
+                    Some(access)
+                        if matches!(access.as_str(), "owner" | "workspace" | "members") =>
+                    {
+                        Some(access)
+                    }
+                    Some(_) => return Err(CoordyError::invalid("unknown access")),
+                    None => None,
+                };
+                let tool_access = tool_access
+                    .as_deref()
+                    .map(normalize_tool_access)
+                    .transpose()?;
+
+                if let Some(name) = name {
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.name = name;
                     }
@@ -583,12 +615,8 @@ impl Kernel {
                     }
                 }
                 if let Some(harness) = harness {
-                    let harness = harness.trim();
-                    if harness.is_empty() {
-                        return Err(CoordyError::invalid("runtime is required"));
-                    }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
-                        row.harness = harness.to_string();
+                        row.harness = harness;
                     }
                 }
                 if let Some(avatar) = avatar {
@@ -612,9 +640,6 @@ impl Kernel {
                     }
                 }
                 if let Some(access) = access {
-                    if !matches!(access.as_str(), "owner" | "workspace" | "members") {
-                        return Err(CoordyError::invalid("unknown access"));
-                    }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.access = access;
                     }
@@ -636,7 +661,6 @@ impl Kernel {
                     }
                 }
                 if let Some(tool_access) = tool_access {
-                    let tool_access = normalize_tool_access(&tool_access)?;
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.tool_access = tool_access;
                     }
