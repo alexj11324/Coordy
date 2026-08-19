@@ -4,9 +4,10 @@ use coordy_kernel::{
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GithubPullRequestItem, GithubSync,
-    GraphEdgeKind, GraphEdgeState, HarnessEvent, NodeKind, Query, RunSource, View,
+    GraphEdgeKind, GraphEdgeState, HarnessEvent, NodeKind, Query, RunRole, RunSource, View,
     STALE_DEPENDENCY_REASON,
 };
+use std::sync::Arc;
 
 fn daemon() -> Actor {
     Actor::Daemon
@@ -1795,6 +1796,577 @@ fn graph_evaluation_ready_set_only_includes_upstream() {
         }
         other => panic!("expected graph evaluation, got {other:?}"),
     }
+}
+
+fn complete_session(h: &Harness, run_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: run_id.into(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: "acp".into(),
+                    output: "end_turn".into(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+}
+
+fn graph_execute_runs(h: &Harness) -> Vec<coordy_protocol::RunView> {
+    alice_runs(h)
+        .into_iter()
+        .filter(|run| run.trigger == "graph_execute")
+        .collect()
+}
+
+#[test]
+fn graph_scheduler_starts_only_ready_upstream_when_both_assigned() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let started = graph_execute_runs(&h);
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].task_id, producer);
+    assert_eq!(started[0].role, RunRole::Executor);
+    assert!(!started.iter().any(|run| run.task_id == consumer));
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == producer)
+            .count(),
+        1
+    );
+    assert!(!world
+        .node_attempts
+        .iter()
+        .any(|attempt| attempt.node_id == consumer));
+}
+
+#[test]
+fn graph_scheduler_opens_downstream_once_after_upstream_session() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+    complete_session(&h, &producer_run.id);
+    let consumer_runs: Vec<_> = graph_execute_runs(&h)
+        .into_iter()
+        .filter(|run| run.task_id == consumer)
+        .collect();
+    assert_eq!(consumer_runs.len(), 1);
+    assert_eq!(consumer_runs[0].role, RunRole::Executor);
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == consumer)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn graph_scheduler_does_not_leave_running_run_after_spawn_failure() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    let failing = Harness {
+        kernel: Kernel::with_world(
+            h.kernel.export_world(),
+            Arc::new(NoopPorts),
+            Arc::new(DeterministicAdvisor),
+        ),
+        workspace_id: h.workspace_id.clone(),
+        alice: h.alice.clone(),
+        bob: h.bob.clone(),
+        a1: h.a1.clone(),
+        a2: h.a2.clone(),
+    };
+
+    assign_a1(&failing, &producer);
+    let first = graph_execute_runs(&failing);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].status, "failed");
+    assert!(failing
+        .kernel
+        .export_world()
+        .node_attempts
+        .iter()
+        .any(|attempt| {
+            attempt.run_id.as_deref() == Some(first[0].id.as_str())
+                && attempt.lease_status == "failed"
+        }));
+
+    failing
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&failing),
+            Command::RetryRun {
+                run_id: first[0].id.clone(),
+            },
+        ))
+        .unwrap_err();
+    let second = graph_execute_runs(&failing);
+    let all_runs: Vec<_> = alice_runs(&failing)
+        .into_iter()
+        .filter(|run| run.task_id == producer)
+        .collect();
+    assert_eq!(second.len(), 1, "retry uses the explicit retry trigger");
+    assert_eq!(all_runs.len(), 2, "a failed spawn must remain retryable");
+    assert!(second.iter().all(|run| run.status == "failed"));
+    assert!(all_runs.iter().all(|run| run.status == "failed"));
+    let retry_run = all_runs
+        .iter()
+        .find(|run| run.trigger == "retry")
+        .expect("failed retry run remains auditable");
+    assert!(failing
+        .kernel
+        .export_world()
+        .node_attempts
+        .iter()
+        .any(|attempt| {
+            attempt.run_id.as_deref() == Some(retry_run.id.as_str())
+                && attempt.lease_status == "failed"
+        }));
+    let duplicate = failing.kernel.submit_sync(cmd(
+        alice_actor(&failing),
+        Command::RetryRun {
+            run_id: first[0].id.clone(),
+        },
+    ));
+    assert_eq!(duplicate.unwrap_err().code, "invalid");
+    assert_eq!(
+        alice_runs(&failing)
+            .iter()
+            .filter(|run| run.task_id == producer)
+            .count(),
+        2,
+        "retrying an older attempt must fail before spawning"
+    );
+}
+
+#[test]
+fn graph_scheduler_skips_ready_node_without_executor() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+    complete_session(&h, &producer_run.id);
+    assert!(!graph_execute_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer));
+    assert!(!h
+        .kernel
+        .export_world()
+        .node_attempts
+        .iter()
+        .any(|attempt| attempt.node_id == consumer));
+}
+
+#[test]
+fn graph_scheduler_replay_from_world_does_not_add_attempts() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let before = h.kernel.export_world();
+    let attempt_count = before.node_attempts.len();
+    h.kernel.replace_world(before.clone());
+    assign_a1(&h, &producer);
+    let after = h.kernel.export_world();
+    assert_eq!(after.node_attempts.len(), attempt_count);
+    assert_eq!(
+        after
+            .runs
+            .iter()
+            .filter(|run| run.trigger == "graph_execute")
+            .count(),
+        before
+            .runs
+            .iter()
+            .filter(|run| run.trigger == "graph_execute")
+            .count()
+    );
+}
+
+#[test]
+fn graph_scheduler_writes_executor_role_even_when_agent_is_named_conductor() {
+    let h = setup();
+    let conductor_id = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CreateAgent {
+                workspace_id: h.workspace_id.clone(),
+                principal_id: h.alice.clone(),
+                name: "conductor".into(),
+                harness: "jsonl".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: producer.clone(),
+                agent_id: conductor_id.clone(),
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    let attempt = world
+        .node_attempts
+        .iter()
+        .find(|attempt| attempt.node_id == producer)
+        .expect("attempt");
+    assert_eq!(attempt.role, RunRole::Executor);
+    let run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("run");
+    assert_eq!(run.role, RunRole::Executor);
+    assert_eq!(run.trigger, "graph_execute");
+    assert_eq!(run.agent_id, conductor_id);
+}
+
+#[test]
+fn conductor_scheduler_waits_for_upstream_and_records_node_attempts() {
+    let h = setup();
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+
+    let runs = alice_runs(&h);
+    let producer_run = runs
+        .iter()
+        .find(|run| run.task_id == producer && run.status == "running")
+        .expect("producer run");
+    assert_eq!(producer_run.trigger, "graph");
+    assert!(!runs
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == producer)
+            .count(),
+        1
+    );
+    assert!(!world
+        .node_attempts
+        .iter()
+        .any(|attempt| attempt.node_id == consumer));
+
+    ingest_session_ok(&h, &producer_run.id);
+    let world = h.kernel.export_world();
+    assert!(alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
+    assert_eq!(
+        world
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == consumer)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn public_start_run_spawn_failure_releases_agent_capacity() {
+    let h = setup();
+    let task_id = issue_title(&h, "manual run");
+    assign_a1(&h, &task_id);
+    let failing = Harness {
+        kernel: Kernel::with_world(
+            h.kernel.export_world(),
+            Arc::new(NoopPorts),
+            Arc::new(DeterministicAdvisor),
+        ),
+        workspace_id: h.workspace_id.clone(),
+        alice: h.alice.clone(),
+        bob: h.bob.clone(),
+        a1: h.a1.clone(),
+        a2: h.a2.clone(),
+    };
+
+    let start = || {
+        failing.kernel.submit_sync(cmd(
+            alice_actor(&failing),
+            Command::StartRun {
+                task_id: task_id.clone(),
+                source: RunSource::Acp {
+                    prompt: "run".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: "issue".into(),
+            },
+        ))
+    };
+    assert!(start().is_err());
+    let first = alice_runs(&failing)
+        .into_iter()
+        .find(|run| run.task_id == task_id)
+        .expect("failed run is retained for audit");
+    assert_eq!(first.status, "failed");
+    assert_eq!(first.queue_status, "failed");
+
+    assert!(start().is_err());
+    let runs: Vec<_> = alice_runs(&failing)
+        .into_iter()
+        .filter(|run| run.task_id == task_id)
+        .collect();
+    assert_eq!(runs.len(), 2, "a failed spawn must not consume capacity");
+    assert!(runs.iter().all(|run| run.status == "failed"));
+}
+
+#[test]
+fn failed_graph_attempt_waits_for_explicit_retry_and_binds_the_retry() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: producer_run.id.clone(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: "acp".into(),
+                    output: "failed".into(),
+                    exit_code: Some(1),
+                },
+            },
+        ))
+        .unwrap();
+    let after_failure = alice_runs(&h);
+    assert_eq!(
+        after_failure
+            .iter()
+            .filter(|run| run.task_id == producer)
+            .count(),
+        1,
+        "a failed fingerprint must not restart automatically"
+    );
+    assert!(!after_failure
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
+    let world = h.kernel.export_world();
+    let failed_attempt = world
+        .node_attempts
+        .iter()
+        .find(|attempt| attempt.run_id.as_deref() == Some(producer_run.id.as_str()))
+        .expect("failed attempt remains auditable");
+    assert_eq!(failed_attempt.lease_status, "failed");
+
+    let retry = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::RetryRun {
+                run_id: producer_run.id.clone(),
+            },
+        ))
+        .unwrap();
+    let retry_id = retry.ids["run_id"].as_str().unwrap().to_string();
+    let world = h.kernel.export_world();
+    let retry_attempt = world
+        .node_attempts
+        .iter()
+        .find(|attempt| attempt.run_id.as_deref() == Some(retry_id.as_str()))
+        .expect("retry attempt is bound");
+    assert_eq!(retry_attempt.lease_status, "running");
+    for duplicate_id in [&producer_run.id, &retry_id] {
+        let duplicate = h.kernel.submit_sync(cmd(
+            alice_actor(&h),
+            Command::RetryRun {
+                run_id: duplicate_id.clone(),
+            },
+        ));
+        assert_eq!(duplicate.unwrap_err().code, "invalid");
+    }
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == producer)
+            .count(),
+        2,
+        "double retry must fail before spawning another run"
+    );
+
+    ingest_session_ok(&h, &retry_id);
+    let runs = alice_runs(&h);
+    assert_eq!(
+        runs.iter()
+            .filter(|run| run.task_id == producer && run.trigger == "graph_execute")
+            .count(),
+        1,
+        "retry success must not launch a duplicate graph execution"
+    );
+    assert!(runs
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
+    let world = h.kernel.export_world();
+    assert!(world.node_attempts.iter().any(|attempt| {
+        attempt.run_id.as_deref() == Some(retry_id.as_str()) && attempt.lease_status == "succeeded"
+    }));
+}
+
+#[test]
+fn running_graph_attempt_cannot_be_retried() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    let run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("running graph run");
+
+    let retry = h.kernel.submit_sync(cmd(
+        alice_actor(&h),
+        Command::RetryRun {
+            run_id: run.id.clone(),
+        },
+    ));
+    assert_eq!(retry.unwrap_err().code, "invalid");
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|candidate| candidate.task_id == producer)
+            .count(),
+        1
+    );
+    assert_eq!(
+        h.kernel
+            .export_world()
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == producer)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn cancelled_graph_attempt_waits_for_explicit_retry() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CancelRun {
+                run_id: producer_run.id.clone(),
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert!(world.node_attempts.iter().any(|attempt| {
+        attempt.run_id.as_deref() == Some(producer_run.id.as_str())
+            && attempt.lease_status == "cancelled"
+    }));
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == producer)
+            .count(),
+        1
+    );
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
+
+    let retry = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::RetryRun {
+                run_id: producer_run.id,
+            },
+        ))
+        .unwrap();
+    let retry_id = retry.ids["run_id"].as_str().unwrap();
+    assert!(h.kernel.export_world().node_attempts.iter().any(|attempt| {
+        attempt.run_id.as_deref() == Some(retry_id) && attempt.lease_status == "running"
+    }));
 }
 
 #[test]
@@ -4289,6 +4861,11 @@ fn conductor_reviews_stale_edge_then_reaffirm_starts_executor() {
     bind_demo_repo(&h);
     create_worktree(&h, &producer);
     let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.trigger == "graph")
+        .expect("producer run")
+        .id;
     let executor_before = alice_runs(&h)
         .into_iter()
         .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
@@ -4332,23 +4909,24 @@ fn conductor_reviews_stale_edge_then_reaffirm_starts_executor() {
         .iter()
         .any(|dep| dep.id == dep_id && dep.valid));
     let after_reaffirm = alice_runs(&h);
-    assert!(
-        after_reaffirm.iter().any(|run| {
-            run.task_id == consumer
-                && run.agent_id == h.a1
-                && run.trigger == "graph"
-                && run.status == "running"
-        }),
-        "REAFFIRM must start the consumer assignee with a replan graph run"
-    );
-    assert!(
+    assert_eq!(
         after_reaffirm
+            .iter()
+            .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+            .count(),
+        executor_before,
+        "REAFFIRM cannot bypass an unfinished producer"
+    );
+    ingest_session_ok(&h, &producer_run);
+    let after_success = alice_runs(&h);
+    assert!(
+        after_success
             .iter()
             .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
             .count()
             > executor_before
     );
-    let executor_run = after_reaffirm
+    let executor_run = after_success
         .iter()
         .find(|run| {
             run.task_id == consumer
@@ -4369,12 +4947,7 @@ fn conductor_reviews_stale_edge_then_reaffirm_starts_executor() {
     else {
         panic!("run detail");
     };
-    assert!(
-        events
-            .iter()
-            .any(|event| event.payload.contains("重规划") && event.payload.contains("user:")),
-        "executor prompt must be a replan, not the previous loop"
-    );
+    assert!(events.iter().any(|event| event.payload.contains("user:")));
 }
 
 #[test]
@@ -4457,12 +5030,6 @@ fn conductor_session_complete_starts_green_successor() {
         .find(|run| run.task_id == producer && run.trigger == "graph")
         .expect("producer run")
         .id;
-    let consumer_run = alice_runs(&h)
-        .into_iter()
-        .find(|run| run.task_id == consumer && run.trigger == "graph")
-        .expect("consumer run")
-        .id;
-    ingest_session_ok(&h, &consumer_run);
     assert_eq!(
         alice_runs(&h)
             .iter()
@@ -4477,7 +5044,6 @@ fn conductor_session_complete_starts_green_successor() {
                 && run.agent_id == h.a1
                 && run.trigger == "graph"
                 && run.status == "running"
-                && run.id != consumer_run
         }),
         "successful producer session must start a still-green successor"
     );
@@ -4565,20 +5131,28 @@ fn public_start_run_cannot_spoof_an_internal_graph_review() {
             principal_id: h.alice.clone(),
         },
     ] {
-        let error = h
-            .kernel
-            .submit_sync(cmd(
-                actor,
-                Command::StartRun {
-                    task_id: consumer.clone(),
-                    source: spoofed_source(),
-                    agent_id: Some(h.a2.clone()),
-                    chat_id: None,
-                    trigger: "graph_review".into(),
-                },
-            ))
-            .unwrap_err();
-        assert_eq!(error.code, "invalid");
+        for trigger in [
+            "graph",
+            "graph_execute",
+            "graph_validate",
+            "graph_resume",
+            "graph_review",
+        ] {
+            let error = h
+                .kernel
+                .submit_sync(cmd(
+                    actor.clone(),
+                    Command::StartRun {
+                        task_id: consumer.clone(),
+                        source: spoofed_source(),
+                        agent_id: Some(h.a2.clone()),
+                        chat_id: None,
+                        trigger: trigger.into(),
+                    },
+                ))
+                .unwrap_err();
+            assert_eq!(error.code, "invalid", "trigger {trigger}");
+        }
     }
 
     assert!(alice_deps(&h)
@@ -4671,6 +5245,11 @@ fn conductor_review_cannot_reaffirm_a_newer_dependency_generation() {
     bind_demo_repo(&h);
     create_worktree(&h, &producer);
     let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.trigger == "graph")
+        .expect("producer run")
+        .id;
 
     h.kernel
         .submit_sync(cmd(
@@ -4743,6 +5322,15 @@ fn conductor_review_cannot_reaffirm_a_newer_dependency_generation() {
     assert!(alice_deps(&h)
         .iter()
         .any(|dep| dep.id == dep_id && dep.valid));
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer && run.agent_id == h.a1)
+            .count(),
+        executor_runs_before,
+        "reaffirming an edge must not bypass its unfinished producer"
+    );
+    ingest_session_ok(&h, &producer_run);
     assert!(
         alice_runs(&h)
             .iter()
@@ -4766,12 +5354,6 @@ fn missing_session_exit_code_does_not_start_a_successor() {
         .find(|run| run.task_id == producer && run.trigger == "graph")
         .expect("producer run")
         .id;
-    let consumer_run = alice_runs(&h)
-        .into_iter()
-        .find(|run| run.task_id == consumer && run.trigger == "graph")
-        .expect("consumer run")
-        .id;
-    ingest_session_ok(&h, &consumer_run);
 
     h.kernel
         .submit_sync(cmd(
@@ -4788,9 +5370,9 @@ fn missing_session_exit_code_does_not_start_a_successor() {
         ))
         .unwrap();
 
-    assert!(!alice_runs(&h).iter().any(|run| {
-        run.task_id == consumer && run.status == "running" && run.id != consumer_run
-    }));
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
 }
 
 #[test]
@@ -4939,12 +5521,9 @@ fn late_or_duplicate_terminal_events_do_not_dispatch_successors() {
         .find(|run| run.task_id == producer && run.trigger == "graph")
         .expect("producer run")
         .id;
-    let initial_consumer = alice_runs(&h)
-        .into_iter()
-        .find(|run| run.task_id == consumer && run.trigger == "graph")
-        .expect("consumer run")
-        .id;
-    ingest_session_ok(&h, &initial_consumer);
+    assert!(!alice_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer && run.status == "running"));
     ingest_session_ok(&h, &producer_run);
     let successor = alice_runs(&h)
         .into_iter()
@@ -5079,6 +5658,92 @@ fn graph_reconcile_retries_capacity_blocked_sibling_and_review() {
     assert!(alice_runs(&h)
         .iter()
         .any(|run| run.task_id == consumer && run.trigger == "graph_review"));
+}
+
+#[test]
+fn declared_graph_retries_new_generation_after_completed_run_and_capacity_release() {
+    let h = setup();
+    update_agent_cli_and_limit(&h.kernel, &h.alice, &h.a1, None, Some(1));
+    set_conductor(&h, &h.a2);
+    let producer = issue_title(&h, "generation producer");
+    let consumer = issue_title(&h, "generation consumer");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    assign_a1(&h, &consumer);
+
+    let producer_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer && run.status == "running")
+        .expect("producer run");
+    ingest_session_ok(&h, &producer_run.id);
+    let first_consumer = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer && run.status == "running")
+        .expect("first consumer generation");
+    ingest_session_ok(&h, &first_consumer.id);
+
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer.clone(),
+                patch: "new producer generation".into(),
+            },
+        ))
+        .unwrap();
+    let review = alice_runs(&h)
+        .into_iter()
+        .find(|run| {
+            run.task_id == consumer && run.trigger == "graph_review" && run.status == "running"
+        })
+        .expect("generation review");
+
+    let occupying = issue_title(&h, "capacity holder");
+    assign_a1(&h, &occupying);
+    let occupying_run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == occupying && run.status == "running")
+        .expect("capacity holder run");
+    ingest_assistant(&h, &review.id, &format!("REAFFIRM: {dep_id}"));
+    assert!(h
+        .kernel
+        .export_world()
+        .node_attempts
+        .iter()
+        .any(|attempt| { attempt.node_id == consumer && attempt.lease_status == "paused" }));
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer)
+            .count(),
+        2,
+        "review must not count as a new executor generation"
+    );
+
+    ingest_session_ok(&h, &occupying_run.id);
+    let consumer_runs: Vec<_> = alice_runs(&h)
+        .into_iter()
+        .filter(|run| run.task_id == consumer && run.trigger == "graph")
+        .collect();
+    assert_eq!(consumer_runs.len(), 2);
+    assert!(consumer_runs
+        .iter()
+        .any(|run| run.id != first_consumer.id && run.status == "running"));
+    let fingerprints: std::collections::HashSet<_> = h
+        .kernel
+        .export_world()
+        .node_attempts
+        .into_iter()
+        .filter(|attempt| attempt.node_id == consumer)
+        .map(|attempt| attempt.input_fingerprint)
+        .collect();
+    assert_eq!(
+        fingerprints.len(),
+        2,
+        "new edge generation needs a new attempt"
+    );
 }
 
 #[test]
@@ -5370,7 +6035,7 @@ fn completed_review_reconciles_waiting_reviews_and_reaffirmed_execution() {
         .submit_sync(cmd(
             alice_actor(&same_agent),
             Command::ApplyPatch {
-                task_id: producer,
+                task_id: producer.clone(),
                 patch: "change".into(),
             },
         ))
@@ -5381,6 +6046,19 @@ fn completed_review_reconciles_waiting_reviews_and_reaffirmed_execution() {
         .find(|run| run.task_id == consumer && run.trigger == "graph_review")
         .expect("same-agent review");
     ingest_assistant(&same_agent, &review.id, &format!("REAFFIRM: {dep_id}"));
+    assert!(!alice_runs(&same_agent)
+        .iter()
+        .any(|run| run.task_id == consumer && run.trigger == "graph"));
+    same_agent
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&same_agent),
+            Command::SetTaskStatus {
+                task_id: producer,
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
     assert!(!alice_runs(&same_agent)
         .iter()
         .any(|run| run.task_id == consumer && run.trigger == "graph"));

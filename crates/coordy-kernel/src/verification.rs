@@ -249,6 +249,7 @@ pub fn invalidate_dependencies(
     }
     consumers.sort();
     consumers.dedup();
+    crate::graph::schedule::fence_attempts(world, &consumers);
     for task_id in &consumers {
         crate::product::apply_stale_dependency_hold(world, task_id);
         crate::product::stale_done_materialization(world, task_id);

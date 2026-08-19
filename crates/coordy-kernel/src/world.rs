@@ -75,6 +75,10 @@ pub struct World {
     pub graph_events: Vec<GraphEvent>,
     #[serde(default)]
     pub graph_revision: u64,
+    #[serde(default)]
+    pub graph_runs: Vec<GraphRun>,
+    #[serde(default)]
+    pub node_attempts: Vec<NodeAttempt>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -396,6 +400,26 @@ pub struct NodeMaterialization {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GraphRun {
+    pub id: String,
+    pub workspace_id: String,
+    pub revision: u64,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NodeAttempt {
+    pub id: String,
+    pub graph_run_id: String,
+    pub workspace_id: String,
+    pub node_id: String,
+    pub role: coordy_protocol::RunRole,
+    pub input_fingerprint: String,
+    pub lease_status: String,
+    pub run_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GraphEvent {
     pub id: String,
     pub workspace_id: String,
@@ -446,6 +470,8 @@ pub struct Run {
     pub trigger: String,
     #[serde(default)]
     pub prompt: String,
+    #[serde(default)]
+    pub role: coordy_protocol::RunRole,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

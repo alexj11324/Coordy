@@ -103,6 +103,16 @@ pub enum GraphEdgeKind {
     Authority,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RunRole {
+    #[default]
+    Executor,
+    Validator,
+    ConductorReview,
+    HumanApproval,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphEdgeState {
@@ -1120,6 +1130,8 @@ pub struct RunView {
     pub chat_id: Option<String>,
     #[serde(default)]
     pub trigger: String,
+    #[serde(default)]
+    pub role: RunRole,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

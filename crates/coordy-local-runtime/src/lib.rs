@@ -43,7 +43,10 @@ impl Runtime {
             .map_err(|e| CoordyError::unavailable(format!("data dir: {e}")))?;
         let db_path = data_dir.join("coordy.sqlite");
         let store = SqliteStore::open(&db_path)?;
-        let world = store.load()?;
+        let mut world = store.load()?;
+        if interrupt_orphaned_executions(&mut world) {
+            store.save(&world)?;
+        }
         let secrets = SecretStore::open(data_dir);
         let env = secrets.env();
         let advisor: Arc<dyn Advisor> = Arc::new(LlmAdvisor::from_key(env.api_key, env.base_url));
@@ -152,6 +155,101 @@ impl Runtime {
             actor: Actor::Daemon,
             command: crate::github::collect(repo.as_deref()).into_command(workspace_id),
         })
+    }
+}
+
+fn interrupt_orphaned_executions(world: &mut coordy_kernel::World) -> bool {
+    let mut changed = false;
+    for run in &mut world.runs {
+        if run.status == "running" {
+            run.status = "interrupted".into();
+            run.queue_status = "interrupted".into();
+            changed = true;
+        }
+    }
+    for attempt in &mut world.node_attempts {
+        if matches!(attempt.lease_status.as_str(), "claimed" | "running") {
+            attempt.lease_status = "interrupted".into();
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use coordy_kernel::World;
+    use serde_json::json;
+
+    #[test]
+    fn open_interrupts_and_persists_orphaned_execution_state() {
+        let dir = std::env::temp_dir().join(format!(
+            "coordy-interrupted-recovery-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("coordy.sqlite");
+        let store = SqliteStore::open(&db_path).unwrap();
+        let mut encoded = serde_json::to_value(World::default()).unwrap();
+        encoded["runs"] = json!([{
+            "id": "run-orphan",
+            "workspace_id": "ws-1",
+            "task_id": "task-1",
+            "agent_id": "agent-1",
+            "status": "running",
+            "harness": "claude",
+            "compaction_count": 0,
+            "after_compaction": false,
+            "queue_status": "dispatched",
+            "retry_count": 0,
+            "chat_id": null,
+            "trigger": "graph_execute",
+            "prompt": "continue",
+            "role": "executor"
+        }]);
+        encoded["node_attempts"] = json!([
+            {
+                "id": "attempt-bound",
+                "graph_run_id": "graph-run-1",
+                "workspace_id": "ws-1",
+                "node_id": "task-1",
+                "role": "executor",
+                "input_fingerprint": "fp-bound",
+                "lease_status": "running",
+                "run_id": "run-orphan"
+            },
+            {
+                "id": "attempt-unbound",
+                "graph_run_id": "graph-run-1",
+                "workspace_id": "ws-1",
+                "node_id": "task-2",
+                "role": "executor",
+                "input_fingerprint": "fp-unbound",
+                "lease_status": "claimed",
+                "run_id": null
+            }
+        ]);
+        let world: World = serde_json::from_value(encoded).unwrap();
+        store.save(&world).unwrap();
+        drop(store);
+
+        let runtime = Runtime::open(&dir, &dir.join("unused.sock"), "tok".into()).unwrap();
+        let recovered = runtime.kernel.export_world();
+        assert_eq!(recovered.runs[0].status, "interrupted");
+        assert_eq!(recovered.runs[0].queue_status, "interrupted");
+        assert!(recovered
+            .node_attempts
+            .iter()
+            .all(|attempt| attempt.lease_status == "interrupted"));
+
+        let persisted = SqliteStore::open(&db_path).unwrap().load().unwrap();
+        assert_eq!(persisted.runs[0].status, "interrupted");
+        assert!(persisted
+            .node_attempts
+            .iter()
+            .all(|attempt| attempt.lease_status == "interrupted"));
     }
 }
 

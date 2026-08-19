@@ -1,5 +1,7 @@
 //! Pure graph evaluator. No world lock, no harness spawn.
 
+pub mod schedule;
+
 use std::collections::{HashMap, HashSet};
 
 use coordy_protocol::{
@@ -585,6 +587,18 @@ pub fn state_from_world(world: &World, workspace_id: &str) -> GraphState {
             .insert(row.node.id.clone(), row.clone());
     }
     state.artifacts = world.node_artifacts.clone();
+    for attempt in world
+        .node_attempts
+        .iter()
+        .filter(|attempt| attempt.workspace_id == workspace_id)
+    {
+        if matches!(
+            attempt.lease_status.as_str(),
+            "pending" | "claimed" | "running"
+        ) {
+            state.inflight.insert(attempt.node_id.clone());
+        }
+    }
     let done_ids: Vec<String> = state
         .nodes
         .values()
