@@ -2,7 +2,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { openTerminalAt, terminalLaunchSpec } from "../terminal-launch";
+import {
+  openTerminalAt,
+  spawnTerminal,
+  terminalLaunchSpec,
+} from "../terminal-launch";
 
 const tempDirs: string[] = [];
 
@@ -34,7 +38,9 @@ describe("terminal launch boundary", () => {
     tempDirs.push(dir);
     const launch = vi
       .fn()
-      .mockRejectedValueOnce(Object.assign(new Error("missing"), { code: "ENOENT" }))
+      .mockRejectedValueOnce(
+        Object.assign(new Error("missing"), { code: "ENOENT" }),
+      )
       .mockResolvedValueOnce(undefined);
 
     await openTerminalAt(dir, "win32", launch);
@@ -48,6 +54,26 @@ describe("terminal launch boundary", () => {
       shell: false,
     });
   });
+
+  it("rejects a launcher that exits immediately with a nonzero status", async () => {
+    await expect(
+      spawnTerminal(process.execPath, ["-e", "process.exit(17)"], {
+        cwd: undefined,
+        shell: false,
+      }),
+    ).rejects.toThrow("code 17");
+  });
+
+  if (process.platform !== "win32") {
+    it("rejects a launcher that exits immediately from a signal", async () => {
+      await expect(
+        spawnTerminal("/bin/sh", ["-c", 'kill -TERM "$$"'], {
+          cwd: undefined,
+          shell: false,
+        }),
+      ).rejects.toThrow("SIGTERM");
+    });
+  }
 
   it("validates an absolute existing directory and launches without a shell", async () => {
     const dir = mkdtempSync(join(tmpdir(), "coordy $() `literal`; "));

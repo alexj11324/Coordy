@@ -28,6 +28,7 @@ const daemon = new DaemonManager({
   binaryPath: daemonBinaryPath,
 });
 let effectTimer: ReturnType<typeof setInterval> | null = null;
+let initialized = false;
 const cleanup = createIdempotentCleanup(() => {
   if (effectTimer) {
     clearInterval(effectTimer);
@@ -103,6 +104,7 @@ function createWindow() {
 registerAppLifecycle({
   app,
   platform: process.platform,
+  initialized: () => initialized,
   windowCount: () => BrowserWindow.getAllWindows().length,
   createWindow,
   cleanup,
@@ -125,9 +127,10 @@ app
         cliPath: cliBinaryPath(),
         hostname: hostname(),
       }),
-      chooseRepository: () => dialog.showOpenDialog({
-        properties: ["openDirectory"],
-      }),
+      chooseRepository: () =>
+        dialog.showOpenDialog({
+          properties: ["openDirectory"],
+        }),
       revealFile: (path) => shell.showItemInFolder(path),
       openTerminal: openTerminalAt,
       listDirectory,
@@ -136,6 +139,7 @@ app
       discoverHarnessModels,
       quit: () => app.quit(),
     });
+    initialized = true;
     createWindow();
     const poll = createEffectPoller({
       client: () => daemon.effectClient,

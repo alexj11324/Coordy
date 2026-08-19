@@ -28,6 +28,7 @@ describe("desktop app lifecycle", () => {
     registerAppLifecycle({
       app: fixture.app,
       platform: "darwin",
+      initialized: () => true,
       windowCount: () => windows,
       createWindow,
       cleanup: vi.fn(),
@@ -41,11 +42,33 @@ describe("desktop app lifecycle", () => {
     expect(fixture.app.quit).not.toHaveBeenCalled();
   });
 
+  it("does not create a macOS window before daemon and IPC initialization", () => {
+    const fixture = fakeApp();
+    const createWindow = vi.fn();
+    let initialized = false;
+    registerAppLifecycle({
+      app: fixture.app,
+      platform: "darwin",
+      initialized: () => initialized,
+      windowCount: () => 0,
+      createWindow,
+      cleanup: vi.fn(),
+    });
+
+    fixture.emit("activate");
+    expect(createWindow).not.toHaveBeenCalled();
+
+    initialized = true;
+    fixture.emit("activate");
+    expect(createWindow).toHaveBeenCalledTimes(1);
+  });
+
   it("quits on last-window-close outside macOS", () => {
     const fixture = fakeApp();
     registerAppLifecycle({
       app: fixture.app,
       platform: "linux",
+      initialized: () => false,
       windowCount: () => 0,
       createWindow: vi.fn(),
       cleanup: vi.fn(),
@@ -63,6 +86,7 @@ describe("desktop app lifecycle", () => {
     registerAppLifecycle({
       app: fixture.app,
       platform: "darwin",
+      initialized: () => true,
       windowCount: () => 0,
       createWindow: vi.fn(),
       cleanup,

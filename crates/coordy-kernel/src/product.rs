@@ -1943,6 +1943,12 @@ pub fn chat_message_view(message: &ChatMessage) -> ChatMessageView {
 }
 
 pub fn stats_view(world: &World, workspace_id: &str) -> StatsView {
+    let chat_task_ids = world
+        .chats
+        .iter()
+        .filter(|chat| chat.workspace_id == workspace_id)
+        .filter_map(|chat| chat.task_id.as_deref())
+        .collect::<std::collections::HashSet<_>>();
     let issues = world
         .tasks
         .iter()
@@ -1950,7 +1956,7 @@ pub fn stats_view(world: &World, workspace_id: &str) -> StatsView {
             t.workspace_id == workspace_id
                 && !t.deleted
                 && t.stage != "chat"
-                && !t.labels.iter().any(|label| label == "chat")
+                && !chat_task_ids.contains(t.id.as_str())
         })
         .collect::<Vec<_>>();
     StatsView {
