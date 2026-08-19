@@ -84,13 +84,13 @@ describe("board view helpers", () => {
     ).toBe("claude");
   });
 
-  it("only offers installed tools as selectable harnesses", () => {
+  it("offers installed and on-demand registry tools as selectable harnesses", () => {
     expect(
       selectableRuntimes([
         { id: "claude", name: "Claude Code", installed: true, command: "claude -p --output-format stream-json", source: "path" },
         { id: "made-up", name: "Made Up", installed: false, command: "npx -y made-up", source: "registry" },
       ]).map((item) => item.id),
-    ).toEqual(["claude"]);
+    ).toEqual(["claude", "made-up"]);
     expect(
       pickerRuntimes(
         [

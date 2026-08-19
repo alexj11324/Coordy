@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~34 | Active |
+| `journal-1.md` | ~56 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -30,6 +30,7 @@
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
 | 1 | 2026-08-19 | Conversation-driven task decomposition | `1dfc366`, `8e938a8`, `dcc36dc`, `f47393d`, `5a3714a`, `d970df5`, `9832045` | `agent/conversation-task-decomposition` |
+| 2 | 2026-08-19 | Complete Multica agent runtime support | `e9ac82b` | `main` |
 <!-- @@@/auto:session-history -->
 
 ---

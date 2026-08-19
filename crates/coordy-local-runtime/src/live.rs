@@ -3,7 +3,8 @@ use std::sync::mpsc::Sender;
 use std::thread;
 
 use coordy_harness::{
-    kill_child, protocol_family, resolve_launch, spawn_acp_session, spawn_native_session, SecretEnv,
+    discover, kill_child, launch_uses_acp, resolve_launch, spawn_acp_session, spawn_native_session,
+    SecretEnv,
 };
 use coordy_kernel::Ports;
 use coordy_protocol::{CoordyError, HarnessEvent};
@@ -129,14 +130,17 @@ fn run_kind(
     registry_json: Option<&str>,
     emit: impl FnMut(HarnessEvent),
 ) -> Result<(), CoordyError> {
-    if protocol_family(kind).uses_acp() {
+    let catalog = discover(registry_json);
+    if launch_uses_acp(kind, &catalog) {
         let (bin, args) = resolve_launch(kind, secrets.acp_command.as_deref(), registry_json)?;
         return spawn_acp_session(
+            kind,
             &bin,
             &args,
             worktree,
             prompt,
             model,
+            thinking,
             secrets,
             tool_access,
             Some(run_id),

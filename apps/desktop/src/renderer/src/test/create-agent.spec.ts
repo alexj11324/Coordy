@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   applyBuilderTurn,
   applyDraftCompletion,
@@ -36,6 +38,8 @@ import {
   runtimeChipLabel,
   runtimeSubtitle,
 } from "../lib/coordy/labels";
+import { FIRST_CLASS_PROVIDER_IDS, firstClassIconSignature, registryIconUrl } from "../features/provider-logo";
+import { RuntimePicker } from "../features/runtime-picker";
 
 function session(partial: Partial<BuilderSession> & Pick<BuilderSession, "id">): BuilderSession {
   return {
@@ -149,13 +153,49 @@ describe("agent creation studio helpers", () => {
     expect(readManualDraft("ws", store)?.avatar).toBe("dicebear:bottts-neutral:审查员");
   });
 
-  it("labels a harness chip with the host OS and hides the binary path", () => {
+  it("shows only the harness identity in the picker", () => {
     expect(osShortLabel("darwin")).toBe("Mac");
-    expect(runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin")).toBe("Claude Code (Mac)");
-    expect(runtimeSubtitle({ command: "/usr/local/bin/claude -p --output-format stream-json" })).toBe("本机");
-    expect(runtimeSubtitle({ command: "claude -p", protocol_family: "claude" })).toBe("本机 · 原生 CLI");
-    expect(runtimeSubtitle({ command: "coordy acp-stub", protocol_family: "stub" })).toBe("本机 · ACP");
-    expect(runtimeSubtitle({ command: "npx -y made-up --acp", protocol_family: "acp" })).toBe("本机 · ACP");
+    expect(runtimeChipLabel({ id: "claude-acp", name: "Claude Code" }, "darwin")).toBe("Claude Code");
+    expect(runtimeSubtitle({ command: "claude -p", protocol_family: "claude" })).toBe("");
+  });
+
+  it("has a distinct local icon mapping for every first-class runtime", () => {
+    const expected = [
+      "antigravity", "claude", "codebuddy", "codex", "copilot", "cursor", "deveco", "dsh",
+      "gemini", "grok", "hermes", "kimi", "kiro", "mcode", "omp", "openclaw", "opencode",
+      "pi", "qoder", "qoderclicn", "qwen", "qwenpaw", "reasonix", "traecli",
+    ];
+    expect(FIRST_CLASS_PROVIDER_IDS).toHaveLength(24);
+    expect(new Set(FIRST_CLASS_PROVIDER_IDS).size).toBe(24);
+    expect([...FIRST_CLASS_PROVIDER_IDS].sort()).toEqual(expected);
+    const signatures = FIRST_CLASS_PROVIDER_IDS.map((id) => firstClassIconSignature(id));
+    expect(signatures.every(Boolean)).toBe(true);
+    expect(new Set(signatures).size).toBe(24);
+  });
+
+  it("keeps missing first-class runtimes visible while only ready and on-demand runtimes are selectable", () => {
+    const catalog = [
+      { id: "hermes", name: "Hermes Agent", installed: false, launch_state: "missing", command: "hermes acp", source: "builtin", protocol_family: "acp" },
+      { id: "grok", name: "Grok Build", installed: false, launch_state: "on_demand", command: "npx grok", source: "registry", protocol_family: "acp" },
+    ];
+    expect(pickerRuntimes(catalog).map((item) => item.id)).toEqual(["hermes", "grok"]);
+    const html = renderToStaticMarkup(createElement(RuntimePicker, {
+      items: catalog,
+      value: "grok",
+      onChange: () => undefined,
+    }));
+    expect(html).toContain("Hermes Agent");
+    expect(html).toContain("Grok Build");
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*Hermes Agent/);
+    expect(html).toContain("未安装");
+  });
+
+  it("builds registry icons only from a stable registry identity", () => {
+    expect(registryIconUrl("grok-build")).toBe(
+      "https://cdn.agentclientprotocol.com/registry/v1/latest/grok-build.svg",
+    );
+    expect(registryIconUrl("https://evil.example/icon.svg")).toBeNull();
+    expect(registryIconUrl("../escape")).toBeNull();
   });
 
   it("offers vendor model ids, thinking tokens, and Codex speed tiers", () => {
@@ -227,6 +267,6 @@ describe("agent creation studio helpers", () => {
     ];
     expect(harnessIdsMatch("claude-acp", "claude")).toBe(true);
     expect(catalogItemForHarness(catalog, "claude-acp")?.id).toBe("claude");
-    expect(pickerRuntimes(catalog, "claude-acp").map((item) => item.id)).toEqual(["claude"]);
+    expect(pickerRuntimes(catalog, "claude-acp").map((item) => item.id)).toEqual(["claude", "made-up-acp"]);
   });
 });

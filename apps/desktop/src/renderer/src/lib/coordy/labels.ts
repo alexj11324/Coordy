@@ -32,12 +32,20 @@ export function canonicalHarnessId(harness: string): string {
     case "claude_code":
     case "claude-code":
       return "claude";
+    case "codebuddy-code":
+      return "codebuddy";
     case "codex-acp":
       return "codex";
     case "github-copilot-cli":
       return "copilot";
     case "gemini-cli":
       return "gemini";
+    case "grok-build":
+      return "grok";
+    case "pi-acp":
+      return "pi";
+    case "qwen-code":
+      return "qwen";
     default:
       return harness;
   }
@@ -91,6 +99,42 @@ export function harnessLabel(harness: string): string {
       return "OpenCode";
     case "cursor":
       return "Cursor";
+    case "codebuddy":
+      return "CodeBuddy";
+    case "deveco":
+      return "DevEco Code";
+    case "openclaw":
+      return "OpenClaw";
+    case "hermes":
+      return "Hermes Agent";
+    case "pi":
+      return "Pi";
+    case "omp":
+      return "Oh My Pi";
+    case "kimi":
+      return "Kimi Code";
+    case "reasonix":
+      return "Reasonix";
+    case "dsh":
+      return "DeepSeek Harness";
+    case "kiro":
+      return "Kiro CLI";
+    case "antigravity":
+      return "Antigravity";
+    case "grok":
+      return "Grok Build";
+    case "qoder":
+      return "Qoder";
+    case "qoderclicn":
+      return "Qoder CLI CN";
+    case "traecli":
+      return "TRAE CLI";
+    case "qwen":
+      return "Qwen Code";
+    case "qwenpaw":
+      return "QwenPaw";
+    case "mcode":
+      return "MiniMax Code";
     case "coordy-stub":
       return "Coordy 演示";
     case "acp":
@@ -99,12 +143,6 @@ export function harnessLabel(harness: string): string {
     default:
       return harness;
   }
-}
-
-export function protocolFamilyLabel(family?: string | null): string {
-  if (family === "acp" || family === "stub") return "ACP";
-  if (family) return "原生 CLI";
-  return "";
 }
 
 export function agentDisplayName(
@@ -165,17 +203,27 @@ export function listableAgents(agents: AgentView[]): AgentView[] {
 }
 
 export function selectableRuntimes(catalog: DiscoveredAgentView[] | undefined): DiscoveredAgentView[] {
-  return (catalog ?? []).filter((item) => item.installed);
+  return (catalog ?? []).filter(runtimeIsLaunchable);
+}
+
+export function runtimeIsLaunchable(item: DiscoveredAgentView | undefined): boolean {
+  if (!item || item.launch_state === "missing") return false;
+  return (
+    item.installed ||
+    item.launch_state === "ready" ||
+    item.launch_state === "on_demand" ||
+    (item.source === "registry" && Boolean(item.command.trim()))
+  );
 }
 
 export function pickerRuntimes(
   catalog: DiscoveredAgentView[] | undefined,
   selectedId?: string,
 ): DiscoveredAgentView[] {
-  const installed = selectableRuntimes(catalog);
-  if (!selectedId || installed.some((item) => harnessIdsMatch(item.id, selectedId))) return installed;
+  const visible = catalog ?? [];
+  if (!selectedId || visible.some((item) => harnessIdsMatch(item.id, selectedId))) return visible;
   const extra = catalogItemForHarness(catalog, selectedId);
-  return extra ? [extra, ...installed] : installed;
+  return extra ? [extra, ...visible] : visible;
 }
 
 export function osShortLabel(os?: string | null): string {
@@ -185,16 +233,15 @@ export function osShortLabel(os?: string | null): string {
   return os?.trim() || "";
 }
 
-/** Chip / dropdown title: "Claude Code (Mac)". */
+/** Chip / dropdown title: provider identity only. */
 export function runtimeChipLabel(item: { id: string; name: string }, os?: string | null): string {
-  const host = osShortLabel(os);
-  const name = item.name.trim() || harnessLabel(item.id);
-  return host ? `${name} (${host})` : name;
+  void os;
+  return item.name.trim() || harnessLabel(item.id);
 }
 
 export function runtimeSubtitle(item?: { command?: string; protocol_family?: string | null }): string {
-  const family = protocolFamilyLabel(item?.protocol_family);
-  return family ? `本机 · ${family}` : "本机";
+  void item;
+  return "";
 }
 
 export function healthLabel(status: string): string {

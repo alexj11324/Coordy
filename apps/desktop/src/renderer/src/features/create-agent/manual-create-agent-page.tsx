@@ -8,7 +8,13 @@ import {
   readManualDraft,
   writeManualDraft,
 } from "../../lib/coordy/builder-sessions";
-import { catalogItemForHarness, harnessIdsMatch, pickerRuntimes, runtimeChipLabel } from "../../lib/coordy/labels";
+import {
+  catalogItemForHarness,
+  harnessIdsMatch,
+  pickerRuntimes,
+  runtimeChipLabel,
+  runtimeIsLaunchable,
+} from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
 import { AgentConfigurationPanel, CreateAgentFooter } from "./agent-create-form";
@@ -59,11 +65,15 @@ export function ManualCreateAgentPage() {
     if (store) writeManualDraft(workspaceId, draft, store);
   }, [draft, hydrated, workspaceId]);
 
-  const canCreate = draft.name.trim().length > 0 && Boolean(draft.harness) && !creating;
+  const canCreate = draft.name.trim().length > 0 && runtimeIsLaunchable(selected) && !creating;
 
   const create = async () => {
     if (!workspaceId || !principalId) {
       setFormError("工作区尚未就绪。");
+      return;
+    }
+    if (!runtimeIsLaunchable(selected)) {
+      setFormError("所选 harness 尚未安装，暂时不能创建智能体。");
       return;
     }
     setCreating(true);

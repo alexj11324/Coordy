@@ -19,14 +19,40 @@ fn claude_stream_json_assistant_text() {
 fn cursor_stream_json_tool_use() {
     let event = parse_native_line(
         ProtocolFamily::Cursor,
-        r#"{"type":"tool_call","name":"Read","input":{"path":"src/lib.rs"}}"#,
+        r#"{"type":"tool_call","subtype":"started","call_id":"call-1","tool_call":{"readToolCall":{"args":{"path":"src/lib.rs"}}}}"#,
     )
     .expect("parsed");
     assert!(matches!(
         event,
         HarnessEvent::Tool { name, input, .. }
-            if name == "Read" && input.contains("src/lib.rs")
+            if name == "read" && input.contains("src/lib.rs")
     ));
+}
+
+#[test]
+fn provider_specific_envelopes_map_without_generic_message_fallbacks() {
+    let copilot = parse_native_line(
+        ProtocolFamily::Copilot,
+        r#"{"type":"assistant.message","data":{"content":"copilot text"}}"#,
+    )
+    .expect("copilot dotted event");
+    assert!(matches!(copilot, HarnessEvent::Message { content, .. } if content == "copilot text"));
+
+    let opencode = parse_native_line(
+        ProtocolFamily::OpenCode,
+        r#"{"type":"text","part":{"text":"opencode text"}}"#,
+    )
+    .expect("opencode part");
+    assert!(
+        matches!(opencode, HarnessEvent::Message { content, .. } if content == "opencode text")
+    );
+
+    let pi = parse_native_line(
+        ProtocolFamily::Pi,
+        r#"{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"pi text"}}"#,
+    )
+    .expect("pi assistant message event");
+    assert!(matches!(pi, HarnessEvent::Message { content, .. } if content == "pi text"));
 }
 
 #[test]
