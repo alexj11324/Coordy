@@ -1811,6 +1811,23 @@ impl Kernel {
                 dependency_id,
                 expected_generation,
             } => {
+                let dependency = world
+                    .dependencies
+                    .iter()
+                    .find(|dep| dep.id == dependency_id)
+                    .cloned();
+                if dependency.as_ref().is_some_and(|dep| {
+                    dep.kind == GraphEdgeKind::Consumes
+                        && matches!(
+                            dep.state,
+                            coordy_protocol::GraphEdgeState::Stale
+                                | coordy_protocol::GraphEdgeState::PendingValidation
+                        )
+                }) {
+                    return Err(CoordyError::denied(
+                        "stale consumes dependency requires ValidationDecision",
+                    ));
+                }
                 let outcome = product::reaffirm_dependency(
                     &mut world,
                     &actor,
@@ -1828,11 +1845,24 @@ impl Kernel {
                 Ok(outcome)
             }
             Command::RemoveDependency { dependency_id } => {
-                let workspace_id = world
+                let dependency = world
                     .dependencies
                     .iter()
                     .find(|dep| dep.id == dependency_id)
-                    .map(|dep| dep.workspace_id.clone());
+                    .cloned();
+                if dependency.as_ref().is_some_and(|dep| {
+                    dep.kind == GraphEdgeKind::Consumes
+                        && matches!(
+                            dep.state,
+                            coordy_protocol::GraphEdgeState::Stale
+                                | coordy_protocol::GraphEdgeState::PendingValidation
+                        )
+                }) {
+                    return Err(CoordyError::denied(
+                        "stale consumes dependency requires ValidationDecision",
+                    ));
+                }
+                let workspace_id = dependency.map(|dep| dep.workspace_id);
                 let outcome = product::remove_dependency(&mut world, &actor, &dependency_id)?;
                 if let Some(workspace_id) = workspace_id {
                     self.reconcile_graph(&mut world, &workspace_id);
