@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/08-19-repair-runtime-agent-flows/prd.md","reason":"Frozen runtime and agent-flow requirements."}
+{"file":".trellis/tasks/08-19-repair-runtime-agent-flows/design.md","reason":"Readiness, atomicity, cache, and transport ownership."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/renderer-flow-audit.md","reason":"Renderer reproductions for runtime and agent creation."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/ipc-runtime-audit.md","reason":"Cross-layer runtime, cache, and model-discovery evidence."}
+{"file":".trellis/spec/backend/runtime-integration-contracts.md","reason":"Authoritative runtime contract."}

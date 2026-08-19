@@ -1,0 +1,4 @@
+{"file":".trellis/tasks/08-19-repair-desktop-ipc-lifecycle/prd.md","reason":"Frozen IPC and lifecycle requirements."}
+{"file":".trellis/tasks/08-19-repair-desktop-ipc-lifecycle/design.md","reason":"Process, socket, restart, and cleanup ownership."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/ipc-runtime-audit.md","reason":"Confirmed terminal, shared-socket, and daemon-recovery defects."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/test-flow-audit.md","reason":"Electron lifecycle and dev-entry evidence gaps."}

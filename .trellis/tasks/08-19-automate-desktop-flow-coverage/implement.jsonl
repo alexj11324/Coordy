@@ -1,0 +1,5 @@
+{"file":".trellis/tasks/08-19-automate-desktop-flow-coverage/prd.md","reason":"Frozen automation coverage requirements."}
+{"file":".trellis/tasks/08-19-automate-desktop-flow-coverage/design.md","reason":"Test layering and isolation design."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/test-flow-audit.md","reason":"Current evidence gaps and prioritized verification plan."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/renderer-flow-audit.md","reason":"Renderer journeys the new matrix must cover."}
+{"file":".trellis/tasks/08-19-audit-desktop-app-flows/research/ipc-runtime-audit.md","reason":"IPC/runtime boundaries the golden flow must cross."}

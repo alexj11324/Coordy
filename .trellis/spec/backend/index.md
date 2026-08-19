@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Coding Runtime Integrations](./runtime-integration-contracts.md) | Executable, discovery, protocol, permission, and fake-process contracts | Active |
+| [Desktop Flow Contracts](./desktop-flow-contracts.md) | Electron/daemon lifecycle, workspace-scoped mutations, and executable flow evidence | Active |
 
 ---
 
