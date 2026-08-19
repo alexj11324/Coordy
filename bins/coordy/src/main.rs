@@ -1,0 +1,86 @@
+use std::io::{stdin, stdout};
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use coordy_harness::{serve_fake_acp, ACP_STUB_REPLY};
+use coordy_local_runtime::{connect, default_paths, resolve_cli_socket};
+use coordy_protocol::{Actor, AuthenticatedCommand, AuthorizedQuery, Command, Query};
+
+#[derive(Parser)]
+#[command(name = "coordy", about = "Coordy CLI talking to coordyd")]
+struct Args {
+    #[arg(long)]
+    socket: Option<PathBuf>,
+    #[arg(long)]
+    token: Option<String>,
+    #[command(subcommand)]
+    command: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    Health,
+    Inspect,
+    Workspace {
+        #[arg(long)]
+        name: String,
+    },
+    /// Speak Agent Client Protocol on stdio. Used when no Codex/Claude ACP binary is installed.
+    AcpStub {
+        #[arg(long)]
+        reply: Option<String>,
+    },
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    if let Cmd::AcpStub { reply } = args.command {
+        let text = reply.unwrap_or_else(|| ACP_STUB_REPLY.to_string());
+        serve_fake_acp(stdin().lock(), stdout().lock(), &text).map_err(|e| anyhow::anyhow!(e))?;
+        return Ok(());
+    }
+    let (data, default_sock) = default_paths().map_err(|e| anyhow::anyhow!(e))?;
+    let socket = resolve_cli_socket(args.socket, &data, default_sock);
+    let token = match args.token {
+        Some(t) => t,
+        None => {
+            let path = socket
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("coordyd.token");
+            std::fs::read_to_string(path)?.trim().to_string()
+        }
+    };
+    let mut client = connect(&socket, &token)
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+    match args.command {
+        Cmd::Health => {
+            let resp = client.health().await.map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+        }
+        Cmd::Inspect => {
+            let resp = client
+                .view(AuthorizedQuery {
+                    actor: Actor::Daemon,
+                    query: Query::Workspaces,
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+        }
+        Cmd::Workspace { name } => {
+            let resp = client
+                .submit(AuthenticatedCommand {
+                    actor: Actor::Daemon,
+                    command: Command::CreateWorkspace { name },
+                })
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{}", serde_json::to_string_pretty(&resp)?);
+        }
+        Cmd::AcpStub { .. } => unreachable!("handled before connecting"),
+    }
+    Ok(())
+}

@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/coordy-protocol",
+    "crates/coordy-kernel",
+    "crates/coordy-local-runtime",
+    "crates/coordy-harness",
+    "crates/coordy-advisor",
+    "crates/coordy-control-plane",
+    "bins/coordyd",
+    "bins/coordy",
+    "bins/coordy-server",
+    "tools/xtask",
+]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Alex Jiang"]
+repository = "https://github.com/alexj11324/Coordy"
+
+[workspace.dependencies]
+coordy-protocol = { path = "crates/coordy-protocol" }
+coordy-kernel = { path = "crates/coordy-kernel" }
+coordy-local-runtime = { path = "crates/coordy-local-runtime" }
+coordy-harness = { path = "crates/coordy-harness" }
+coordy-advisor = { path = "crates/coordy-advisor" }
+coordy-control-plane = { path = "crates/coordy-control-plane" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+anyhow = "1"
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+futures-util = "0.3"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+tokio-stream = "0.1"

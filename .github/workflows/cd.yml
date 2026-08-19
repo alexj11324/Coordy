@@ -16,25 +16,41 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - name: Build Python distributions
+      - name: Build research Python distributions
+        working-directory: research/s0-validation
         run: |
           python -m pip install --upgrade pip build
           python -m build
       - name: Package local review UI
-        run: tar -czf "coordy-review-ui-${GITHUB_REF_NAME}.tar.gz" -C web incident-review
+        run: tar -czf "coordy-review-ui-${GITHUB_REF_NAME}.tar.gz" -C research/s0-validation/web incident-review
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - name: Build Rust binaries
+        run: cargo build --release -p coordyd -p coordy -p coordy-server
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: coordy-${{ github.ref_name }}
           path: |
-            dist/*
+            research/s0-validation/dist/*
             coordy-review-ui-${{ github.ref_name }}.tar.gz
+            target/release/coordyd
+            target/release/coordy
+            target/release/coordy-server
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            dist/* \
+            research/s0-validation/dist/* \
             "coordy-review-ui-${GITHUB_REF_NAME}.tar.gz" \
+            target/release/coordyd \
+            target/release/coordy \
+            target/release/coordy-server \
             --verify-tag \
             --generate-notes

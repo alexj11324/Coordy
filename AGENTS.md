@@ -1,36 +1,33 @@
 # Coordy implementation invariants
 
-- Treat `.local-specs/coordy-execution-agent-prompt.md`,
-  `.local-specs/coordy-validation-plan.md`, and the operator-supplied local
-  research report as execution context. `.local-specs/` is private and must
-  never be staged or committed.
-- S0a is deterministic evidence infrastructure only. Rules may parse events,
-  enumerate opportunities, verify tool facts, and rank candidates; they may
-  not infer state loss, causality, failure type, or prevalence.
-- S0b semantic grading must cover every compaction opportunity with an
-  outcome-blinded State Diff. Stronger causal judges run only after state
-  grading and may count an engineering consequence only from program-verified
-  Git/test/tool/patch/replay evidence.
-- Machine judges produce prelabels, not ground truth. Independent judging,
-  evidence-ID validation, readable human calibration, and fail-closed artifact
-  lineage are required before any Screening decision.
-- Keep original Codex history read-only. Persist only redacted excerpts, hashed
-  identities, safe structured facts, and SHA-256/run-ID provenance. Unknown,
-  changing, mixed, or tampered inputs fail closed.
-- Goal descendants are observations within a Goal-root cluster, not independent
-  long tasks. `goal_time_used_seconds` is observed Codex Goal time, not a human
-  task-duration or METR-horizon claim.
-- Screening may emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`; it may
-  never emit `GO`.
+- Treat `.local-specs/` as private. Never stage or commit it.
+- The product kernel is the only deep business entry: `submit` / `view` / `watch`.
+- Electron must not implement authority, memory, contracts, or drift rules.
+- Agent private memory never uploads. Sync batches contain only shared projections.
+- Advisors produce prelabels and cannot commit kernel state.
+- Engineering consequences require program-verified Git/test/tool evidence.
+- Screening in `research/s0-validation` may emit only `STOP`, `PIVOT`, or `PROCEED_TO_CONFIRMATION`; never `GO`.
+- shadcn primitives live in `packages/ui`. Do not add `packages/views` until a real second client exists.
+- Do not create a shared abstraction without two current consumers.
+
+## Product intent (Multica)
+
+Coordy 要对齐 Multica 的**产品体验**：侧栏、标签页、任务/Issue、智能体、harness、设置，以及聊天、项目、自动化、小队、Skills、统计等用户能看见的能力。
+
+这是**对照重写**，不是克隆：
+
+- 不要整仓复制 Multica 源码、组件或它的 API / 数据模型。
+- 协议只认 Coordy 自己的 `crates/coordy-protocol`（`submit` / `view` / `watch`）。缺字段就扩展这份协议，不要接入 Multica 协议。
+- 用户**没有**反对做聊天、项目、自动化、小队、Skills、甘特图等功能。反对的是抄源码，不是做功能。
+- 不要把「尚未实现」当成「不要做」。缺的能力记在 `TODO.md`，按用户当前请求实现。
 
 ## Scope and stopping rule
 
-Coordy is currently a low-cost falsification experiment, not a production
-platform. Apply instructions in this order:
+Apply instructions in this order:
 
 1. The user's explicit current request.
 2. The current phase's frozen acceptance criteria.
-3. Data-safety and experimental-validity invariants above.
+3. Data-safety invariants above.
 4. Optional robustness and future extensibility.
 
 Lower-priority concerns must not expand a higher-priority task. Implement the
@@ -53,37 +50,26 @@ without at least two current, concrete consumers.
 
 ## Cursor Cloud specific instructions
 
-Coordy is a pure-Python (>=3.11) research CLI with zero third-party runtime
-dependencies; there is no long-running backend, database server, or container
-to start. The only required "service" is the `coordy` CLI operating on a local
-`.coordy/` workspace. Development commands are the same as CI
-(`.github/workflows/ci.yml`) and the README Quick start.
+The product at the repo root is Electron + a local Rust daemon (`coordyd`).
+There is no long-running database server or container to start. The Python S0
+research harness lives in `research/s0-validation/` and is not the desktop
+runtime.
 
-- A `.venv` virtualenv at the repo root is the working environment. Activate it
-  (`. .venv/bin/activate`) or call binaries directly (`.venv/bin/coordy`,
-  `.venv/bin/python`) before running anything. The startup update script
-  recreates/refreshes it, so `python -m pip install -e .` normally does not need
-  to be rerun by hand.
-- Lint/static checks (no ruff/black/flake8 configured): `python -m pip check`,
-  `python -m compileall -q src`, and `node --check web/incident-review/app.js`
-  for the static browser UI. Tests: `python -m unittest discover -s tests -v`.
-  Build: `python -m build`.
-- Known pre-existing test failure (not an environment issue):
-  `test_s0_excludes_guardian_sessions_and_does_not_treat_turn_settings_as_compaction`
-  in `tests/test_coordy.py` fails deterministically (`auxiliary_sessions_excluded`
-  is 0, expected 1). All other 123 tests pass. Do not treat this as a broken
-  setup.
-- End-to-end smoke without any credentials: `coordy run --input
-  examples/synthetic_sessions.jsonl --workspace .coordy/demo` then `coordy
-  summary --workspace .coordy/demo`. S0a is deterministic and correctly reports
-  `INSUFFICIENT_EVIDENCE` / `PENDING_EVIDENCE_REVIEW`; that is expected, not a
-  failure.
-- Model-graded S0b/causal stages and `grade-*` commands require an
-  OpenAI-compatible Responses API via a private `0600` `.env.local`
-  (`COORDY_JUDGE_API_KEY`, `COORDY_JUDGE_BASE_URL`; see `.env.example`). These
-  are optional and not needed for S0a, `run`, or the test suite.
-- The review web UI (`coordy serve-incident-causal-review`, loopback
-  `127.0.0.1:8765`) is optional and only loads once the upstream
-  incident-causal review artifacts exist (i.e. after the LLM-graded pipeline);
-  it fails closed on a bare workspace. Its store logic is covered by
-  `tests/test_review_ui.py`.
+Development commands match CI (`.github/workflows/ci.yml`) and the README:
+
+- Install JS deps once with `pnpm install` (or `pnpm install --frozen-lockfile`).
+- Rust: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo run -p xtask -- verify-protocol`, `cargo test --workspace`.
+- Desktop: `pnpm --filter @coordy/desktop test` and
+  `pnpm --filter @coordy/desktop typecheck`.
+- Run the app: `bash scripts/dev.sh` (builds `coordyd` / `coordy`, then
+  `pnpm --filter @coordy/desktop dev`). Linux cloud desktops should keep GPU
+  off (`--disable-gpu --no-sandbox`) so the window does not exit after a flash.
+- Optional CLI against the same daemon: `cargo run -p coordyd` and
+  `cargo run -p coordy -- health`. Optional shared control plane:
+  `cargo run -p coordy-server -- --bind 127.0.0.1:8787`.
+
+Research-tree checks (not required for the desktop path), from
+`research/s0-validation/`: `python -m pip install -e .`, `python -m pip check`,
+`python -m compileall -q src`, `python -m unittest discover -s tests -v`, and
+`node --check research/s0-validation/web/incident-review/app.js`.
