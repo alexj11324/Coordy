@@ -1,12 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { closeTab, openNewTab, replaceActiveTab, titleFromPath } from "../lib/coordy/tab-path";
-import { formatShortcut, matchShortcut, modifierSymbol, SHORTCUTS } from "../lib/coordy/shortcuts";
-import { filterIssues, issuesInColumn, priorityBarCount, taskIdentifier, blockerWaitMessage, hasUnresolvedBlockers } from "../lib/coordy/issues";
-import { canGoBack, canGoForward, emptyHistory, historyBack, historyForward, recordVisit } from "../lib/coordy/nav-history";
+import {
+  closeTab,
+  openNewTab,
+  replaceActiveTab,
+  titleFromPath,
+} from "../lib/coordy/tab-path";
+import {
+  formatShortcut,
+  matchShortcut,
+  modifierSymbol,
+  SHORTCUTS,
+} from "../lib/coordy/shortcuts";
+import {
+  filterIssues,
+  issuesInColumn,
+  priorityBarCount,
+  taskIdentifier,
+  blockerWaitMessage,
+  hasUnresolvedBlockers,
+} from "../lib/coordy/issues";
+import {
+  canGoBack,
+  canGoForward,
+  emptyHistory,
+  historyBack,
+  historyForward,
+  recordVisit,
+} from "../lib/coordy/nav-history";
 import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
+import { shouldShowFloatingChat } from "../shell/desktop-shell";
 import type { TaskView } from "@coordy/protocol";
 
-function task(partial: Partial<TaskView> & Pick<TaskView, "id" | "title" | "status">): TaskView {
+function task(
+  partial: Partial<TaskView> & Pick<TaskView, "id" | "title" | "status">,
+): TaskView {
   return {
     workspace_id: "ws",
     ...partial,
@@ -17,7 +44,9 @@ describe("issue identifiers and filters", () => {
   it("formats Linear-style identifiers from kernel ids", () => {
     expect(taskIdentifier({ id: "task_ab12cd34ef" })).toBe("COOR-AB12CD");
     expect(taskIdentifier({ id: "task_1" })).toBe("COOR-1");
-    expect(taskIdentifier({ id: "task_x", identifier: "COOR-12" })).toBe("COOR-12");
+    expect(taskIdentifier({ id: "task_x", identifier: "COOR-12" })).toBe(
+      "COOR-12",
+    );
   });
 
   it("maps Linear-style priority bars, leaving urgent to the alert icon", () => {
@@ -40,12 +69,38 @@ describe("issue identifiers and filters", () => {
 
   it("filters board scope by members or agents", () => {
     const tasks = [
-      task({ id: "task_1", title: "人", status: "open", assignee_principal_id: "p1" }),
-      task({ id: "task_2", title: "机", status: "open", assignee_agent_id: "a1" }),
+      task({
+        id: "task_1",
+        title: "人",
+        status: "open",
+        assignee_principal_id: "p1",
+      }),
+      task({
+        id: "task_2",
+        title: "机",
+        status: "open",
+        assignee_agent_id: "a1",
+      }),
       task({ id: "task_3", title: "空", status: "open" }),
     ];
-    expect(filterIssues(tasks, { query: "", status: "all", assignee: "members", project: "all", priority: "all" }).map((item) => item.id)).toEqual(["task_1"]);
-    expect(filterIssues(tasks, { query: "", status: "all", assignee: "agents", project: "all", priority: "all" }).map((item) => item.id)).toEqual(["task_2"]);
+    expect(
+      filterIssues(tasks, {
+        query: "",
+        status: "all",
+        assignee: "members",
+        project: "all",
+        priority: "all",
+      }).map((item) => item.id),
+    ).toEqual(["task_1"]);
+    expect(
+      filterIssues(tasks, {
+        query: "",
+        status: "all",
+        assignee: "agents",
+        project: "all",
+        priority: "all",
+      }).map((item) => item.id),
+    ).toEqual(["task_2"]);
   });
 
   it("puts cancelled tasks into the done board column", () => {
@@ -55,7 +110,12 @@ describe("issue identifiers and filters", () => {
   });
 
   it("explains unresolved issue blockers in Chinese", () => {
-    const design = task({ id: "task_a", title: "设计稿", status: "open", identifier: "COOR-1" });
+    const design = task({
+      id: "task_a",
+      title: "设计稿",
+      status: "open",
+      identifier: "COOR-1",
+    });
     const implement = task({
       id: "task_b",
       title: "实现",
@@ -65,10 +125,20 @@ describe("issue identifiers and filters", () => {
       blocked_reason: "waiting on unfinished blockers",
     });
     expect(hasUnresolvedBlockers(implement)).toBe(true);
-    expect(blockerWaitMessage(implement, [design, implement])).toBe("需等待前置事项完成：COOR-1 设计稿");
-    expect(blockerWaitMessage(task({ id: "task_c", title: "手标", status: "blocked", blocked_reason: "marked blocked" }), [])).toBe(
-      "marked blocked",
+    expect(blockerWaitMessage(implement, [design, implement])).toBe(
+      "需等待前置事项完成：COOR-1 设计稿",
     );
+    expect(
+      blockerWaitMessage(
+        task({
+          id: "task_c",
+          title: "手标",
+          status: "blocked",
+          blocked_reason: "marked blocked",
+        }),
+        [],
+      ),
+    ).toBe("marked blocked");
   });
 });
 
@@ -80,7 +150,11 @@ describe("tabs", () => {
     const second = replaceActiveTab(first.tabs, first.activeId, "/projects");
     expect(second.tabs).toHaveLength(1);
     expect(second.tabs[0]?.title).toBe("项目");
-    const issue = replaceActiveTab(second.tabs, second.activeId, "/board/task_1");
+    const issue = replaceActiveTab(
+      second.tabs,
+      second.activeId,
+      "/board/task_1",
+    );
     expect(issue.tabs).toHaveLength(1);
     expect(titleFromPath("/agents/new")).toBe("创建智能体");
     expect(titleFromPath("/agents/new/blank")).toBe("创建智能体");
@@ -107,8 +181,19 @@ describe("tabs", () => {
 });
 
 describe("sidebar nav", () => {
+  it("hides chat until agent creation is complete", () => {
+    expect(shouldShowFloatingChat("/agents/new")).toBe(false);
+    expect(shouldShowFloatingChat("/agents/new/blank")).toBe(false);
+    expect(shouldShowFloatingChat("/agents/new/ai/legacy-session")).toBe(false);
+    expect(shouldShowFloatingChat("/agents/agent-1")).toBe(true);
+  });
+
   it("groups personal and workspace destinations like the shadcn sidebar", () => {
-    expect(personalNav.map((item) => item.to)).toEqual(["/inbox", "/chat", "/mine"]);
+    expect(personalNav.map((item) => item.to)).toEqual([
+      "/inbox",
+      "/chat",
+      "/mine",
+    ]);
     expect(workspaceNav.map((item) => item.label)).toEqual([
       "任务",
       "图",
@@ -126,31 +211,77 @@ describe("sidebar nav", () => {
 
 describe("shortcuts", () => {
   it("matches search, new-task, sidebar, chat, tabs, and zoom", () => {
-    expect(matchShortcut({ key: "k", metaKey: true, ctrlKey: false, altKey: false })).toBe("search");
-    expect(matchShortcut({ key: "k", metaKey: false, ctrlKey: true, altKey: false })).toBe("search");
-    expect(matchShortcut({ key: "c", metaKey: false, ctrlKey: false, altKey: false })).toBe("new-task");
-    expect(matchShortcut({ key: "j", metaKey: true, ctrlKey: false, altKey: false })).toBe("toggle-chat");
-    expect(matchShortcut({ key: "b", metaKey: true, ctrlKey: false, altKey: false })).toBe("toggle-sidebar");
-    expect(matchShortcut({ key: "w", metaKey: true, ctrlKey: false, altKey: false })).toBe("close-tab");
-    expect(matchShortcut({ key: ",", metaKey: true, ctrlKey: false, altKey: false })).toBe("open-settings");
-    expect(matchShortcut({ key: "[", metaKey: true, ctrlKey: false, altKey: false })).toBe("go-back");
-    expect(matchShortcut({ key: "4", code: "Digit4", metaKey: true, ctrlKey: false, altKey: false, shiftKey: true })).toBe("go-board");
-    expect(matchShortcut({ key: "=", metaKey: true, ctrlKey: false, altKey: false })).toBe("zoom-in");
+    expect(
+      matchShortcut({ key: "k", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("search");
+    expect(
+      matchShortcut({ key: "k", metaKey: false, ctrlKey: true, altKey: false }),
+    ).toBe("search");
+    expect(
+      matchShortcut({
+        key: "c",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+      }),
+    ).toBe("new-task");
+    expect(
+      matchShortcut({ key: "j", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("toggle-chat");
+    expect(
+      matchShortcut({ key: "b", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("toggle-sidebar");
+    expect(
+      matchShortcut({ key: "w", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("close-tab");
+    expect(
+      matchShortcut({ key: ",", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("open-settings");
+    expect(
+      matchShortcut({ key: "[", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("go-back");
+    expect(
+      matchShortcut({
+        key: "4",
+        code: "Digit4",
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: true,
+      }),
+    ).toBe("go-board");
+    expect(
+      matchShortcut({ key: "=", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBe("zoom-in");
     expect(modifierSymbol("darwin")).toBe("⌘");
     expect(modifierSymbol("linux")).toBe("Ctrl");
     expect(formatShortcut({ key: "k", mod: true }, "darwin")).toBe("⌘K");
-    expect(formatShortcut({ key: "4", mod: true, shift: true }, "linux")).toBe("Ctrl+Shift+4");
+    expect(formatShortcut({ key: "4", mod: true, shift: true }, "linux")).toBe(
+      "Ctrl+Shift+4",
+    );
   });
 
   it("lists general, navigation, and fixed actions", () => {
-    expect(SHORTCUTS.filter((item) => item.category === "navigation").length).toBeGreaterThanOrEqual(12);
+    expect(
+      SHORTCUTS.filter((item) => item.category === "navigation").length,
+    ).toBeGreaterThanOrEqual(12);
     expect(SHORTCUTS.map((item) => item.id)).toContain("go-harnesses");
     expect(SHORTCUTS.map((item) => item.id)).toContain("open-settings");
   });
 
   it("ignores composing and modifier-only C", () => {
-    expect(matchShortcut({ key: "c", metaKey: true, ctrlKey: false, altKey: false })).toBeNull();
-    expect(matchShortcut({ key: "c", metaKey: false, ctrlKey: false, altKey: false, isComposing: true })).toBeNull();
+    expect(
+      matchShortcut({ key: "c", metaKey: true, ctrlKey: false, altKey: false }),
+    ).toBeNull();
+    expect(
+      matchShortcut({
+        key: "c",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        isComposing: true,
+      }),
+    ).toBeNull();
   });
 });
 

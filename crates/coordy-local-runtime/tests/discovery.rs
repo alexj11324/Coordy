@@ -27,7 +27,7 @@ fn seed_registry(data_dir: &std::path::Path, body: &str) {
 }
 
 #[tokio::test]
-async fn import_named_registry_agent_without_path_install() {
+async fn explicit_import_rejects_registry_agent_without_path_install() {
     let dir = unique_dir("discover-import");
     seed_registry(
         &dir,
@@ -68,7 +68,7 @@ async fn import_named_registry_agent_without_path_install() {
     )
     .await
     .unwrap();
-    assert_eq!(imported.imported, vec!["made-up-acp".to_string()]);
+    assert!(imported.imported.is_empty());
     let View::Agents { items } = rt
         .kernel
         .view_sync(AuthorizedQuery {
@@ -79,11 +79,11 @@ async fn import_named_registry_agent_without_path_install() {
     else {
         panic!("agents view");
     };
-    assert!(items.iter().any(|agent| agent.harness == "made-up-acp"));
+    assert!(!items.iter().any(|agent| agent.harness == "made-up-acp"));
 }
 
 #[tokio::test]
-async fn import_archives_generic_acp_placeholders() {
+async fn rejected_import_keeps_existing_generic_acp_placeholder() {
     let dir = unique_dir("discover-archive");
     seed_registry(
         &dir,
@@ -145,6 +145,6 @@ async fn import_archives_generic_acp_placeholders() {
     else {
         panic!("agents view");
     };
-    assert!(!items.iter().any(|agent| agent.harness == "acp"));
-    assert!(items.iter().any(|agent| agent.harness == "made-up-acp"));
+    assert!(items.iter().any(|agent| agent.harness == "acp"));
+    assert!(!items.iter().any(|agent| agent.harness == "made-up-acp"));
 }

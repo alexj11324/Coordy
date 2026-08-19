@@ -16,11 +16,11 @@ const bridge: CoordyDesktopBridge = {
   listDirectory: (path) => ipcRenderer.invoke(IPC.listDirectory, path),
   getAppInfo: () => ipcRenderer.invoke(IPC.getAppInfo),
   installCli: () => ipcRenderer.invoke(IPC.installCli),
-  secretsStatus: () => ipcRenderer.invoke(IPC.secretsStatus),
-  setSecret: (input) => ipcRenderer.invoke(IPC.setSecret, input),
-  clearSecret: () => ipcRenderer.invoke(IPC.clearSecret),
-  completeDraft: (kind, prompt) => ipcRenderer.invoke(IPC.completeDraft, kind, prompt),
-  discoverAgents: (refresh = false) => ipcRenderer.invoke(IPC.discoverAgents, refresh),
+  suggestTaskSplit: (input) => ipcRenderer.invoke(IPC.suggestTaskSplit, input),
+  discoverAgents: (refresh = false) =>
+    ipcRenderer.invoke(IPC.discoverAgents, refresh),
+  discoverHarnessModels: (harness) =>
+    ipcRenderer.invoke(IPC.discoverHarnessModels, harness),
   importAgents: (input) => ipcRenderer.invoke(IPC.importAgents, input),
   quit: () => ipcRenderer.invoke(IPC.quit),
 };

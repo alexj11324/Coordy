@@ -163,25 +163,12 @@ export class DaemonClient {
     return this.request({ type: "Subscribe", cursor });
   }
 
-  async secretsStatus() {
-    return this.request({ type: "SecretsStatus" });
-  }
-
-  async setSecret(input: {
-    provider: string;
-    api_key?: string | null;
-    base_url?: string | null;
-    acp_command?: string | null;
+  async suggestTaskSplit(input: {
+    workspace_id: string;
+    task_id: string;
+    principal_id: string;
   }) {
-    return this.request({ type: "SetSecret", ...input });
-  }
-
-  async clearSecret() {
-    return this.request({ type: "ClearSecret" });
-  }
-
-  async completeDraft(kind: string, prompt: string) {
-    return this.request({ type: "CompleteDraft", kind, prompt });
+    return this.request({ type: "SuggestTaskSplit", ...input });
   }
 
   async discoverAgents(refresh = false) {

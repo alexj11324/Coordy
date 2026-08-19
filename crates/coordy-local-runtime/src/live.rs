@@ -116,7 +116,7 @@ impl Ports for LivePorts {
     }
 }
 
-fn run_kind(
+pub(crate) fn run_kind(
     kind: &str,
     worktree: &str,
     prompt: &str,

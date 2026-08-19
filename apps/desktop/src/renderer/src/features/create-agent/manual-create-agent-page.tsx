@@ -1,7 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { classifyCreateAgentError, emptyAgentDraft, type AgentDraft } from "../../lib/coordy/agent-draft";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  classifyCreateAgentError,
+  emptyAgentDraft,
+  type AgentDraft,
+} from "../../lib/coordy/agent-draft";
 import {
   browserStore,
   clearManualDraft,
@@ -9,21 +13,25 @@ import {
   writeManualDraft,
 } from "../../lib/coordy/builder-sessions";
 import {
-  catalogItemForHarness,
   harnessIdsMatch,
+  initialRuntimeId,
   pickerRuntimes,
   runtimeChipLabel,
   runtimeIsLaunchable,
 } from "../../lib/coordy/labels";
 import { createNamedAgent } from "../../lib/coordy/start-task";
 import { useSession } from "../../state/session-store";
-import { AgentConfigurationPanel, CreateAgentFooter } from "./agent-create-form";
+import {
+  AgentConfigurationPanel,
+  CreateAgentFooter,
+} from "./agent-create-form";
 import { AgentCreateChip, AgentCreateShell } from "./create-shell";
 
 export function ManualCreateAgentPage() {
   const workspaceId = useSession((s) => s.workspaceId);
   const principalId = useSession((s) => s.principalId);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const catalog = useQuery({
     queryKey: ["discover-agents"],
     queryFn: () => window.coordy.discoverAgents(false),
@@ -38,21 +46,28 @@ export function ManualCreateAgentPage() {
   const [creating, setCreating] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const runtimes = useMemo(() => pickerRuntimes(catalog.data, draft.harness), [catalog.data, draft.harness]);
-  const selected = runtimes.find((item) => harnessIdsMatch(item.id, draft.harness));
+  const runtimes = useMemo(
+    () => pickerRuntimes(catalog.data, draft.harness),
+    [catalog.data, draft.harness],
+  );
+  const selected = runtimes.find((item) =>
+    harnessIdsMatch(item.id, draft.harness),
+  );
 
   useEffect(() => {
     if (!workspaceId || hydrated || catalog.isLoading) return;
     const store = browserStore();
     const saved = store ? readManualDraft(workspaceId, store) : null;
-    const first = pickerRuntimes(catalog.data)[0]?.id ?? "";
-    const matched = saved?.harness ? catalogItemForHarness(catalog.data, saved.harness) : undefined;
-    const harness = matched?.id || first;
+    const harness = initialRuntimeId(
+      catalog.data,
+      searchParams.get("harness"),
+      saved?.harness,
+    );
     const next = { ...(saved ?? emptyAgentDraft()), harness };
     if (!next.avatar) next.avatar = emptyAgentDraft().avatar;
     setDraft(next);
     setHydrated(true);
-  }, [workspaceId, catalog.data, catalog.isLoading, hydrated]);
+  }, [workspaceId, catalog.data, catalog.isLoading, hydrated, searchParams]);
 
   useEffect(() => {
     if (!hydrated || draft.harness || runtimes.length === 0) return;
@@ -65,7 +80,8 @@ export function ManualCreateAgentPage() {
     if (store) writeManualDraft(workspaceId, draft, store);
   }, [draft, hydrated, workspaceId]);
 
-  const canCreate = draft.name.trim().length > 0 && runtimeIsLaunchable(selected) && !creating;
+  const canCreate =
+    draft.name.trim().length > 0 && runtimeIsLaunchable(selected) && !creating;
 
   const create = async () => {
     if (!workspaceId || !principalId) {
@@ -73,7 +89,7 @@ export function ManualCreateAgentPage() {
       return;
     }
     if (!runtimeIsLaunchable(selected)) {
-      setFormError("所选 harness 尚未安装，暂时不能创建智能体。");
+      setFormError("所选 harness 当前不可启动，暂时不能创建智能体。");
       return;
     }
     setCreating(true);
@@ -109,12 +125,12 @@ export function ManualCreateAgentPage() {
   return (
     <AgentCreateShell
       title="创建智能体"
-      step="检查并配置"
-      onBack={() => navigate("/agents/new")}
+      onBack={() => navigate("/agents")}
       chips={
         <>
-          <AgentCreateChip>从空白开始</AgentCreateChip>
-          {selected ? <AgentCreateChip>{runtimeChipLabel(selected, os)}</AgentCreateChip> : null}
+          {selected ? (
+            <AgentCreateChip>{runtimeChipLabel(selected, os)}</AgentCreateChip>
+          ) : null}
         </>
       }
     >
@@ -132,7 +148,12 @@ export function ManualCreateAgentPage() {
             os={os}
           />
         </div>
-        <CreateAgentFooter canCreate={canCreate} creating={creating} error={formError} onCreate={() => void create()} />
+        <CreateAgentFooter
+          canCreate={canCreate}
+          creating={creating}
+          error={formError}
+          onCreate={() => void create()}
+        />
       </div>
     </AgentCreateShell>
   );

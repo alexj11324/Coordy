@@ -7,6 +7,18 @@ export function acpRunSource(prompt: string) {
   return { type: "Acp" as const, prompt };
 }
 
+export function taskSplitRequest(input: {
+  workspaceId: string;
+  taskId: string;
+  principalId: string;
+}) {
+  return {
+    workspace_id: input.workspaceId,
+    task_id: input.taskId,
+    principal_id: input.principalId,
+  };
+}
+
 export async function createNamedAgent(input: {
   workspaceId: string;
   principalId: string;
@@ -22,41 +34,37 @@ export async function createNamedAgent(input: {
   avatar?: string;
 }): Promise<string> {
   const created = await submit({
-    type: "CreateAgent",
+    type: "CreateConfiguredAgent",
     workspace_id: input.workspaceId,
     principal_id: input.principalId,
     name: input.name.trim(),
     harness: input.harness,
+    description: input.description?.trim() ?? "",
+    instructions: input.instructions?.trim() ?? "",
+    model: input.model?.trim() ?? "",
+    thinking: input.thinking?.trim() ?? "",
+    speed: input.speed?.trim() ?? "",
+    access: input.access?.trim() || "owner",
+    tool_access: input.toolAccess?.trim() || "auto",
+    avatar: storedAgentAvatar(input.avatar, input.name.trim() || "agent"),
   });
-  const agentId = outcomeId(created.ids, "agent_id");
-  const description = input.description?.trim() ?? "";
-  const instructions = input.instructions?.trim() ?? "";
-  const model = input.model?.trim() ?? "";
-  const thinking = input.thinking?.trim() ?? "";
-  const speed = input.speed?.trim() ?? "";
-  const access = input.access?.trim() ?? "";
-  const toolAccess = input.toolAccess?.trim() ?? "";
-  const avatar = storedAgentAvatar(input.avatar, agentId);
-  await submit({
-    type: "UpdateAgent",
-    agent_id: agentId,
-    description: description || null,
-    instructions: instructions || null,
-    model: model || null,
-    thinking: thinking || null,
-    speed: speed || null,
-    access: access || null,
-    tool_access: toolAccess || null,
-    avatar,
-  });
-  return agentId;
+  return outcomeId(created.ids, "agent_id");
 }
 
-export async function pickAgentId(workspaceId: string, preferredId?: string | null): Promise<string> {
-  const agents = asAgents(await view({ type: "Agents", workspace_id: workspaceId }));
-  if (preferredId && agents.some((agent) => agent.id === preferredId)) return preferredId;
+export async function pickAgentId(
+  workspaceId: string,
+  preferredId?: string | null,
+): Promise<string> {
+  const agents = asAgents(
+    await view({ type: "Agents", workspace_id: workspaceId }),
+  );
+  if (preferredId && agents.some((agent) => agent.id === preferredId))
+    return preferredId;
   const live =
-    agents.find((agent) => !isPlaceholderHarness(agent.harness) && agent.harness !== "coordy-stub") ??
+    agents.find(
+      (agent) =>
+        !isPlaceholderHarness(agent.harness) && agent.harness !== "coordy-stub",
+    ) ??
     agents.find((agent) => !isPlaceholderHarness(agent.harness)) ??
     agents[0];
   if (live) return live.id;
@@ -87,7 +95,11 @@ export async function startAcpRun(input: {
   return { taskId, runId: outcomeId(run.ids, "run_id"), agentId };
 }
 
-export async function startAcpOnTask(taskId: string, prompt: string, agentId?: string): Promise<Outcome> {
+export async function startAcpOnTask(
+  taskId: string,
+  prompt: string,
+  agentId?: string,
+): Promise<Outcome> {
   if (agentId) {
     await submit({ type: "AssignTask", task_id: taskId, agent_id: agentId });
   }
@@ -106,7 +118,11 @@ export function chatTurnCommands(input: {
 }) {
   return [
     { type: "SetTaskStatus" as const, task_id: input.taskId, status: "open" },
-    { type: "AssignTask" as const, task_id: input.taskId, agent_id: input.agentId },
+    {
+      type: "AssignTask" as const,
+      task_id: input.taskId,
+      agent_id: input.agentId,
+    },
     {
       type: "StartRun" as const,
       task_id: input.taskId,

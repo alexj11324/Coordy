@@ -151,6 +151,24 @@ fn byok_is_local_rpc_not_a_kernel_command() {
 }
 
 #[test]
+fn task_split_rpc_carries_only_task_identity_and_actor() {
+    let req = serde_json::to_value(coordy_protocol::RpcRequest::SuggestTaskSplit {
+        id: "1".into(),
+        workspace_id: "ws".into(),
+        task_id: "task".into(),
+        principal_id: "principal".into(),
+    })
+    .unwrap();
+    assert_eq!(req["type"], "SuggestTaskSplit");
+    assert_eq!(req["workspace_id"], "ws");
+    assert_eq!(req["task_id"], "task");
+    assert_eq!(req["principal_id"], "principal");
+    assert!(req.get("harness").is_none());
+    assert!(req.get("model").is_none());
+    assert!(req.get("api_key").is_none());
+}
+
+#[test]
 fn issue_blocker_command_keeps_pascal_variant() {
     let value = serde_json::to_value(coordy_protocol::Command::AddIssueBlocker {
         task_id: "task_b".into(),

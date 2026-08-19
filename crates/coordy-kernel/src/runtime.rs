@@ -71,6 +71,11 @@ impl Kernel {
         *self.world.lock().expect("world lock") = world;
     }
 
+    pub fn can_command_agent(&self, actor: &Actor, agent_id: &str) -> bool {
+        let world = self.world.lock().expect("world lock");
+        can_command_agent(&world, actor, agent_id)
+    }
+
     fn start_prompt_on_task(
         &self,
         world: &mut World,
@@ -1081,6 +1086,84 @@ impl Kernel {
                     skill_ids: Vec::new(),
                 });
                 Self::audit(&mut world, &actor, "create_agent", &id);
+                Self::emit(&mut world, Effect::StateChanged { workspace_id });
+                Ok(Outcome::ok("agent created", json!({ "agent_id": id })))
+            }
+            Command::CreateConfiguredAgent {
+                workspace_id,
+                principal_id,
+                name,
+                harness,
+                description,
+                instructions,
+                avatar,
+                model,
+                thinking,
+                speed,
+                access,
+                tool_access,
+            } => {
+                let principal = world
+                    .principal(&principal_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("principal"))?;
+                if principal.workspace_id != workspace_id {
+                    return Err(CoordyError::invalid("principal workspace mismatch"));
+                }
+                match &actor {
+                    Actor::Principal { id } if id == &principal_id => {}
+                    Actor::Daemon => {}
+                    _ => {
+                        return Err(CoordyError::denied(
+                            "only the principal may create their agent",
+                        ))
+                    }
+                }
+
+                // Prevalidate every fallible field before allocating an ID or
+                // changing the world. The UI uses this as one atomic command,
+                // not as separately persisted create and update operations.
+                let name = normalize_agent_name(&name)?;
+                if agent_name_taken(&world, &workspace_id, &name, None) {
+                    return Err(CoordyError::invalid(
+                        "agent name must be unique in this workspace",
+                    ));
+                }
+                let harness = harness.trim();
+                if harness.is_empty() {
+                    return Err(CoordyError::invalid("runtime is required"));
+                }
+                let access = match access.trim() {
+                    "" | "owner" => "owner".to_string(),
+                    "workspace" => "workspace".to_string(),
+                    "members" => "members".to_string(),
+                    _ => return Err(CoordyError::invalid("unknown access")),
+                };
+                let tool_access = normalize_tool_access(&tool_access)?;
+
+                let id = ids::new("ag");
+                world.agents.push(Agent {
+                    id: id.clone(),
+                    workspace_id: workspace_id.clone(),
+                    principal_id,
+                    name,
+                    harness: harness.to_string(),
+                    description,
+                    instructions,
+                    archived: false,
+                    avatar,
+                    model,
+                    thinking,
+                    speed,
+                    access,
+                    access_member_ids: Vec::new(),
+                    concurrency_limit: 6,
+                    cli_args: String::new(),
+                    tool_access,
+                    mcp_servers: Vec::new(),
+                    skill_ids: Vec::new(),
+                });
+                Self::audit(&mut world, &actor, "create_configured_agent", &id);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok("agent created", json!({ "agent_id": id })))
             }
