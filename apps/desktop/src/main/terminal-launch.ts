@@ -38,7 +38,10 @@ export function terminalLaunchSpec(
   ];
 }
 
-const spawnTerminal: TerminalLauncher = (command, args, options) =>
+// Allow the launcher itself to start before treating a still-running process as success.
+const IMMEDIATE_EXIT_WINDOW_MS = 1_000;
+
+export const spawnTerminal: TerminalLauncher = (command, args, options) =>
   new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -46,11 +49,37 @@ const spawnTerminal: TerminalLauncher = (command, args, options) =>
       detached: true,
       stdio: "ignore",
     });
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: { error?: Error } = {}) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      child.removeListener("error", onError);
+      child.removeListener("exit", onExit);
+      if (result.error) reject(result.error);
+      else resolve();
+    };
+    const onError = (error: Error) => finish({ error });
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (code === 0 && signal === null) {
+        finish();
+        return;
+      }
+      finish({
+        error: new Error(
+          `terminal launcher exited immediately (${signal ?? `code ${code ?? "unknown"}`})`,
+        ),
+      });
+    };
+    child.once("error", onError);
+    child.once("exit", onExit);
     child.once("spawn", () => {
-      child.unref();
-      resolve();
+      timer = setTimeout(() => {
+        child.unref();
+        finish();
+      }, IMMEDIATE_EXIT_WINDOW_MS);
     });
-    child.once("error", reject);
   });
 
 export async function openTerminalAt(

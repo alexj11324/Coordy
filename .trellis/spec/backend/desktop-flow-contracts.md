@@ -21,8 +21,8 @@ openTerminalAt(absoluteDirectory, platform?, launcher?)
 - Register child `error` and `exit` listeners immediately after `spawn()` returns.
 - An unexpected child failure may trigger at most one automatic restart. Intentional shutdown never restarts.
 - Startup failure closes clients, clears the child reference, terminates the child, and reaches app cleanup.
-- Terminal directories must be absolute existing directories. Launch with argv and `shell: false`.
-- macOS recreates a missing window on `activate`; other platforms quit after the last window closes.
+- Terminal directories must be absolute existing directories. Launch with argv and `shell: false`; a launch is successful only after its immediate-exit window passes or the launcher exits with code `0` and no signal.
+- macOS recreates a missing window on `activate` only after daemon startup and IPC registration complete; other platforms quit after the last window closes.
 
 ### 4. Validation & Error Matrix
 
@@ -35,6 +35,7 @@ openTerminalAt(absoluteDirectory, platform?, launcher?)
 | child exits unexpectedly once | start a new child and authenticate both clients |
 | child fails again | report unhealthy; do not loop restarts |
 | terminal path is relative/missing/file | reject before launch |
+| terminal launcher exits immediately non-zero or by signal | reject that spec and continue to the next platform fallback |
 | Windows Terminal missing | fall back to `cmd.exe` with the directory in `cwd` |
 
 ### 5. Good / Base / Bad Cases
@@ -45,7 +46,7 @@ openTerminalAt(absoluteDirectory, platform?, launcher?)
 
 ### 6. Tests Required
 
-- Unit: hostile path argv, Windows fallback, idempotent cleanup, spawn `EACCES`, wait/connect failure cleanup.
+- Unit: hostile path argv, immediate non-zero/signal exit, Windows fallback, pre-initialization macOS activation, idempotent cleanup, spawn `EACCES`, wait/connect failure cleanup.
 - Integration: delayed foreground RPC completes while the effect poll times out.
 - Real daemon: kill the child, assert a new PID and authenticated health.
 - Real Electron: close, activate, quit, and assert both Electron and `coordyd` terminate.
@@ -92,6 +93,8 @@ activateWorkspace(workspaceId)
 - Route tests may claim component routing only when they mount `AppRouter`.
 - Command/query tests may claim boundary coverage, not complete UI interaction.
 - The golden flow uses visible controls for agent creation, Home dispatch, completion, and detail navigation; the bridge is only for bootstrap/final assertions.
+- User labels do not define system-owned task relationships. Stats exclude chat backing tasks by their internal stage or `Chat.task_id` relationship, not by a user-editable `chat` label.
+- Golden cleanup is graceful only when Electron exits with code `0` and no signal; any forced or signalled exit fails the acceptance assertion.
 
 ### 4. Validation & Error Matrix
 
