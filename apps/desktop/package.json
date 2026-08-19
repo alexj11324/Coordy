@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "electron-vite build",
+    "package:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac dir",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
     "test:e2e": "playwright test -c playwright.config.ts"
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",
     "electron": "^35.2.1",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^3.1.0",
     "jsdom": "^26.1.0",
     "tailwindcss": "^4.1.4",

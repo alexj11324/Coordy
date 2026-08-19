@@ -1,4 +1,13 @@
 {
+  "directories": {
+    "buildResources": "build-resources"
+  },
+  "mac": {
+    "icon": "build-resources/Coordy.icon"
+  },
+  "dmg": {
+    "icon": "build-resources/icon.icns"
+  },
   "files": ["out/**/*", "resources/**/*"],
   "extraResources": [
     {

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/coordy-pixel-icon.svg" width="72" alt="Coordy">
+<img src="assets/coordy-c-icon.svg" width="72" alt="Coordy">
 
 # Coordy
 
