@@ -62,6 +62,7 @@ export type Command =
       access_member_ids?: string[] | null;
       concurrency_limit?: number | null;
       cli_args?: string | null;
+      tool_access?: string | null;
       mcp_servers?: string[] | null;
     }
   | { type: "ArchiveAgent"; agent_id: string }
@@ -211,6 +212,9 @@ export type Command =
   | { type: "DeleteLabel"; workspace_id: string; name: string }
   | { type: "SetCustomPropertyDef"; workspace_id: string; key: string; value_type: string }
   | { type: "LinkPullRequest"; task_id: string; number: number; url?: string }
+  | { type: "UnlinkPullRequest"; task_id: string; number: number }
+  | { type: "RefreshGithub"; workspace_id: string }
+  | ({ type: "SyncGithubPullRequests" } & GithubSync)
   | { type: "SetIntegration"; workspace_id: string; kind: string; enabled: boolean; config?: string };
 
 export type RunSource =
@@ -283,7 +287,72 @@ export type WorkspaceView = {
   next_issue_number?: number;
 };
 export type AttachmentView = { id: string; name: string; path: string };
-export type PullRequestView = { number: number; url?: string };
+export type PullRequestView = {
+  number: number;
+  url?: string;
+  title?: string;
+  state?: string;
+  repo?: string;
+  branch?: string;
+  author?: string;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+  mergeable?: string;
+  merge_state?: string;
+  checks_rollup?: string;
+  checks_total?: number;
+  checks_passed?: number;
+  checks_failed?: number;
+  checks_running?: number;
+  failed_check_names?: string[];
+  snapshot_available?: boolean;
+  snapshot_stale?: boolean;
+  snapshot_fetched_at?: string;
+  linked_by?: string;
+  close_intent?: boolean;
+};
+export type GithubPullRequestItem = {
+  number: number;
+  url?: string;
+  title?: string;
+  state?: string;
+  repo?: string;
+  branch?: string;
+  author?: string;
+  body?: string;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+  mergeable?: string;
+  merge_state?: string;
+  checks_rollup?: string;
+  checks_total?: number;
+  checks_passed?: number;
+  checks_failed?: number;
+  checks_running?: number;
+  failed_check_names?: string[];
+  snapshot_available?: boolean;
+};
+export type GithubSync = {
+  workspace_id: string;
+  cli_available?: boolean;
+  authenticated?: boolean;
+  account?: string;
+  error?: string;
+  fetched_at?: string;
+  items?: GithubPullRequestItem[];
+};
+export type GithubView = {
+  enabled?: boolean;
+  pr_sidebar?: boolean;
+  auto_link?: boolean;
+  cli_available?: boolean;
+  authenticated?: boolean;
+  account?: string;
+  last_error?: string;
+  last_synced_at?: string;
+};
 export type TaskView = {
   id: string;
   workspace_id: string;
@@ -340,6 +409,7 @@ export type AgentView = {
   access_member_ids?: string[];
   concurrency_limit?: number;
   cli_args?: string;
+  tool_access?: string;
   mcp_servers?: string[];
   skill_ids?: string[];
 };
@@ -561,6 +631,7 @@ export type View =
       repo_path?: string | null;
       llm_advisor_enabled: boolean;
       notification_kinds?: string[];
+      github?: GithubView;
     }
   | { type: "AgentContext"; context: AgentContextView }
   | { type: "Workspace" } & WorkspaceView

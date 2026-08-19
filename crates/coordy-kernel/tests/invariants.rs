@@ -3,8 +3,9 @@ use coordy_kernel::{
     parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
 };
 use coordy_protocol::{
-    Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
-    HarnessEvent, NodeKind, Query, RunSource, View, STALE_DEPENDENCY_REASON,
+    Actor, AuthenticatedCommand, AuthorizedQuery, Command, GithubPullRequestItem, GithubSync,
+    GraphEdgeKind, GraphEdgeState, HarnessEvent, NodeKind, Query, RunSource, View,
+    STALE_DEPENDENCY_REASON,
 };
 
 fn daemon() -> Actor {
@@ -2112,6 +2113,7 @@ fn start_run_acp_spawns_against_bound_repo() {
     assert_eq!(spawns[0].4, "");
     assert_eq!(spawns[0].5, "");
     assert_eq!(spawns[0].6, "");
+    assert_eq!(spawns[0].8, "auto");
 }
 
 #[test]
@@ -2591,6 +2593,7 @@ fn update_agent_stores_description_and_instructions() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -2612,6 +2615,7 @@ fn update_agent_stores_description_and_instructions() {
     assert_eq!(agent.description, "审查前端 Pull Request");
     assert_eq!(agent.instructions, "只在评论里写结论，不要改代码。");
     assert_eq!(agent.harness, "claude-acp");
+    assert_eq!(agent.tool_access, "auto");
 }
 
 #[test]
@@ -2686,6 +2690,7 @@ fn start_run_prepends_agent_instructions() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -2807,6 +2812,7 @@ fn start_run_passes_agent_model_thinking_and_speed_to_spawn() {
                 access_member_ids: None,
                 concurrency_limit: None,
                 cli_args: None,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -2972,6 +2978,7 @@ fn update_agent_cli_and_limit(
                 access_member_ids: None,
                 concurrency_limit,
                 cli_args,
+                tool_access: None,
                 mcp_servers: None,
             },
         ))
@@ -3361,6 +3368,200 @@ fn start_run_passes_cli_args_to_spawn() {
         .unwrap();
     let spawns = ports.spawns.lock().unwrap();
     assert_eq!(spawns[0].7, "--foo bar");
+}
+
+#[test]
+fn tool_access_defaults_to_auto_and_full_access_reaches_spawn() {
+    let (kernel, ports, workspace_id, principal_id, agent_id) = live_fixture();
+    let View::Agents { items } = kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Query::Agents {
+                workspace_id: workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    assert_eq!(
+        items
+            .iter()
+            .find(|item| item.id == agent_id)
+            .map(|item| item.tool_access.as_str()),
+        Some("auto")
+    );
+
+    let first = create_open_task(&kernel, &principal_id, &workspace_id, "auto-run");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: first.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: first,
+                source: RunSource::Acp {
+                    prompt: "auto".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(ports.spawns.lock().unwrap()[0].8, "auto");
+
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::UpdateAgent {
+                agent_id: agent_id.clone(),
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                tool_access: Some("full_access".into()),
+                mcp_servers: None,
+            },
+        ))
+        .unwrap();
+    let second = create_open_task(&kernel, &principal_id, &workspace_id, "full-run");
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::AssignTask {
+                task_id: second.clone(),
+                agent_id: agent_id.clone(),
+            },
+        ))
+        .unwrap();
+    kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: principal_id.clone(),
+            },
+            Command::StartRun {
+                task_id: second,
+                source: RunSource::Acp {
+                    prompt: "full".into(),
+                },
+                agent_id: None,
+                chat_id: None,
+                trigger: String::new(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(ports.spawns.lock().unwrap()[1].8, "full_access");
+
+    let err = kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: principal_id },
+            Command::UpdateAgent {
+                agent_id,
+                name: None,
+                description: None,
+                instructions: None,
+                harness: None,
+                avatar: None,
+                model: None,
+                thinking: None,
+                speed: None,
+                access: None,
+                access_member_ids: None,
+                concurrency_limit: None,
+                cli_args: None,
+                tool_access: Some("yolo".into()),
+                mcp_servers: None,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("tool_access"));
+}
+
+#[test]
+fn invalid_agent_fields_do_not_partially_update_agent() {
+    let (kernel, _ports, workspace_id, principal_id, agent_id) = live_fixture();
+
+    let invalid_update = |name: Option<&str>,
+                          harness: Option<&str>,
+                          access: Option<&str>,
+                          tool_access: Option<&str>| {
+        Command::UpdateAgent {
+            agent_id: agent_id.clone(),
+            name: name.map(str::to_string),
+            description: Some("也不应保存".into()),
+            instructions: None,
+            harness: harness.map(str::to_string),
+            avatar: None,
+            model: None,
+            thinking: None,
+            speed: None,
+            access: access.map(str::to_string),
+            access_member_ids: None,
+            concurrency_limit: None,
+            cli_args: None,
+            tool_access: tool_access.map(str::to_string),
+            mcp_servers: None,
+        }
+    };
+    for command in [
+        invalid_update(Some(""), None, None, None),
+        invalid_update(Some("不应保存"), Some("  "), None, None),
+        invalid_update(Some("不应保存"), None, Some("public"), None),
+        invalid_update(Some("不应保存"), None, None, Some("yolo")),
+    ] {
+        let err = kernel
+            .submit_sync(cmd(
+                Actor::Principal {
+                    id: principal_id.clone(),
+                },
+                command,
+            ))
+            .unwrap_err();
+        assert_eq!(err.code, "invalid");
+    }
+
+    let View::Agents { items } = kernel
+        .view_sync(q(
+            Actor::Principal { id: principal_id },
+            Query::Agents { workspace_id },
+        ))
+        .unwrap()
+    else {
+        panic!("agents");
+    };
+    let agent = items.iter().find(|item| item.id == agent_id).unwrap();
+    assert_eq!(agent.name, "执行者");
+    assert!(agent.description.is_empty());
+    assert_eq!(agent.harness, "claude");
+    assert_eq!(agent.access, "owner");
+    assert_eq!(agent.tool_access, "auto");
 }
 
 #[test]
@@ -3862,4 +4063,385 @@ fn finishing_one_of_two_blockers_does_not_start() {
         ))
         .unwrap();
     assert_eq!(ports.spawns.lock().unwrap().len(), 1);
+}
+
+fn pr_item(
+    number: u32,
+    branch: &str,
+    title: &str,
+    body: &str,
+    state: &str,
+) -> GithubPullRequestItem {
+    GithubPullRequestItem {
+        number,
+        url: format!("https://github.com/acme/app/pull/{number}"),
+        title: title.into(),
+        state: state.into(),
+        repo: "acme/app".into(),
+        branch: branch.into(),
+        author: "dev".into(),
+        body: body.into(),
+        additions: 4,
+        deletions: 1,
+        changed_files: 2,
+        mergeable: "mergeable".into(),
+        merge_state: "clean".into(),
+        checks_rollup: "success".into(),
+        checks_total: 3,
+        checks_passed: 3,
+        checks_failed: 0,
+        checks_running: 0,
+        failed_check_names: Vec::new(),
+        snapshot_available: true,
+    }
+}
+
+#[test]
+fn github_auto_link_attaches_ci_snapshot() {
+    let h = setup();
+    let created = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "登录跳转".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    let task_id = created.ids["task_id"].as_str().unwrap().to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(
+                    41,
+                    "coor-1-fix-login",
+                    "COOR-1 fix login",
+                    "notes",
+                    "open",
+                )],
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.pull_requests.len(), 1);
+    let pr = &task.pull_requests[0];
+    assert_eq!(pr.number, 41);
+    assert_eq!(pr.state, "open");
+    assert_eq!(pr.checks_rollup, "success");
+    assert_eq!(pr.checks_passed, 3);
+    assert_eq!(pr.merge_state, "clean");
+    assert_eq!(pr.linked_by, "auto");
+    let settings = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Settings {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Settings { github, .. } = settings else {
+        panic!("settings");
+    };
+    assert!(github.cli_available);
+    assert!(github.authenticated);
+    assert_eq!(github.account, "dev");
+}
+
+#[test]
+fn github_merged_close_intent_completes_issue() {
+    let h = setup();
+    let created = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "完成登录".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    let task_id = created.ids["task_id"].as_str().unwrap().to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: String::new(),
+                items: vec![pr_item(9, "feat", "login", "Closes COOR-1", "merged")],
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.status, "done");
+    assert!(task.pull_requests[0].close_intent);
+}
+
+#[test]
+fn github_related_to_does_not_link_or_complete() {
+    let h = setup();
+    let created = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "旁路".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap();
+    let task_id = created.ids["task_id"].as_str().unwrap().to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                error: String::new(),
+                account: "dev".into(),
+                fetched_at: String::new(),
+                items: vec![pr_item(
+                    3,
+                    "other",
+                    "unrelated",
+                    "Related to COOR-1",
+                    "merged",
+                )],
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert!(task.pull_requests.is_empty());
+    assert_eq!(task.status, "open");
+}
+
+#[test]
+fn github_sync_error_keeps_auto_links_and_marks_stale() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "登录跳转".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(
+                    41,
+                    "coor-1-fix-login",
+                    "COOR-1 fix login",
+                    "notes",
+                    "open",
+                )],
+            })),
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: "尚未绑定代码仓库。".into(),
+                fetched_at: "2026-08-19T00:01:00Z".into(),
+                items: Vec::new(),
+            })),
+        ))
+        .unwrap();
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    let pr = &task.pull_requests[0];
+    assert_eq!(pr.number, 41);
+    assert!(pr.snapshot_stale);
+    let settings = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Settings {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Settings { github, .. } = settings else {
+        panic!("settings");
+    };
+    assert_eq!(github.last_error, "尚未绑定代码仓库。");
+}
+
+#[test]
+fn github_refresh_without_daemon_is_unavailable() {
+    let h = setup();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::RefreshGithub {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "unavailable");
+}
+
+#[test]
+fn github_sync_rejects_member_forged_snapshots() {
+    let h = setup();
+    let task_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "不能由客户端伪造完成".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "forged".into(),
+                error: String::new(),
+                fetched_at: "2026-08-19T00:00:00Z".into(),
+                items: vec![pr_item(99, "other", "unrelated", "Closes COOR-1", "merged")],
+            })),
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "denied");
+
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let task = tasks.iter().find(|row| row.id == task_id).unwrap();
+    assert_eq!(task.status, "open");
+    assert!(task.pull_requests.is_empty());
 }

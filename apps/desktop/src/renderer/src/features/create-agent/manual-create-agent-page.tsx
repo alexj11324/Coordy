@@ -82,6 +82,7 @@ export function ManualCreateAgentPage() {
         speed: draft.speed,
         avatar: draft.avatar,
         access: draft.access,
+        toolAccess: draft.toolAccess,
       });
       const store = browserStore();
       if (store) clearManualDraft(workspaceId, store);

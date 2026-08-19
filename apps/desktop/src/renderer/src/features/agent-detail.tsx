@@ -17,10 +17,10 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { formatAgentAvatar } from "../lib/coordy/agent-avatar";
 import { agentDisplayName, canonicalHarnessId, listableAgents, pickerRuntimes } from "../lib/coordy/labels";
-import { CODEX_FAST_SPEED, normalizeCodexFast, sanitizeThinking } from "../lib/coordy/agent-draft";
+import { CODEX_FAST_SPEED, normalizeCodexFast, parseToolAccess, sanitizeThinking, type ToolAccess } from "../lib/coordy/agent-draft";
 import { asAgents, asPrincipals, asSkills, outcomeId } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
-import { RuntimeCapabilityFields } from "./create-agent/agent-create-form";
+import { RuntimeCapabilityFields, ToolAccessField } from "./create-agent/agent-create-form";
 import { RuntimePicker } from "./runtime-picker";
 import { AgentAvatar, AgentAvatarField } from "./agent-avatar";
 import { useTabTitle } from "../shell/use-tab-title";
@@ -67,6 +67,7 @@ export function AgentDetailPage() {
   const [speed, setSpeed] = useState("");
   const [avatar, setAvatar] = useState("");
   const [access, setAccess] = useState<string>("owner");
+  const [toolAccess, setToolAccess] = useState<ToolAccess>("auto");
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [skillIds, setSkillIds] = useState<string[]>([]);
   const [concurrency, setConcurrency] = useState("6");
@@ -90,6 +91,7 @@ export function AgentDetailPage() {
     setSpeed(normalizeCodexFast(agent.speed ?? ""));
     setAvatar(agent.avatar ?? "");
     setAccess(agent.access || "owner");
+    setToolAccess(parseToolAccess(agent.tool_access));
     setMemberIds(agent.access_member_ids ?? []);
     setSkillIds(agent.skill_ids ?? []);
     setConcurrency(String(agent.concurrency_limit && agent.concurrency_limit > 0 ? agent.concurrency_limit : 6));
@@ -115,6 +117,7 @@ export function AgentDetailPage() {
         access_member_ids: access === "members" ? memberIds : [],
         concurrency_limit: Number.isFinite(limit) && limit > 0 ? limit : 6,
         cli_args: cliArgs,
+        tool_access: toolAccess,
       });
       await submit({ type: "SetAgentSkills", agent_id: agent.id, skill_ids: skillIds });
     },
@@ -215,6 +218,13 @@ export function AgentDetailPage() {
             onThinkingChange={setThinking}
             onFastChange={(on) => setSpeed(on ? CODEX_FAST_SPEED : "")}
           />
+        </div>
+        <div className="space-y-1.5">
+          <Label>工具权限</Label>
+          <p className="text-xs text-muted-foreground">Auto 和 Full Access 不是同一档。保存后，下一次启动运行才会改参数。</p>
+          <div className="overflow-hidden rounded-xl border bg-card">
+            <ToolAccessField value={toolAccess} onChange={setToolAccess} />
+          </div>
         </div>
         <div className="space-y-1.5">
           <Label>访问权限</Label>

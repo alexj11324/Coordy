@@ -20,3 +20,4 @@ dirs.workspace = true
 reqwest.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+libc = "0.2"

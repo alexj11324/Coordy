@@ -256,6 +256,7 @@ export function AiBuilderSessionPage() {
         speed: session.draft.speed,
         avatar: session.draft.avatar,
         access: session.draft.access,
+        toolAccess: session.draft.toolAccess,
       });
       const store = browserStore();
       if (store) removeBuilderSession(workspaceId, session.id, store);

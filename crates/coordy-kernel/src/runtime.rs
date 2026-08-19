@@ -167,6 +167,7 @@ impl Kernel {
             &agent.thinking,
             &agent.speed,
             &agent.cli_args,
+            &agent.tool_access,
         )?;
         Ok(Outcome::ok("harness started", json!({ "run_id": run_id })))
     }
@@ -524,6 +525,7 @@ impl Kernel {
                     access_member_ids: Vec::new(),
                     concurrency_limit: 6,
                     cli_args: String::new(),
+                    tool_access: "auto".into(),
                     mcp_servers: Vec::new(),
                     skill_ids: Vec::new(),
                 });
@@ -545,6 +547,7 @@ impl Kernel {
                 access_member_ids,
                 concurrency_limit,
                 cli_args,
+                tool_access,
                 mcp_servers,
             } => {
                 let agent = world
@@ -562,13 +565,45 @@ impl Kernel {
                 if agent.archived {
                     return Err(CoordyError::invalid("archived agents cannot be updated"));
                 }
-                if let Some(name) = name {
-                    let name = normalize_agent_name(&name)?;
-                    if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
-                        return Err(CoordyError::invalid(
-                            "agent name must be unique in this workspace",
-                        ));
+                // Normalize every fallible field before the first mutation so an
+                // invalid combined update cannot leave unaudited partial state.
+                let name = match name {
+                    Some(name) => {
+                        let name = normalize_agent_name(&name)?;
+                        if agent_name_taken(&world, &agent.workspace_id, &name, Some(&agent_id)) {
+                            return Err(CoordyError::invalid(
+                                "agent name must be unique in this workspace",
+                            ));
+                        }
+                        Some(name)
                     }
+                    None => None,
+                };
+                let harness = match harness {
+                    Some(harness) => {
+                        let harness = harness.trim();
+                        if harness.is_empty() {
+                            return Err(CoordyError::invalid("runtime is required"));
+                        }
+                        Some(harness.to_string())
+                    }
+                    None => None,
+                };
+                let access = match access {
+                    Some(access)
+                        if matches!(access.as_str(), "owner" | "workspace" | "members") =>
+                    {
+                        Some(access)
+                    }
+                    Some(_) => return Err(CoordyError::invalid("unknown access")),
+                    None => None,
+                };
+                let tool_access = tool_access
+                    .as_deref()
+                    .map(normalize_tool_access)
+                    .transpose()?;
+
+                if let Some(name) = name {
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.name = name;
                     }
@@ -584,12 +619,8 @@ impl Kernel {
                     }
                 }
                 if let Some(harness) = harness {
-                    let harness = harness.trim();
-                    if harness.is_empty() {
-                        return Err(CoordyError::invalid("runtime is required"));
-                    }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
-                        row.harness = harness.to_string();
+                        row.harness = harness;
                     }
                 }
                 if let Some(avatar) = avatar {
@@ -613,9 +644,6 @@ impl Kernel {
                     }
                 }
                 if let Some(access) = access {
-                    if !matches!(access.as_str(), "owner" | "workspace" | "members") {
-                        return Err(CoordyError::invalid("unknown access"));
-                    }
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.access = access;
                     }
@@ -634,6 +662,11 @@ impl Kernel {
                     if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
                         row.workspace_id = row.workspace_id.clone();
                         row.cli_args = cli_args;
+                    }
+                }
+                if let Some(tool_access) = tool_access {
+                    if let Some(row) = world.agents.iter_mut().find(|item| item.id == agent_id) {
+                        row.tool_access = tool_access;
                     }
                 }
                 if let Some(mcp_servers) = mcp_servers {
@@ -1468,6 +1501,7 @@ impl Kernel {
                             &agent.thinking,
                             &agent.speed,
                             &agent.cli_args,
+                            &agent.tool_access,
                         )?;
                         return Ok(Outcome::ok("harness started", json!({ "run_id": run_id })));
                     }
@@ -1759,6 +1793,9 @@ impl Kernel {
                 }
                 return Ok(outcome);
             }
+            Command::RefreshGithub { .. } => Err(CoordyError::unavailable(
+                "github refresh requires coordyd to invoke the GitHub CLI",
+            )),
             other => {
                 let outcome = product::submit(&mut world, &actor, other)?;
                 let released = Self::released_task_ids(&outcome);
@@ -1885,6 +1922,11 @@ impl Kernel {
                                 a.concurrency_limit
                             },
                             cli_args: a.cli_args.clone(),
+                            tool_access: if a.tool_access.is_empty() {
+                                "auto".into()
+                            } else {
+                                a.tool_access.clone()
+                            },
                             mcp_servers: a.mcp_servers.clone(),
                             skill_ids: a.skill_ids.clone(),
                         })
@@ -2039,6 +2081,7 @@ impl Kernel {
                     repo_path,
                     llm_advisor_enabled: world.llm_advisor_enabled,
                     notification_kinds: world.notification_kinds.clone(),
+                    github: product::github_view(&world, &workspace_id),
                 })
             }
             Query::AgentContext { agent_id } => {
@@ -2693,6 +2736,16 @@ fn normalize_agent_name(name: &str) -> Result<String, CoordyError> {
         return Err(CoordyError::invalid("agent name is required"));
     }
     Ok(name.to_string())
+}
+
+fn normalize_tool_access(value: &str) -> Result<String, CoordyError> {
+    match value.trim() {
+        "" | "auto" => Ok("auto".into()),
+        "full_access" => Ok("full_access".into()),
+        _ => Err(CoordyError::invalid(
+            "tool_access must be auto or full_access",
+        )),
+    }
 }
 
 fn agent_name_taken(
