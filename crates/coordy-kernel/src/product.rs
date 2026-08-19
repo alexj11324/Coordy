@@ -17,8 +17,8 @@ use crate::ids;
 use crate::world::{
     Attachment, Automation, Chat, ChatMessage, Comment, Computer, CustomPropertyDef, DirectoryLock,
     GraphEdge, Integration, IssueBlockerEdge, NodeMaterialization, Principal, Project, Reaction,
-    Skill, Squad, Task, TaskPlanApplication, TaskPlanProposalRecord, TaskSubscription, Workspace,
-    WorkspaceLabel, World,
+    Run, Skill, Squad, Task, TaskPlanApplication, TaskPlanProposalRecord, TaskSubscription,
+    Workspace, WorkspaceLabel, World,
 };
 
 pub fn slugify(name: &str) -> String {
@@ -203,7 +203,7 @@ pub fn task_plan_view(proposal: &TaskPlanProposalRecord) -> TaskPlanProposalView
     }
 }
 
-fn validate_task_plan(
+pub(crate) fn validate_task_plan(
     world: &World,
     actor: &Actor,
     draft: &TaskPlanDraft,
@@ -789,7 +789,6 @@ fn save_task_plan(
             }
             if current.draft.workspace_id != draft.workspace_id
                 || current.draft.chat_id != draft.chat_id
-                || current.draft.source_run_id != draft.source_run_id
                 || current.draft.source_agent_id != draft.source_agent_id
             {
                 return Err(CoordyError::invalid("task plan provenance cannot change"));
@@ -817,6 +816,64 @@ fn save_task_plan(
         "task plan saved",
         json!({ "proposal_id": proposal_id, "revision": revision }),
     ))
+}
+
+pub(crate) fn latest_applicable_task_plan_for_chat<'a>(
+    world: &'a World,
+    chat_id: &str,
+) -> Option<&'a TaskPlanProposalRecord> {
+    world.task_plan_proposals.iter().rev().find(|proposal| {
+        proposal.draft.chat_id == chat_id
+            && !world
+                .task_plan_applications
+                .iter()
+                .any(|application| application.proposal_id == proposal.id)
+            && latest_task_plan(world, &proposal.id)
+                .is_some_and(|latest| latest.revision == proposal.revision)
+    })
+}
+
+pub(crate) fn save_task_plan_from_chat_run(
+    world: &mut World,
+    run: &Run,
+    draft: TaskPlanDraft,
+) -> Result<(), CoordyError> {
+    if draft.workspace_id != run.workspace_id
+        || draft.chat_id != run.chat_id.clone().unwrap_or_default()
+        || draft.source_run_id != run.id
+        || draft.source_agent_id != run.agent_id
+    {
+        return Err(CoordyError::invalid(
+            "task plan artifact provenance mismatch",
+        ));
+    }
+    let chat = world
+        .chat(&draft.chat_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("chat"))?;
+    validate_task_plan(
+        world,
+        &Actor::Principal {
+            id: chat.owner_principal_id,
+        },
+        &draft,
+    )?;
+    if latest_applicable_task_plan_for_chat(world, &draft.chat_id)
+        .is_some_and(|proposal| proposal.draft == draft)
+    {
+        return Ok(());
+    }
+    let (id, revision) = latest_applicable_task_plan_for_chat(world, &draft.chat_id)
+        .map(|proposal| (proposal.id.clone(), proposal.revision + 1))
+        .unwrap_or_else(|| (ids::new("plan"), 1));
+    world.task_plan_proposals.push(TaskPlanProposalRecord {
+        id,
+        revision,
+        created_by: run.agent_id.clone(),
+        created_at: ids::now(),
+        draft,
+    });
+    Ok(())
 }
 
 struct PlannedTaskInput<'a> {

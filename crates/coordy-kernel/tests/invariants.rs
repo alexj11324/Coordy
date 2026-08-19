@@ -7975,6 +7975,71 @@ fn task_plan_revision_cannot_change_source_provenance() {
 }
 
 #[test]
+fn chat_view_projects_only_the_latest_unapplied_task_plan() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let chat_id = draft.chat_id.clone();
+    let (proposal_id, revision) = save_plan(&h, draft);
+
+    let before = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: chat_id.clone(),
+            },
+        ))
+        .unwrap();
+    match before {
+        View::Chat {
+            task_plan,
+            task_plan_error,
+            ..
+        } => {
+            assert_eq!(task_plan.unwrap().id, proposal_id);
+            assert!(task_plan_error.is_none());
+        }
+        _ => panic!("chat"),
+    }
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "chat-projection".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    let after = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat { chat_id },
+        ))
+        .unwrap();
+    match after {
+        View::Chat { task_plan, .. } => assert!(task_plan.is_none()),
+        _ => panic!("chat"),
+    }
+}
+
+#[test]
 fn task_plan_stale_or_unauthorized_apply_creates_nothing() {
     let h = setup();
     let draft = plan_draft(

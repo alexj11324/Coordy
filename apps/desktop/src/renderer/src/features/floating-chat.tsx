@@ -10,18 +10,21 @@ import {
   cn,
 } from "@coordy/ui";
 import { Archive, ChevronDown, Maximize2, MessageCircle, Minimize2, Minus, Plus, SendHorizonal, Square } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { chatTimeline } from "../lib/coordy/activity";
 import { submit, view } from "../lib/coordy/client";
 import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
 import { startChatTurn } from "../lib/coordy/start-task";
-import { asAgents, asChatDetail, asChats, asRunDetail, asRuns, latestRunForTask, outcomeId } from "../lib/coordy/views";
+import { asAgents, asChatDetail, asChats, asProjects, asRunDetail, asRuns, asSquads, asTasks, latestRunForTask, outcomeId } from "../lib/coordy/views";
 import { useLayoutStore } from "../state/layout-store";
 import { useSession } from "../state/session-store";
 import { ActivityLine } from "./activity-marker";
 import { AgentAvatar } from "./agent-avatar";
+import { TaskPlanCard } from "./task-plan-card";
+import type { TaskPlanApplyMode, TaskPlanDraft } from "@coordy/protocol";
+import { suppressStreamingTaskPlanJson, taskPlanApplyCommand, taskPlanRegenerationPrompt } from "../lib/coordy/task-plan";
 
 const SUGGESTIONS = [
   "按优先级列出未完成任务",
@@ -36,8 +39,10 @@ export function FloatingChat() {
   const workspaceId = useSession((s) => s.workspaceId);
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const open = dock === "open";
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [planResult, setPlanResult] = useState<{ parentTaskId: string; childCount: number; mode: TaskPlanApplyMode } | null>(null);
 
   const agents = useQuery({
     queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
@@ -49,11 +54,25 @@ export function FloatingChat() {
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Chats", workspace_id: workspaceId! }),
   });
+  const board = useQuery({
+    queryKey: ["view", { type: "Board", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId) && open,
+    queryFn: () => view({ type: "Board", workspace_id: workspaceId! }),
+  });
+  const projects = useQuery({
+    queryKey: ["view", { type: "Projects", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId) && open,
+    queryFn: () => view({ type: "Projects", workspace_id: workspaceId! }),
+  });
+  const squads = useQuery({
+    queryKey: ["view", { type: "Squads", workspace_id: workspaceId }, workspaceId],
+    enabled: Boolean(workspaceId) && open,
+    queryFn: () => view({ type: "Squads", workspace_id: workspaceId! }),
+  });
   const agentList = listableAgents(asAgents(agents.data));
   const chatList = asChats(chats.data).filter((chat) => !chat.archived);
   const current = chatList.find((chat) => chat.id === activeChatId) ?? null;
   const chatId = current?.id ?? null;
-  const open = dock === "open";
 
   const detail = useQuery({
     queryKey: ["view", { type: "Chat", chat_id: chatId }, chatId],
@@ -78,11 +97,22 @@ export function FloatingChat() {
     refetchInterval: latestRun?.status === "running" ? 800 : false,
   });
   const runEvents = asRunDetail(runDetail.data)?.events ?? [];
+  const displayedRunEvents = latestRun?.status === "running"
+    ? suppressStreamingTaskPlanJson(runEvents)
+    : runEvents;
   const agentName = agent ? agentDisplayName(agent) : "智能体";
 
+  useEffect(() => {
+    setPlanResult(null);
+    setError(null);
+  }, [chatId]);
+  useEffect(() => {
+    if (chatDetail?.taskPlan) setPlanResult(null);
+  }, [chatDetail?.taskPlan?.id]);
+
   const timeline = useMemo(
-    () => chatTimeline(chatDetail?.messages ?? [], runEvents, latestRun?.id),
-    [chatDetail?.messages, latestRun?.id, runEvents],
+    () => chatTimeline(chatDetail?.messages ?? [], displayedRunEvents, latestRun?.id),
+    [chatDetail?.messages, displayedRunEvents, latestRun?.id],
   );
 
   const ensureChat = async () => {
@@ -117,6 +147,54 @@ export function FloatingChat() {
       setDraft("");
       setError(null);
       await qc.invalidateQueries();
+    },
+    onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+  });
+
+  const savePlanDraft = async (nextDraft: TaskPlanDraft) => {
+    const proposal = chatDetail?.taskPlan;
+    if (!proposal) throw new Error("当前对话没有可编辑的任务方案。");
+    const outcome = await submit({
+      type: "SaveTaskPlanProposal",
+      proposal_id: proposal.id,
+      expected_revision: proposal.revision,
+      draft: nextDraft,
+    });
+    await qc.invalidateQueries();
+    return Number(outcome.ids.revision);
+  };
+
+  const planAction = useMutation({
+    mutationFn: async (input:
+      | { type: "save"; draft: TaskPlanDraft }
+      | { type: "regenerate"; draft: TaskPlanDraft }
+      | { type: "apply"; draft: TaskPlanDraft; mode: TaskPlanApplyMode }) => {
+      const proposal = chatDetail?.taskPlan;
+      if (!proposal) throw new Error("当前对话没有可用的任务方案。");
+      if (input.type === "save") {
+        await savePlanDraft(input.draft);
+        return null;
+      }
+      if (input.type === "regenerate") {
+        // Regeneration always establishes a new persisted revision first,
+        // even when the user did not edit the current draft. This makes the
+        // revision history reflect the explicit regenerate action.
+        const revision = await savePlanDraft(input.draft);
+        await send.mutateAsync(taskPlanRegenerationPrompt(input.draft, revision));
+        return null;
+      }
+      const revision = JSON.stringify(input.draft) === JSON.stringify(proposal.draft)
+        ? proposal.revision
+        : await savePlanDraft(input.draft);
+      const applied = await submit(taskPlanApplyCommand(proposal.id, revision, input.mode));
+      const parentTaskId = outcomeId(applied.ids, "parent_task_id");
+      const childCount = Array.isArray(applied.ids.child_task_ids) ? applied.ids.child_task_ids.length : input.draft.children.length;
+      await qc.invalidateQueries();
+      return parentTaskId ? { parentTaskId, childCount, mode: input.mode } : null;
+    },
+    onSuccess: (result) => {
+      setError(null);
+      if (result) setPlanResult(result);
     },
     onError: (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
   });
@@ -290,6 +368,30 @@ export function FloatingChat() {
               ),
             )
           )}
+          {chatDetail?.taskPlan ? (
+            <TaskPlanCard
+              proposal={chatDetail.taskPlan}
+              agents={agentList}
+              squads={asSquads(squads.data)}
+              projects={asProjects(projects.data)}
+              tasks={asTasks(board.data)}
+              busy={planAction.isPending || send.isPending}
+              onSave={async (nextDraft) => { await planAction.mutateAsync({ type: "save", draft: nextDraft }); }}
+              onRegenerate={async (nextDraft) => { await planAction.mutateAsync({ type: "regenerate", draft: nextDraft }); }}
+              onApply={async (nextDraft, mode) => { await planAction.mutateAsync({ type: "apply", draft: nextDraft, mode }); }}
+            />
+          ) : null}
+          {chatDetail?.taskPlanError ? <p className="text-sm text-destructive">{chatDetail.taskPlanError}</p> : null}
+          {planResult ? (
+            <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3 text-sm" role="status">
+              <p className="font-medium">方案已创建</p>
+              <p className="text-muted-foreground">已创建 {planResult.childCount} 个子事项；{planResult.mode === "confirm_and_start" ? "首批可执行事项已开始。" : "所有事项暂未开始。"}</p>
+              <Button size="sm" onClick={() => {
+                useLayoutStore.getState().minimizeChatDock();
+                navigate(`/board/${planResult.parentTaskId}`);
+              }}>查看父事项</Button>
+            </div>
+          ) : null}
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
       </div>

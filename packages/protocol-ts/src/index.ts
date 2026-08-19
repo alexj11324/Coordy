@@ -740,7 +740,13 @@ export type View =
   | { type: "Automations"; items: AutomationView[] }
   | { type: "Comments"; items: CommentView[] }
   | { type: "Chats"; items: ChatView[] }
-  | { type: "Chat"; chat: ChatView; messages: ChatMessageView[] }
+  | {
+      type: "Chat";
+      chat: ChatView;
+      messages: ChatMessageView[];
+      task_plan?: TaskPlanProposalView | null;
+      task_plan_error?: string | null;
+    }
   | { type: "Labels"; items: LabelView[] }
   | { type: "Stats"; stats: StatsView }
   | { type: "Computers"; items: ComputerView[] }

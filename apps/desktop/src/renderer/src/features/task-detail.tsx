@@ -40,7 +40,7 @@ import { pickedFilesFromList } from "../lib/coordy/files";
 import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
 import { agentDisplayName, listableAgents, runStatusLabel, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { insertAgentMention, mentionsFromBody } from "../lib/coordy/mentions";
-import { startAcpOnTask } from "../lib/coordy/start-task";
+import { startAcpOnTask, startChatTurn } from "../lib/coordy/start-task";
 import {
   asAgents,
   asComments,
@@ -56,6 +56,7 @@ import {
   outcomeId,
 } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
+import { useLayoutStore } from "../state/layout-store";
 import { useTabTitle } from "../shell/use-tab-title";
 import { ActivityLine } from "./activity-marker";
 import { AgentAvatar, NamedAgent } from "./agent-avatar";
@@ -160,8 +161,7 @@ export function TaskDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [addingSubtask, setAddingSubtask] = useState(false);
-  const [suggestedTitles, setSuggestedTitles] = useState<string[]>([]);
-  const [suggestBusy, setSuggestBusy] = useState(false);
+  const [planBusy, setPlanBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [blockerPick, setBlockerPick] = useState("none");
@@ -295,31 +295,41 @@ export function TaskDetailPage() {
     }
     setSubtaskTitle("");
     setAddingSubtask(false);
-    setSuggestedTitles((current) => current.filter((item) => item !== titleText));
     await refresh();
   };
 
-  const suggestSplit = async () => {
-    setSuggestBusy(true);
+  const planInChat = async () => {
+    setPlanBusy(true);
     setNotice(null);
     try {
-      const secrets = await window.coordy.secretsStatus();
-      if (!secrets.key_configured) {
-        setNotice("未配置模型密钥。请在设置 → 模型密钥中填写后再使用建议拆分。");
-        return;
-      }
-      const draft = await window.coordy.completeDraft(
-        "subtasks",
-        `把下面的事项拆成 2 到 5 个可独立执行的子事项标题。\n标题：${task.title}\n正文：${task.description ?? ""}`,
-      );
-      const titles = (draft.titles ?? []).filter(Boolean);
-      setSuggestedTitles(titles);
-      setAddingSubtask(true);
-      setNotice(titles.length ? "已生成拆分建议，确认后再创建。" : "模型没有返回可用标题。");
+      if (!workspaceId) throw new Error("工作区尚未就绪。");
+      const planningAgent = agentList.find((item) => item.id === task.assignee_agent_id) ?? agentList[0];
+      if (!planningAgent) throw new Error("请先创建一个智能体，再通过对话规划拆分。");
+      const created = await submit({
+        type: "CreateChat",
+        workspace_id: workspaceId,
+        agent_id: planningAgent.id,
+        project_id: task.project_id ?? null,
+      });
+      const chatId = outcomeId(created.ids, "chat_id");
+      const chatView = await view({ type: "Chat", chat_id: chatId });
+      if (chatView.type !== "Chat" || !chatView.chat.task_id) throw new Error("未能创建规划对话。");
+      const prompt = [
+        `请通过对话把事项 ${taskIdentifier(task)} 拆成完整、可执行并可独立验收的任务方案。`,
+        `提案必须把 parent 设为 existing，task_id 为 ${task.id}。`,
+        "为每个子事项补齐说明、验收标准、优先级、阶段、前置依赖，并只使用实际可用的智能体或小队 ID。",
+        `标题：${task.title}`,
+        `正文：${task.description ?? ""}`,
+      ].join("\n");
+      await submit({ type: "SendChatMessage", chat_id: chatId, body: prompt });
+      await startChatTurn({ chatId, taskId: chatView.chat.task_id, agentId: planningAgent.id, prompt });
+      useLayoutStore.getState().openChatDock(chatId);
+      setNotice("已打开规划对话。方案生成后可在聊天中编辑、仅创建或确认并开始。");
+      await qc.invalidateQueries();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
     } finally {
-      setSuggestBusy(false);
+      setPlanBusy(false);
     }
   };
 
@@ -471,18 +481,6 @@ export function TaskDetailPage() {
                   <span className="min-w-0 truncate">{child.title}</span>
                 </Link>
               ))}
-              {suggestedTitles.map((item) => (
-                <div key={item} className={cn("flex h-8 items-center justify-between gap-2 px-1", uiText)}>
-                  <span className="truncate text-muted-foreground">{item}</span>
-                  <button
-                    type="button"
-                    className="text-muted-foreground hover:text-foreground"
-                    onClick={() => void addSubtask(item)}
-                  >
-                    创建
-                  </button>
-                </div>
-              ))}
               {addingSubtask ? (
                 <form
                   className="mt-1 flex items-center gap-2 px-1"
@@ -521,11 +519,11 @@ export function TaskDetailPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={suggestBusy}
+                    disabled={planBusy}
                     className="text-muted-foreground hover:text-foreground disabled:opacity-40"
-                    onClick={() => void suggestSplit()}
+                    onClick={() => void planInChat()}
                   >
-                    {suggestBusy ? "正在建议…" : "建议拆分"}
+                    {planBusy ? "正在打开规划对话…" : "通过对话拆分"}
                   </button>
                 </div>
               )}

@@ -858,7 +858,7 @@ pub enum View {
         tasks: Vec<TaskView>,
     },
     TaskPlan {
-        proposal: TaskPlanProposalView,
+        proposal: Box<TaskPlanProposalView>,
     },
     Commitments {
         items: Vec<CommitmentView>,
@@ -942,6 +942,10 @@ pub enum View {
     Chat {
         chat: ChatView,
         messages: Vec<ChatMessageView>,
+        #[serde(default)]
+        task_plan: Option<Box<TaskPlanProposalView>>,
+        #[serde(default)]
+        task_plan_error: Option<String>,
     },
     Labels {
         items: Vec<LabelView>,

@@ -3,7 +3,7 @@
   "name": "chat-plan-preview",
   "title": "Chat plan preview and editing",
   "description": "Render agent-produced task plans in chat with editable preview, regeneration, one-click confirmation, and clear failure states.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

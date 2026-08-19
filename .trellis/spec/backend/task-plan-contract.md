@@ -99,3 +99,88 @@ start already assigned children.
 Save a versioned proposal, let the user confirm one revision, preflight every
 identity and edge, build the complete graph in a cloned `World`, and swap only
 after all mutations succeed.
+
+## Scenario: Chat artifact discovery and editable confirmation
+
+### 1. Scope / Trigger
+
+Use this flow when the latest assistant chat run contains one exact
+`COORDY_TASK_PLAN_V1` fenced JSON artifact. The artifact is advisory output; the
+chat projection exposes the newest unapplied proposal and the renderer owns only
+editing state and explicit member confirmation.
+
+### 2. Signatures
+
+The `Chat` view includes:
+
+```text
+task_plan?: TaskPlanProposalView
+task_plan_artifact_error?: string
+```
+
+The renderer saves edits with `SaveTaskPlanProposal`, then applies that returned
+revision with `ApplyTaskPlan`.
+
+### 3. Contracts
+
+- Decode only a complete fenced artifact whose declared version is exactly
+  `COORDY_TASK_PLAN_V1`; streamed chunks are not proposals.
+- Persist a valid artifact with the assistant run and agent as immutable source
+  provenance. Never infer provenance from renderer state.
+- Hide the valid artifact JSON from primary chat prose while retaining the
+  assistant explanation and tool activity. Malformed artifact text stays
+  visible with an actionable error.
+- Project only the latest run's artifact error and the latest unapplied proposal
+  for the selected chat; switching chats or receiving a newer proposal clears
+  stale state.
+- Every edit creates a new proposal revision. Confirmation first saves dirty
+  edits and applies the exact returned revision.
+- Deleting a child removes incoming references to its key. Renderer validation
+  mirrors kernel key, priority, stage, dependency, ordering, and cycle rules but
+  never replaces kernel validation.
+- Regeneration creates a persistent revision before requesting a new assistant
+  turn, so the audit trail records the user-visible action even when the model
+  returns no new artifact.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| Artifact incomplete during streaming | Suppress fenced JSON preview; do not save |
+| Unsupported, duplicate, malformed, or incomplete artifact | Preserve text, expose latest-run error, make no proposal mutation |
+| Dirty edit invalid in renderer | Disable confirmation and identify the field/edge |
+| Dirty edit loses a revision race | Kernel rejects stale revision; leave card editable |
+| Save succeeds but apply fails | Saved revision remains reviewable; no task graph is created |
+| Valid artifact plus normal explanation/tool activity | Hide only artifact JSON; preserve the rest |
+
+### 5. Good/Base/Bad Cases
+
+- Good: an explanation followed by one valid artifact becomes an editable card;
+  editing a dependency and confirming applies the newly saved revision.
+- Base: ordinary assistant prose with no artifact remains ordinary chat.
+- Bad: a streamed or unsupported-version artifact never flashes as a usable
+  plan and never mutates task state.
+
+### 6. Tests Required
+
+- Kernel tests for valid, malformed, streamed, latest-run, and cross-chat
+  projection behavior.
+- Renderer helper tests for strict parsing, normalization, dependency ordering,
+  dangling references, and cycles.
+- Component tests for editing, deletion cleanup, regeneration, create-only,
+  confirm-and-start, and successful parent navigation.
+- Full desktop tests, TypeScript typecheck, production build, protocol parity,
+  Rust formatting, and focused task-plan tests.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Render streaming JSON as chat prose, trust the browser to validate it, and apply
+the proposal revision that happened to be loaded when the user clicked.
+
+#### Correct
+
+Wait for the complete assistant output, strictly decode and persist it in the
+kernel, project one reviewable proposal, save every edit as a revision, and let
+the authenticated member apply that exact revision atomically.

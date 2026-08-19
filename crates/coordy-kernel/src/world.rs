@@ -83,6 +83,15 @@ pub struct World {
     pub task_plan_proposals: Vec<TaskPlanProposalRecord>,
     #[serde(default)]
     pub task_plan_applications: Vec<TaskPlanApplication>,
+    #[serde(default)]
+    pub task_plan_artifact_errors: Vec<TaskPlanArtifactError>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskPlanArtifactError {
+    pub chat_id: String,
+    pub run_id: String,
+    pub message: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

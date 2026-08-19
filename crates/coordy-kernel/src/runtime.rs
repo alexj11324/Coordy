@@ -23,7 +23,7 @@ use crate::verification::{
 };
 use crate::world::{
     Agent, AuditEntry, Commitment, CompactionSnapshot, Contract, EffectRecord, Grant, InboxItem,
-    MemoryRecord, Principal, Run, RunEvent, Task, Workspace, World,
+    MemoryRecord, Principal, Run, RunEvent, Task, TaskPlanArtifactError, Workspace, World,
 };
 use crate::{ids, memory};
 
@@ -2685,7 +2685,7 @@ impl Kernel {
                     return Err(CoordyError::denied("private chat owner required"));
                 }
                 Ok(View::TaskPlan {
-                    proposal: product::task_plan_view(proposal),
+                    proposal: Box::new(product::task_plan_view(proposal)),
                 })
             }
             Query::Commitments { workspace_id } => {
@@ -3045,6 +3045,12 @@ impl Kernel {
                 if !product::can_see_chat(&actor, &chat) {
                     return Err(CoordyError::denied("private chat"));
                 }
+                let latest_run_id = world
+                    .runs
+                    .iter()
+                    .rev()
+                    .find(|run| run.chat_id.as_deref() == Some(chat_id.as_str()))
+                    .map(|run| run.id.as_str());
                 Ok(View::Chat {
                     chat: product::chat_view(&chat),
                     messages: world
@@ -3053,6 +3059,17 @@ impl Kernel {
                         .filter(|m| m.chat_id == chat_id)
                         .map(product::chat_message_view)
                         .collect(),
+                    task_plan: product::latest_applicable_task_plan_for_chat(&world, &chat_id)
+                        .map(product::task_plan_view)
+                        .map(Box::new),
+                    task_plan_error: world
+                        .task_plan_artifact_errors
+                        .iter()
+                        .rev()
+                        .find(|error| {
+                            error.chat_id == chat_id && latest_run_id == Some(error.run_id.as_str())
+                        })
+                        .map(|error| error.message.clone()),
                 })
             }
             Query::Labels { workspace_id } => {
@@ -3327,10 +3344,92 @@ fn ingest_event(
         .run(run_id)
         .cloned()
         .ok_or_else(|| CoordyError::not_found("run"))?;
+    let event = if let HarnessEvent::Message { role, content } = event {
+        if role == "assistant" && run.chat_id.is_some() {
+            let chat_id = run.chat_id.as_deref().expect("chat run");
+            if product::latest_applicable_task_plan_for_chat(world, chat_id)
+                .is_some_and(|proposal| proposal.draft.source_run_id == run.id)
+            {
+                return record_harness_event(
+                    world,
+                    advisor,
+                    &run,
+                    HarnessEvent::Message { role, content },
+                );
+            }
+            let prior_assistant = world
+                .run_events
+                .iter()
+                .filter(|item| item.run_id == run.id && item.kind == "message")
+                .filter_map(|item| item.payload.strip_prefix("assistant: "))
+                .collect::<String>();
+            let candidate = if prior_assistant.contains("```COORDY_TASK_PLAN_V1") {
+                format!("{prior_assistant}{content}")
+            } else {
+                content.clone()
+            };
+            let ParsedTaskPlanArtifact {
+                draft,
+                error,
+                display,
+            } = parse_task_plan_artifact(&candidate);
+            if let Some(error) = error {
+                let chat_id = run.chat_id.clone().expect("chat run");
+                world
+                    .task_plan_artifact_errors
+                    .retain(|item| item.chat_id != chat_id);
+                world.task_plan_artifact_errors.push(TaskPlanArtifactError {
+                    chat_id,
+                    run_id: run.id.clone(),
+                    message: error,
+                });
+            }
+            if let Some(draft) = draft {
+                world
+                    .task_plan_artifact_errors
+                    .retain(|item| item.chat_id != draft.chat_id);
+                match product::save_task_plan_from_chat_run(world, &run, draft) {
+                    Ok(()) => {
+                        // Prior streaming chunks may contain the opening fence
+                        // or partial JSON. The successful parse's `display`
+                        // contains the complete conversational copy, so remove
+                        // the superseded assistant chunks before recording it.
+                        remove_superseded_task_plan_chunks(world, &run.id);
+                    }
+                    Err(error) => {
+                        let chat_id = run.chat_id.clone().expect("chat run");
+                        world.task_plan_artifact_errors.push(TaskPlanArtifactError {
+                            chat_id,
+                            run_id: run.id.clone(),
+                            message: error.message,
+                        });
+                    }
+                }
+            }
+            HarnessEvent::Message {
+                role,
+                content: display,
+            }
+        } else {
+            HarnessEvent::Message { role, content }
+        }
+    } else {
+        event
+    };
+    record_harness_event(world, advisor, &run, event)
+}
+
+fn record_harness_event(
+    world: &mut World,
+    advisor: &Arc<dyn Advisor>,
+    run: &Run,
+    event: HarnessEvent,
+) -> Result<(), CoordyError> {
+    let run_id = &run.id;
     let seq = world
         .run_events
         .iter()
-        .filter(|e| e.run_id == run_id)
+        .filter(|e| e.run_id == *run_id)
         .count() as u32
         + 1;
     let (kind, payload): (String, String) = match &event {
@@ -3348,7 +3447,7 @@ fn ingest_event(
         HarnessEvent::Patch { diff } => ("patch".into(), diff.clone()),
     };
     world.run_events.push(RunEvent {
-        run_id: run_id.into(),
+        run_id: run_id.clone(),
         seq,
         kind: kind.clone(),
         payload: payload.clone(),
@@ -3356,7 +3455,7 @@ fn ingest_event(
     Kernel::emit(
         world,
         Effect::RunEvent {
-            run_id: run_id.into(),
+            run_id: run_id.clone(),
             event: RunEventView { seq, kind, payload },
         },
     );
@@ -3518,7 +3617,11 @@ fn ingest_event(
                 }
             }
             if matches!(name.as_str(), "git" | "test" | "patch_apply") {
-                let paused = world.runs.iter().find(|r| r.id == run_id).cloned();
+                let paused = world
+                    .runs
+                    .iter()
+                    .find(|candidate| candidate.id == run_id.as_str())
+                    .cloned();
                 if let Some(run) = paused {
                     if world.paused_runs.contains(&run.id) {
                         let outcomes = vec![format!("{name} exit={exit_code:?} {output}")];
@@ -3544,6 +3647,157 @@ fn ingest_event(
         }
     }
     Ok(())
+}
+
+struct ParsedTaskPlanArtifact {
+    draft: Option<coordy_protocol::TaskPlanDraft>,
+    error: Option<String>,
+    display: String,
+}
+
+fn remove_superseded_task_plan_chunks(world: &mut World, run_id: &str) {
+    world.run_events.retain(|item| {
+        item.run_id != run_id || item.kind != "message" || !item.payload.starts_with("assistant: ")
+    });
+}
+
+fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
+    const OPEN: &str = "```COORDY_TASK_PLAN_V1";
+    let matches = content.match_indices(OPEN).collect::<Vec<_>>();
+    if matches.is_empty() {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: None,
+            display: content.to_string(),
+        };
+    }
+    if matches.len() != 1 {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: Some(
+                "任务方案解析失败：每次回复只能包含一个 COORDY_TASK_PLAN_V1 代码块。".into(),
+            ),
+            display: content.to_string(),
+        };
+    }
+    let start = matches[0].0;
+    let body_start = start + OPEN.len();
+    let Some(line_end) = content[body_start..]
+        .find('\n')
+        .map(|offset| body_start + offset + 1)
+    else {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: None,
+            display: content.to_string(),
+        };
+    };
+    let Some(close_offset) = content[line_end..].find("```") else {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: None,
+            display: content.to_string(),
+        };
+    };
+    let close = line_end + close_offset;
+    let json = content[line_end..close].trim();
+    let draft = match serde_json::from_str::<coordy_protocol::TaskPlanDraft>(json) {
+        Ok(draft) => draft,
+        Err(error) => {
+            return ParsedTaskPlanArtifact {
+                draft: None,
+                error: Some(format!("任务方案解析失败：{error}")),
+                display: content.to_string(),
+            }
+        }
+    };
+    let after = close + 3;
+    let display = format!("{}{}", &content[..start], &content[after..])
+        .trim()
+        .to_string();
+    ParsedTaskPlanArtifact {
+        draft: Some(draft),
+        error: None,
+        display: if display.is_empty() {
+            "已生成任务拆分方案，请在下方检查并确认。".into()
+        } else {
+            display
+        },
+    }
+}
+
+#[cfg(test)]
+mod task_plan_artifact_tests {
+    use super::{parse_task_plan_artifact, remove_superseded_task_plan_chunks};
+    use crate::world::{RunEvent, World};
+
+    #[test]
+    fn strict_artifact_is_decoded_and_hidden_from_display_copy() {
+        let content = r#"方案如下。
+```COORDY_TASK_PLAN_V1
+{"version":"COORDY_TASK_PLAN_V1","workspace_id":"ws","chat_id":"chat","source_run_id":"run","source_agent_id":"agent","parent":{"mode":"existing","task_id":"parent"},"children":[{"key":"a","title":"A","description":"Do A","acceptance_criteria":["A passes"],"priority":"medium","stage":1}]}
+```"#;
+        let parsed = parse_task_plan_artifact(content);
+        assert_eq!(parsed.draft.unwrap().children[0].key, "a");
+        assert_eq!(parsed.display, "方案如下。");
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn malformed_artifact_remains_visible_with_exact_error() {
+        let content = "```COORDY_TASK_PLAN_V1\n{bad}\n```";
+        let parsed = parse_task_plan_artifact(content);
+        assert!(parsed.draft.is_none());
+        assert_eq!(parsed.display, content);
+        assert!(parsed.error.unwrap().starts_with("任务方案解析失败："));
+    }
+
+    #[test]
+    fn incomplete_stream_chunk_waits_for_the_closing_fence() {
+        let first = "```COORDY_TASK_PLAN_V1\n{\"version\":\"COORDY_TASK_PLAN_V1\"";
+        let pending = parse_task_plan_artifact(first);
+        assert!(pending.draft.is_none());
+        assert!(pending.error.is_none());
+
+        let combined = format!(
+            "{first}{}",
+            ",\"workspace_id\":\"ws\",\"chat_id\":\"chat\",\"source_run_id\":\"run\",\"source_agent_id\":\"agent\",\"parent\":{\"mode\":\"existing\",\"task_id\":\"parent\"},\"children\":[{\"key\":\"a\",\"title\":\"A\",\"description\":\"Do A\",\"acceptance_criteria\":[\"A passes\"],\"priority\":\"medium\",\"stage\":1}]}\n```"
+        );
+        assert!(parse_task_plan_artifact(&combined).draft.is_some());
+    }
+
+    #[test]
+    fn successful_artifact_replaces_streamed_assistant_chunks_but_keeps_activity() {
+        let mut world = World {
+            run_events: vec![
+                RunEvent {
+                    run_id: "run".into(),
+                    seq: 1,
+                    kind: "tool".into(),
+                    payload: "search".into(),
+                },
+                RunEvent {
+                    run_id: "run".into(),
+                    seq: 2,
+                    kind: "message".into(),
+                    payload: "assistant: ```COORDY_TASK_PLAN_V1\n{partial".into(),
+                },
+                RunEvent {
+                    run_id: "other".into(),
+                    seq: 1,
+                    kind: "message".into(),
+                    payload: "assistant: unrelated".into(),
+                },
+            ],
+            ..World::default()
+        };
+
+        remove_superseded_task_plan_chunks(&mut world, "run");
+
+        assert_eq!(world.run_events.len(), 2);
+        assert_eq!(world.run_events[0].kind, "tool");
+        assert_eq!(world.run_events[1].run_id, "other");
+    }
 }
 
 fn maybe_record_commitment(
