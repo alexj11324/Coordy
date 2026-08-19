@@ -302,7 +302,7 @@ struct CheckSummary {
     failed_names: Vec<String>,
 }
 
-pub fn summarize_checks(value: &Value) -> CheckSummary {
+fn summarize_checks(value: &Value) -> CheckSummary {
     let mut passed = 0u32;
     let mut failed = 0u32;
     let mut running = 0u32;
