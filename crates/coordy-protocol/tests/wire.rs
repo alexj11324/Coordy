@@ -126,6 +126,7 @@ fn issue_blocker_command_keeps_pascal_variant() {
 fn reaffirm_and_remove_dependency_keep_pascal_variant() {
     let reaffirm = serde_json::to_value(coordy_protocol::Command::ReaffirmDependency {
         dependency_id: "dep_1".into(),
+        expected_generation: 1,
     })
     .unwrap();
     assert_eq!(reaffirm["type"], "ReaffirmDependency");
@@ -145,6 +146,7 @@ fn submit_rpc_keeps_command_inline_after_boxing() {
             actor: coordy_protocol::Actor::Daemon,
             command: coordy_protocol::Command::ReaffirmDependency {
                 dependency_id: "dep_1".into(),
+                expected_generation: 1,
             },
         }),
     })

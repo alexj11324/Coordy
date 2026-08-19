@@ -3,9 +3,10 @@ use std::sync::{Arc, Mutex};
 use coordy_advisor::{Advisor, DeterministicAdvisor, StateAssessment};
 use coordy_protocol::{
     Actor, AgentContextView, AgentView, AuthenticatedCommand, AuthorizedQuery, Command,
-    CommitmentView, ConflictView, ContractView, CoordyError, DependencyView, Effect, GrantView,
-    HarnessEvent, HealthView, InboxView, MemoryView, Outcome, PrincipalView, Query, RunEventView,
-    RunSource, RunView, View, PRODUCT_VERSION, PROTOCOL_VERSION, STALE_DEPENDENCY_REASON,
+    CommitmentView, ConflictView, ContractView, CoordyError, Effect, GrantView, GraphEdgeKind,
+    HarnessEvent, HealthView, InboxView, MemoryView, NodeRef, Outcome, PrincipalView, Query,
+    RunEventView, RunSource, RunView, View, PRODUCT_VERSION, PROTOCOL_VERSION,
+    STALE_DEPENDENCY_REASON,
 };
 use serde_json::json;
 
@@ -1001,6 +1002,9 @@ impl Kernel {
                         .ok_or_else(|| CoordyError::not_found("task"))?;
                     apply_task_status(task, &status);
                 }
+                if status == "done" {
+                    product::mark_node_succeeded(&mut world, &workspace_id, &task_id);
+                }
                 let released = product::refresh_issue_blocker_dependents(&mut world, &task_id);
                 if previous != status {
                     product::push_notice(
@@ -1300,7 +1304,7 @@ impl Kernel {
                         return Err(CoordyError::denied("agent cannot approve shared contracts"));
                     }
                 };
-                let (became_active, status) = {
+                let (became_active, status, contract_ws) = {
                     let contract = world
                         .contracts
                         .iter_mut()
@@ -1323,9 +1327,11 @@ impl Kernel {
                     (
                         !was_active && contract.status == "active",
                         contract.status.clone(),
+                        contract.workspace_id.clone(),
                     )
                 };
                 if became_active {
+                    product::bump_node_artifact(&mut world, &contract_ws, &contract_id);
                     let consumers = invalidate_dependencies(&mut world, "contract", &contract_id);
                     pause_stale_consumers(&mut world, &consumers);
                 }
@@ -1568,26 +1574,47 @@ impl Kernel {
                 drop(world);
                 self.ports.apply_patch(&worktree, &patch)?;
                 let mut world = self.world.lock().expect("world lock");
+                product::bump_node_artifact(&mut world, &task.workspace_id, &task_id);
                 let consumers = invalidate_dependencies(&mut world, "repo", &task_id);
                 pause_stale_consumers(&mut world, &consumers);
                 Ok(Outcome::ok("patch applied", json!({ "task_id": task_id })))
             }
             Command::DeclareDependency {
                 workspace_id,
+                source,
+                target,
                 from_id,
                 to_id,
+                kind,
                 entity,
+                reason,
+                origin_run_id,
+                selector_path,
             } => product::declare_dependency(
                 &mut world,
                 &actor,
-                &workspace_id,
-                &from_id,
-                &to_id,
-                &entity,
+                product::DeclareDependencyRequest {
+                    workspace_id,
+                    source,
+                    target,
+                    from_id,
+                    to_id,
+                    kind,
+                    entity,
+                    reason,
+                    origin_run_id,
+                    selector_path,
+                },
             ),
-            Command::ReaffirmDependency { dependency_id } => {
-                product::reaffirm_dependency(&mut world, &actor, &dependency_id)
-            }
+            Command::ReaffirmDependency {
+                dependency_id,
+                expected_generation,
+            } => product::reaffirm_dependency(
+                &mut world,
+                &actor,
+                &dependency_id,
+                expected_generation,
+            ),
             Command::RemoveDependency { dependency_id } => {
                 product::remove_dependency(&mut world, &actor, &dependency_id)
             }
@@ -1919,14 +1946,22 @@ impl Kernel {
                         .dependencies
                         .iter()
                         .filter(|d| d.workspace_id == workspace_id)
-                        .map(|d| DependencyView {
-                            id: d.id.clone(),
-                            from_id: d.from_id.clone(),
-                            to_id: d.to_id.clone(),
-                            entity: d.entity.clone(),
-                            valid: d.valid,
-                        })
+                        .map(product::dependency_view)
                         .collect(),
+                })
+            }
+            Query::GraphSnapshot { workspace_id } => {
+                require_member(&world, &actor, &workspace_id)?;
+                let (revision, event_cursor, nodes, edges, materializations, health) =
+                    product::graph_snapshot(&world, &workspace_id);
+                Ok(View::GraphSnapshot {
+                    workspace_id,
+                    revision,
+                    event_cursor,
+                    nodes,
+                    edges,
+                    materializations,
+                    health,
                 })
             }
             Query::Conflicts { workspace_id } => {
@@ -2331,11 +2366,33 @@ fn maybe_ingest_dependency(world: &mut World, run: &Run, claim: &str) {
     let Some((token, entity)) = parse_depends_claim(claim) else {
         return;
     };
-    let Some(to_id) = resolve_depends_target(world, &run.workspace_id, &token) else {
+    let Some(source_id) = resolve_depends_target(world, &run.workspace_id, &token) else {
         return;
     };
-    let _ =
-        product::record_dependency_edge(world, &run.workspace_id, &run.task_id, &to_id, &entity);
+    let Ok(source) = product::resolve_node_in_workspace(world, &run.workspace_id, &source_id)
+    else {
+        return;
+    };
+    let _ = product::record_dependency_edge(
+        world,
+        &Actor::Agent {
+            id: run.agent_id.clone(),
+            principal_id: world
+                .agent(&run.agent_id)
+                .map(|agent| agent.principal_id.clone())
+                .unwrap_or_default(),
+        },
+        &run.workspace_id,
+        product::GraphEdgeDraft {
+            source,
+            target: NodeRef::task(&run.task_id),
+            kind: GraphEdgeKind::Consumes,
+            entity,
+            reason: Some("DEPENDS".into()),
+            origin_run_id: Some(run.id.clone()),
+            selector_path: None,
+        },
+    );
 }
 
 fn ingest_event(

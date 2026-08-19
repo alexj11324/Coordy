@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+
+use coordy_protocol::{GraphEdgeKind, GraphEdgeState, NodeRef};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EffectRecord {
@@ -16,7 +20,7 @@ pub struct World {
     pub memories: Vec<MemoryRecord>,
     pub tasks: Vec<Task>,
     pub contracts: Vec<Contract>,
-    pub dependencies: Vec<DependencyEdge>,
+    pub dependencies: Vec<GraphEdge>,
     pub conflicts: Vec<Conflict>,
     pub runs: Vec<Run>,
     pub run_events: Vec<RunEvent>,
@@ -61,6 +65,14 @@ pub struct World {
     pub reactions: Vec<Reaction>,
     #[serde(default)]
     pub issue_blockers: Vec<IssueBlockerEdge>,
+    #[serde(default)]
+    pub materializations: Vec<NodeMaterialization>,
+    #[serde(default)]
+    pub node_artifacts: HashMap<String, u64>,
+    #[serde(default)]
+    pub graph_events: Vec<GraphEvent>,
+    #[serde(default)]
+    pub graph_revision: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -247,13 +259,144 @@ pub struct Contract {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DependencyEdge {
+#[serde(from = "GraphEdgeWire")]
+pub struct GraphEdge {
     pub id: String,
     pub workspace_id: String,
-    pub from_id: String,
-    pub to_id: String,
+    pub source: NodeRef,
+    pub target: NodeRef,
+    pub kind: GraphEdgeKind,
     pub entity: String,
-    pub valid: bool,
+    pub state: GraphEdgeState,
+    pub generation: u64,
+    #[serde(default)]
+    pub origin_run_id: Option<String>,
+    #[serde(default)]
+    pub actor_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub source_event: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub selector_path: Option<String>,
+    #[serde(default)]
+    pub observed_version: Option<u64>,
+    #[serde(default)]
+    pub current_version: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GraphEdgeWire {
+    id: String,
+    workspace_id: String,
+    #[serde(default)]
+    source: Option<NodeRef>,
+    #[serde(default)]
+    target: Option<NodeRef>,
+    #[serde(default)]
+    from_id: Option<String>,
+    #[serde(default)]
+    to_id: Option<String>,
+    #[serde(default)]
+    kind: Option<GraphEdgeKind>,
+    entity: String,
+    #[serde(default)]
+    valid: Option<bool>,
+    #[serde(default)]
+    state: Option<GraphEdgeState>,
+    #[serde(default)]
+    generation: Option<u64>,
+    #[serde(default)]
+    origin_run_id: Option<String>,
+    #[serde(default)]
+    actor_id: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    source_event: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    selector_path: Option<String>,
+    #[serde(default)]
+    observed_version: Option<u64>,
+    #[serde(default)]
+    current_version: Option<u64>,
+}
+
+impl From<GraphEdgeWire> for GraphEdge {
+    fn from(wire: GraphEdgeWire) -> Self {
+        let source = wire
+            .source
+            .unwrap_or_else(|| NodeRef::task(wire.to_id.clone().unwrap_or_default()));
+        let target = wire
+            .target
+            .unwrap_or_else(|| NodeRef::task(wire.from_id.clone().unwrap_or_default()));
+        let state = wire.state.unwrap_or_else(|| {
+            if wire.valid.unwrap_or(true) {
+                GraphEdgeState::Active
+            } else {
+                GraphEdgeState::Stale
+            }
+        });
+        Self {
+            id: wire.id,
+            workspace_id: wire.workspace_id,
+            source,
+            target,
+            kind: wire.kind.unwrap_or(GraphEdgeKind::Consumes),
+            entity: wire.entity,
+            state,
+            generation: wire.generation.unwrap_or(1),
+            origin_run_id: wire.origin_run_id,
+            actor_id: wire.actor_id,
+            reason: wire.reason,
+            source_event: wire.source_event,
+            created_at: wire.created_at.unwrap_or_default(),
+            selector_path: wire.selector_path,
+            observed_version: wire.observed_version,
+            current_version: wire.current_version,
+        }
+    }
+}
+
+impl GraphEdge {
+    pub fn valid(&self) -> bool {
+        self.state.is_active()
+    }
+
+    pub fn source_id(&self) -> &str {
+        &self.source.id
+    }
+
+    pub fn target_id(&self) -> &str {
+        &self.target.id
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NodeMaterialization {
+    pub workspace_id: String,
+    pub node: NodeRef,
+    pub state: GraphEdgeState,
+    pub artifact_revision: u64,
+    pub updated_at: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GraphEvent {
+    pub id: String,
+    pub workspace_id: String,
+    pub kind: String,
+    pub at: String,
+    #[serde(default)]
+    pub edge_id: Option<String>,
+    #[serde(default)]
+    pub node_id: Option<String>,
+    #[serde(default)]
+    pub payload: serde_json::Value,
 }
 
 /// B waits on A: `task_id` is B, `blocker_id` is A.

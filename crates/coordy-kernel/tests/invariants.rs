@@ -3,8 +3,8 @@ use coordy_kernel::{
     parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
 };
 use coordy_protocol::{
-    Actor, AuthenticatedCommand, AuthorizedQuery, Command, HarnessEvent, Query, RunSource, View,
-    STALE_DEPENDENCY_REASON,
+    Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
+    HarnessEvent, NodeKind, Query, RunSource, View, STALE_DEPENDENCY_REASON,
 };
 
 fn daemon() -> Actor {
@@ -979,17 +979,13 @@ fn declare_dependency_invalidated_on_apply() {
             },
         ))
         .unwrap();
+    let consumer = issue_title(&h, "dep-consumer");
     h.kernel
         .submit_sync(cmd(
             Actor::Principal {
                 id: h.alice.clone(),
             },
-            Command::DeclareDependency {
-                workspace_id: h.workspace_id.clone(),
-                from_id: "other-task".into(),
-                to_id: task_id.clone(),
-                entity: "repo".into(),
-            },
+            declare_cmd(&h.workspace_id, &consumer, &task_id, "repo"),
         ))
         .unwrap();
     h.kernel
@@ -1063,22 +1059,49 @@ fn create_worktree(h: &Harness, task_id: &str) {
         .unwrap();
 }
 
+fn declare_cmd(workspace_id: &str, from_id: &str, to_id: &str, entity: &str) -> Command {
+    Command::DeclareDependency {
+        workspace_id: workspace_id.into(),
+        source: None,
+        target: None,
+        from_id: from_id.into(),
+        to_id: to_id.into(),
+        kind: GraphEdgeKind::Consumes,
+        entity: entity.into(),
+        reason: None,
+        origin_run_id: None,
+        selector_path: None,
+    }
+}
+
 fn declare_dep(h: &Harness, from_id: &str, to_id: &str, entity: &str) -> String {
     h.kernel
         .submit_sync(cmd(
             alice_actor(h),
-            Command::DeclareDependency {
-                workspace_id: h.workspace_id.clone(),
-                from_id: from_id.into(),
-                to_id: to_id.into(),
-                entity: entity.into(),
-            },
+            declare_cmd(&h.workspace_id, from_id, to_id, entity),
         ))
         .unwrap()
         .ids["dependency_id"]
         .as_str()
         .unwrap()
         .to_string()
+}
+
+fn reaffirm_dep(h: &Harness, dependency_id: &str) {
+    let generation = alice_deps(h)
+        .into_iter()
+        .find(|dep| dep.id == dependency_id)
+        .expect("dependency")
+        .generation;
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(h),
+            Command::ReaffirmDependency {
+                dependency_id: dependency_id.into(),
+                expected_generation: generation,
+            },
+        ))
+        .unwrap();
 }
 
 fn start_fixture(h: &Harness, task_id: &str, events: Vec<HarnessEvent>) -> String {
@@ -1220,14 +1243,7 @@ fn stale_dependency_gates_start_and_retry_until_reaffirm() {
     assert_eq!(retry_err.code, "invalid");
     assert!(retry_err.message.contains(STALE_DEPENDENCY_REASON));
 
-    h.kernel
-        .submit_sync(cmd(
-            alice_actor(&h),
-            Command::ReaffirmDependency {
-                dependency_id: dep_id,
-            },
-        ))
-        .unwrap();
+    reaffirm_dep(&h, &dep_id);
     let after = board_task(&alice_board(&h), &consumer);
     assert!(after.blocked_reason.is_none());
     assert_eq!(
@@ -1316,6 +1332,10 @@ fn depends_prefix_records_edge_only_when_id_resolves() {
     assert_eq!(deps.len(), 1);
     assert_eq!(deps[0].from_id, consumer);
     assert_eq!(deps[0].to_id, upstream);
+    assert_eq!(deps[0].source.id, upstream);
+    assert_eq!(deps[0].target.id, consumer);
+    assert_eq!(deps[0].kind, GraphEdgeKind::Consumes);
+    assert!(deps[0].origin_run_id.is_some());
     assert_eq!(deps[0].entity, "repo");
     assert!(deps[0].valid);
     let claims: Vec<_> = alice_commitments(&h)
@@ -1337,16 +1357,288 @@ fn declare_dependency_rejects_task_cycles() {
         .kernel
         .submit_sync(cmd(
             alice_actor(&h),
-            Command::DeclareDependency {
-                workspace_id: h.workspace_id.clone(),
-                from_id: first,
-                to_id: second,
-                entity: "repo".into(),
-            },
+            declare_cmd(&h.workspace_id, &first, &second, "repo"),
         ))
         .unwrap_err();
     assert_eq!(err.code, "invalid");
     assert!(err.message.contains("循环"));
+}
+
+#[test]
+fn declare_dependency_rejects_dangling_and_cross_workspace() {
+    let h = setup();
+    let local = issue_title(&h, "local");
+    let dangling = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, "missing-task", &local, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(dangling.code, "invalid");
+    assert!(dangling.message.contains("不存在"));
+
+    let other_ws = h
+        .kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreateWorkspace {
+                name: "other".into(),
+            },
+        ))
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let other_principal = h
+        .kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::CreatePrincipal {
+                workspace_id: other_ws.clone(),
+                name: "Other".into(),
+            },
+        ))
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let foreign = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: other_principal,
+            },
+            Command::CreateTask {
+                workspace_id: other_ws,
+                title: "foreign".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let cross = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &foreign, &local, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(cross.code, "invalid");
+    assert!(cross.message.contains("跨工作区"));
+}
+
+#[test]
+fn declare_dependency_rejects_mixed_precedence_consumes_cycle() {
+    let h = setup();
+    let first = issue_title(&h, "a");
+    let second = issue_title(&h, "b");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: second.clone(),
+                blocker_id: first.clone(),
+            },
+        ))
+        .unwrap();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &first, &second, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("循环"));
+}
+
+#[test]
+fn invalidate_only_consumes_from_changed_source() {
+    let h = setup();
+    let producer_a = issue_title(&h, "api-a");
+    let consumer_b = issue_title(&h, "ui-b");
+    let producer_c = issue_title(&h, "api-c");
+    let consumer_d = issue_title(&h, "ui-d");
+    let hit = declare_dep(&h, &consumer_b, &producer_a, "repo");
+    let other = declare_dep(&h, &consumer_d, &producer_c, "repo");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer_a);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer_a,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let deps = alice_deps(&h);
+    let hit_edge = deps.iter().find(|dep| dep.id == hit).expect("hit");
+    let other_edge = deps.iter().find(|dep| dep.id == other).expect("other");
+    assert!(!hit_edge.valid);
+    assert_eq!(hit_edge.state, GraphEdgeState::Stale);
+    assert!(other_edge.valid);
+    assert_eq!(other_edge.state, GraphEdgeState::Active);
+}
+
+#[test]
+fn done_consumer_stays_done_when_materialization_goes_stale() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::SetTaskStatus {
+                task_id: consumer.clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let task = board_task(&alice_board(&h), &consumer);
+    assert_eq!(task.status, "done");
+    assert!(task.blocked_reason.is_none());
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::GraphSnapshot {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphSnapshot {
+            materializations,
+            edges,
+            health,
+            ..
+        } => {
+            assert!(health.consistent);
+            assert_eq!(health.lag, 0);
+            assert!(materializations
+                .iter()
+                .any(|row| { row.node.id == consumer && row.state == GraphEdgeState::Stale }));
+            assert!(edges.iter().any(|edge| {
+                edge.target.id == consumer
+                    && edge.kind == GraphEdgeKind::Consumes
+                    && edge.state == GraphEdgeState::Stale
+            }));
+        }
+        other => panic!("expected graph snapshot, got {other:?}"),
+    }
+}
+
+#[test]
+fn reaffirm_rejects_stale_generation_and_does_not_start_run() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    let original = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep")
+        .generation;
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ApplyPatch {
+                task_id: producer,
+                patch: "safe change".into(),
+            },
+        ))
+        .unwrap();
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ReaffirmDependency {
+                dependency_id: dep_id.clone(),
+                expected_generation: original,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("generation"));
+    reaffirm_dep(&h, &dep_id);
+    assert_eq!(
+        alice_runs(&h)
+            .iter()
+            .filter(|run| run.task_id == consumer)
+            .count(),
+        0,
+        "reaffirm must not auto-start a run"
+    );
+}
+
+#[test]
+fn graph_snapshot_unifies_source_to_target_arrows() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    assign_a1(&h, &consumer);
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AddIssueBlocker {
+                task_id: consumer.clone(),
+                blocker_id: producer.clone(),
+            },
+        ))
+        .unwrap();
+    match h
+        .kernel
+        .view_sync(q(
+            alice_actor(&h),
+            Query::GraphSnapshot {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::GraphSnapshot { nodes, edges, .. } => {
+            assert!(nodes
+                .iter()
+                .any(|node| node.id == producer && node.kind == NodeKind::Task));
+            assert!(edges.iter().any(|edge| {
+                edge.kind == GraphEdgeKind::Consumes
+                    && edge.source.id == producer
+                    && edge.target.id == consumer
+            }));
+            assert!(edges.iter().any(|edge| {
+                edge.kind == GraphEdgeKind::Precedence
+                    && edge.source.id == producer
+                    && edge.target.id == consumer
+            }));
+            assert!(edges.iter().any(|edge| {
+                edge.kind == GraphEdgeKind::AssignedTo && edge.target.id == consumer
+            }));
+        }
+        other => panic!("expected graph snapshot, got {other:?}"),
+    }
 }
 
 #[test]
