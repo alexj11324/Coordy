@@ -216,6 +216,18 @@ pub fn complete_attempt_for_run(world: &mut World, run_id: &str, ok: bool) -> Op
     Some(attempt.node_id.clone())
 }
 
+pub fn pause_attempt_for_run(world: &mut World, run_id: &str) -> Option<String> {
+    let attempt = world
+        .node_attempts
+        .iter_mut()
+        .find(|attempt| attempt.run_id.as_deref() == Some(run_id))?;
+    if !matches!(attempt.lease_status.as_str(), "claimed" | "running") {
+        return None;
+    }
+    attempt.lease_status = "paused".into();
+    Some(attempt.node_id.clone())
+}
+
 pub fn fence_attempts(world: &mut World, node_ids: &[String]) {
     for attempt in world.node_attempts.iter_mut() {
         if node_ids.iter().any(|id| id == &attempt.node_id)

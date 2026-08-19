@@ -255,7 +255,7 @@ function DependencyActions({
   disabled: boolean;
   hasConductor: boolean;
   onReaffirm: (id: string, generation: number) => void;
-  onRemove: (id: string) => void;
+  onRemove: (id: string, generation: number) => void;
 }) {
   return (
     <div className="flex gap-2">
@@ -270,7 +270,13 @@ function DependencyActions({
           确认仍有效
         </Button>
       )}
-      <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => onRemove(dependency.id)}>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={disabled}
+        onClick={() => onRemove(dependency.id, dependency.generation)}
+      >
         移除
       </Button>
       {dependency.valid ? null : (
@@ -320,10 +326,26 @@ function GraphInspector({
   }, [selected?.id, sources[0]?.id]);
 
   const reaffirm = (dependencyId: string, generation: number) => {
-    command.mutate({ type: "ReaffirmDependency", dependency_id: dependencyId, expected_generation: generation });
+    command.mutate({
+      type: "ValidationDecision",
+      dependency_id: dependencyId,
+      expected_generation: generation,
+      decision: "reaffirm",
+      evidence_refs: ["graph-inspector"],
+      rationale: "Member reaffirmed the stale dependency in Graph Inspector.",
+      validator_run_id: null,
+    });
   };
-  const remove = (dependencyId: string) => {
-    command.mutate({ type: "RemoveDependency", dependency_id: dependencyId });
+  const remove = (dependencyId: string, generation: number) => {
+    command.mutate({
+      type: "ValidationDecision",
+      dependency_id: dependencyId,
+      expected_generation: generation,
+      decision: "remove",
+      evidence_refs: ["graph-inspector"],
+      rationale: "Member removed the dependency in Graph Inspector.",
+      validator_run_id: null,
+    });
   };
 
   if (selectedEdge) {
@@ -336,7 +358,7 @@ function GraphInspector({
       stale: selectedEdge.stale,
       generation: selectedEdge.generation,
     });
-    const removeCmd = removeCommandForDependencyEdge(selectedEdge.id);
+    const removeCmd = removeCommandForDependencyEdge(selectedEdge.id, selectedEdge.generation);
     return (
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">

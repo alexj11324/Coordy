@@ -15,13 +15,30 @@ export function reaffirmCommandForStaleEdge(input: {
   const dependency_id = dependencyIdFromGraphEdgeId(input.edgeId);
   if (!dependency_id) return null;
   if (input.generation == null) return null;
-  return { type: "ReaffirmDependency", dependency_id, expected_generation: input.generation };
+  return {
+    type: "ValidationDecision",
+    dependency_id,
+    expected_generation: input.generation,
+    decision: "reaffirm",
+    evidence_refs: ["graph-inspector"],
+    rationale: "Member reaffirmed the stale dependency in Graph Inspector.",
+    validator_run_id: null,
+  };
 }
 
-export function removeCommandForDependencyEdge(edgeId: string): Command | null {
+export function removeCommandForDependencyEdge(edgeId: string, generation?: number): Command | null {
   const dependency_id = dependencyIdFromGraphEdgeId(edgeId);
   if (!dependency_id) return null;
-  return { type: "RemoveDependency", dependency_id };
+  if (generation == null) return null;
+  return {
+    type: "ValidationDecision",
+    dependency_id,
+    expected_generation: generation,
+    decision: "remove",
+    evidence_refs: ["graph-inspector"],
+    rationale: "Member removed the dependency in Graph Inspector.",
+    validator_run_id: null,
+  };
 }
 
 export function declareDependencyCommand(

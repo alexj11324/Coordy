@@ -1,5 +1,5 @@
 use coordy_advisor::{StateAssessment, StateDiffItem};
-use coordy_protocol::{CoordyError, GraphEdgeKind, GraphEdgeState};
+use coordy_protocol::{CoordyError, GraphEdgeKind, GraphEdgeState, ValidationChoice};
 
 use crate::world::{Commitment, World};
 
@@ -26,6 +26,53 @@ pub fn extract_prefixed(content: &str) -> Vec<(String, String)> {
         if !claim.is_empty() {
             out.push((kind.to_string(), claim.to_string()));
         }
+    }
+    out
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParsedValidationPrefix {
+    pub choice: ValidationChoice,
+    pub dependency_id: String,
+    pub generation: Option<u64>,
+}
+
+pub fn parse_validation_prefixes(content: &str) -> Vec<ParsedValidationPrefix> {
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        let Some((tag, rest)) = line.split_once(':') else {
+            continue;
+        };
+        let choice = match tag.trim() {
+            "REAFFIRM" => ValidationChoice::Reaffirm,
+            "HOLD" => ValidationChoice::Hold,
+            "REMOVE" => ValidationChoice::Remove,
+            "REPLAN" => ValidationChoice::Replan,
+            _ => continue,
+        };
+        let rest = rest.trim();
+        let mut parts = rest.split_whitespace();
+        let Some(dependency_id) = parts.next() else {
+            continue;
+        };
+        if dependency_id.is_empty() {
+            continue;
+        }
+        let mut generation = None;
+        for part in parts {
+            let Some((key, value)) = part.split_once('=') else {
+                continue;
+            };
+            if key == "generation" {
+                generation = value.parse().ok();
+            }
+        }
+        out.push(ParsedValidationPrefix {
+            choice,
+            dependency_id: dependency_id.to_string(),
+            generation,
+        });
     }
     out
 }
