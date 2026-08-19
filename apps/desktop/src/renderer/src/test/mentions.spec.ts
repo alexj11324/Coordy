@@ -3,7 +3,7 @@ import { insertAgentMention, mentionsFromBody } from "../lib/coordy/mentions";
 
 describe("issue mention tokens", () => {
   it("parses agent, squad, all, and principal mentions", () => {
-    expect(mentionsFromBody("请看 @agent:ag_1 和 @squad:sq_2，以及 @all 与 @mem_3")).toEqual([
+    expect(mentionsFromBody("请看 @agent:ag_1 和 @squad:sq_2 以及 @all 与 @mem_3")).toEqual([
       { kind: "agent", id: "ag_1" },
       { kind: "squad", id: "sq_2" },
       { kind: "all", id: "all" },
