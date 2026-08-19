@@ -3,10 +3,11 @@ import { chmod, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  canonicalModelDiscoveryHarnessId,
+  claudeStaticCatalog,
   discoverHarnessModels,
   MODEL_DISCOVERY_STRATEGIES,
   parseAcpSession,
-  parseClaudeHelp,
   parseCodex,
   parseCursor,
   parseOmp,
@@ -17,23 +18,25 @@ import {
 describe("harness model discovery", () => {
   it("defines a truthful strategy for every Multica runtime plus Gemini", () => {
     expect(Object.keys(MODEL_DISCOVERY_STRATEGIES)).toHaveLength(24);
-    expect(MODEL_DISCOVERY_STRATEGIES.claude).toBe("claude-cli");
+    expect(MODEL_DISCOVERY_STRATEGIES.claude).toBe(
+      "static-catalog+claude-effort",
+    );
     expect(MODEL_DISCOVERY_STRATEGIES.qwenpaw).toBe("runtime");
     expect(MODEL_DISCOVERY_STRATEGIES.mcode).toBe("runtime");
   });
 
-  it("reads only model selectors and effort levels advertised by the installed Claude CLI", () => {
+  it("uses maintained Claude selectors and only help-advertised effort levels", () => {
     expect(
-      parseClaudeHelp(
-        `Options:\n  --effort <level>  Effort (low, medium, high, xhigh, max)\n  --model <model>   Provide an alias (e.g. 'fable', 'opus', or 'sonnet') or a full name (e.g. 'claude-fable-5').\n  -p, --print       Print and exit\n`,
+      claudeStaticCatalog(
+        `Options:\n  --effort <level>  Effort (low, medium, high, xhigh, max)\n  --model <model>   Arbitrary prose must not become a catalog.\n`,
       ),
     ).toEqual(
-      ["fable", "opus", "sonnet", "claude-fable-5"].map((id) => ({
-        id,
-        label:
-          id === "claude-fable-5"
-            ? "Claude Fable 5"
-            : id.charAt(0).toUpperCase() + id.slice(1),
+      [
+        { id: "sonnet", label: "Sonnet", default: true },
+        { id: "opus", label: "Opus", default: false },
+        { id: "haiku", label: "Haiku", default: false },
+      ].map((model) => ({
+        ...model,
         thinking: ["low", "medium", "high", "xhigh", "max"].map((level) => ({
           id: level,
           label: level,
@@ -100,7 +103,7 @@ describe("harness model discovery", () => {
     }
   });
 
-  it("asks the installed Claude CLI for the selectors it actually advertises", async () => {
+  it("uses the static Claude catalog even when help advertises other model prose", async () => {
     const dir = await mkdtemp(join(tmpdir(), "coordy-claude-model-test-"));
     const fake = join(dir, "claude");
     try {
@@ -109,7 +112,7 @@ describe("harness model discovery", () => {
         `#!/bin/sh
 [ "$1" = "--help" ] || exit 9
 printf '%s\n' "  --effort <level>  Effort (low, medium, high)"
-printf '%s\n' "  --model <model>   Alias ('sonnet') or full name ('claude-local-1')"
+printf '%s\n' "  --model <model>   Alias ('made-up-from-prose')"
 printf '%s\n' "  --print           Print and exit"
 `,
       );
@@ -128,14 +131,25 @@ printf '%s\n' "  --print           Print and exit"
         {
           id: "sonnet",
           label: "Sonnet",
+          default: true,
           thinking: ["low", "medium", "high"].map((id) => ({
             id,
             label: id,
           })),
         },
         {
-          id: "claude-local-1",
-          label: "Claude Local 1",
+          id: "opus",
+          label: "Opus",
+          default: false,
+          thinking: ["low", "medium", "high"].map((id) => ({
+            id,
+            label: id,
+          })),
+        },
+        {
+          id: "haiku",
+          label: "Haiku",
+          default: false,
           thinking: ["low", "medium", "high"].map((id) => ({
             id,
             label: id,
@@ -186,7 +200,7 @@ printf '%s\n' "  --print           Print and exit"
     expect(catalog.models).toEqual([]);
   });
 
-  it("reports a failed native discovery process as unavailable even if it prints JSON", async () => {
+  it("falls back to runtime-managed defaults when native discovery fails", async () => {
     const dir = await mkdtemp(join(tmpdir(), "coordy-model-failure-test-"));
     const fake = join(dir, "codex");
     try {
@@ -204,7 +218,8 @@ printf '%s\n' "  --print           Print and exit"
         source: "path",
         protocol_family: "codex",
       });
-      expect(catalog.source).toBe("unavailable");
+      expect(catalog.source).toBe("runtime");
+      expect(catalog.model_selection_supported).toBe(false);
       expect(catalog.models).toEqual([]);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -228,6 +243,27 @@ printf '%s\n' "  --print           Print and exit"
     ]);
     expect(
       parseAcpSession({
+        models: {
+          currentModelId: "m2",
+          availableModels: [{ modelId: "m2", name: "Two" }],
+        },
+        configOptions: [
+          {
+            id: "thinking",
+            options: [{ value: "high", name: "High", description: "deep" }],
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "m2",
+        label: "Two",
+        default: true,
+        thinking: [{ id: "high", label: "High", description: "deep" }],
+      },
+    ]);
+    expect(
+      parseAcpSession({
         configOptions: [
           {
             id: "model",
@@ -237,6 +273,25 @@ printf '%s\n' "  --print           Print and exit"
         ],
       }),
     ).toEqual([{ id: "k3", label: "K3", default: true }]);
+  });
+
+  it("canonicalizes persisted harness aliases before runtime lookup", () => {
+    const aliases = [
+      ["claude-acp", "claude"],
+      ["claude_code", "claude"],
+      ["claude-code", "claude"],
+      ["codebuddy-code", "codebuddy"],
+      ["codex-acp", "codex"],
+      ["github-copilot-cli", "copilot"],
+      ["gemini-cli", "gemini"],
+      ["grok-build", "grok"],
+      ["pi-acp", "pi"],
+      ["qwen-code", "qwen"],
+      ["codex", "codex"],
+    ] as const;
+    for (const [alias, canonical] of aliases) {
+      expect(canonicalModelDiscoveryHarnessId(alias)).toBe(canonical);
+    }
   });
 
   it("parses each native catalog format without inventing models", () => {

@@ -46,7 +46,10 @@ import {
   registryIconUrl,
 } from "../features/provider-logo";
 import { RuntimePicker } from "../features/runtime-picker";
-import { HarnessDropdown } from "../features/create-agent/agent-create-form";
+import {
+  HarnessDropdown,
+  ModelDropdown,
+} from "../features/create-agent/agent-create-form";
 import { partitionRuntimeCatalog } from "../features/runtimes";
 
 function session(
@@ -62,6 +65,19 @@ function session(
 }
 
 describe("agent creation studio helpers", () => {
+  it("shows runtime-managed model semantics without an arbitrary text field", () => {
+    const html = renderToStaticMarkup(
+      createElement(ModelDropdown, {
+        value: "",
+        presets: [],
+        modelSelectionSupported: false,
+        onChange: () => {},
+      }),
+    );
+    expect(html).toContain("由 harness 管理");
+    expect(html).not.toContain("模型 id");
+  });
+
   it("keeps the first-line name seed from a goal", () => {
     const draft = draftAgentFromGoal(
       "审查前端 Pull Request。\n只看 TypeScript。",

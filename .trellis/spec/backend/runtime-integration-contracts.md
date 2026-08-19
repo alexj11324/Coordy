@@ -23,6 +23,10 @@
 - Explicit import requests must revalidate the resolved executable. A matching ID or Registry entry is never installation proof.
 - Native structured protocols must observe the provider's terminal-success frame. Receiving text is not sufficient.
 - ACP providers share framing but own launch, authentication, model, thinking, workspace metadata, and session capability policies.
+- Persisted Harness aliases are canonicalized before catalog lookup; an old `claude-acp` value must resolve the installed `claude` entry.
+- Claude Code uses a maintained selector catalog because its CLI has no model-list API. Help output may contribute advertised effort values, but prose must never be parsed into model IDs.
+- Unsupported or failed model discovery is runtime-managed/default state. It must not enable an arbitrary model-ID text field.
+- ACP `session/new` model blocks and thinking `configOptions` are merged; receiving direct models must not discard advertised thinking choices.
 - Auto access must stay inside the canonical worktree. Permission escalation requests are rejected; provider bypass flags are Full Access only.
 
 ### 4. Validation & Error Matrix
@@ -37,6 +41,7 @@
 | Provider terminal status is failed/interrupted | failure with provider detail |
 | Auto permission/escalation request | reject/cancel |
 | Fixed launch flag appears in `cli_args` | reject before spawning |
+| Native model discovery fails or returns no models | runtime-managed/default; no free-text selector |
 
 ### 5. Good / Base / Bad Cases
 
@@ -50,6 +55,7 @@
 - A schema-enforced set test must cover every first-class identity exactly once.
 - Each provider family needs a fake executable that asserts fixed argv/input channel, emits one real successful envelope and terminal frame, and has malformed/non-zero coverage.
 - ACP policy tests must assert method order, auth selection, permission rejection in Auto, model/thinking capability, and workspace confinement.
+- Model discovery tests must cover alias canonicalization, Claude's maintained catalog plus advertised effort, runtime-managed failure fallback, and ACP direct-model/thinking-option merging.
 - UI tests must assert only `ready` is selectable; `on_demand` and `missing` remain visible as `未安装`, disabled, and fail submit-time revalidation.
 - Cross-layer tests must prove a Registry fallback selects ACP transport instead of the canonical native family.
 
@@ -90,6 +96,7 @@ match launch.protocol_family.as_str() {
 ### 3. Contracts
 
 - Principal authorization and task/workspace membership are checked before reading the assignee.
+- The principal must pass the same `can_command_agent` policy used by `AssignTask` and `StartRun`; this check occurs before installation lookup or process spawn.
 - The assigned agent and its locally installed executable must exist. Registry metadata is insufficient.
 - Advisory execution runs in a fresh temporary directory with Auto access, then cleans up on every exit path.
 - Provider credentials remain owned by the Harness/CLI. The request, response, and advisory launch must not accept or copy a Coordy model API key or base URL.
@@ -101,6 +108,7 @@ match launch.protocol_family.as_str() {
 | Condition | Required result |
 |---|---|
 | Missing/unauthorized workspace or task | fail without spawning |
+| Workspace peer cannot command the owner-only assigned agent | denied before installation lookup or spawn |
 | Task has no assigned agent | fail with actionable detail |
 | Assigned agent is missing, archived, or not installed | fail without Registry fallback |
 | Harness exits non-zero, times out, or emits malformed output | fail; no partial suggestions |
@@ -118,6 +126,7 @@ match launch.protocol_family.as_str() {
 
 - Rust protocol wire tests must prove the request contains only IDs and no Harness, model, API-key, or base-URL fields.
 - Local-runtime tests must cover authorization, missing assignment, missing installation, success, malformed output, non-zero exit, timeout, and cleanup.
+- Authorization coverage must include a cross-principal workspace peer attempting to use an owner-only assigned agent.
 - A fake provider executable must assert the inherited model/thinking/speed/safe CLI arguments and the isolated working directory.
 - Desktop bridge tests must cover trusted-sender validation and typed response propagation.
 - UI tests must prove the assigned agent is used automatically, suggestions remain reviewable, and child creation occurs only after an explicit user action.
@@ -145,4 +154,58 @@ await suggestTaskSplit({
   task_id: taskId,
   principal_id: principalId,
 })
+```
+
+## Scenario: Create a fully configured agent
+
+### 1. Scope / Trigger
+
+- Trigger: the desktop creation form submits the selected Harness and saved execution settings.
+- Creation is one product command and one persistence boundary, not a renderer-owned `CreateAgent` followed by `UpdateAgent`.
+
+### 2. Signatures
+
+- Command: `CreateConfiguredAgent { workspace_id, principal_id, name, harness, description, instructions, avatar, model, thinking, speed, access, tool_access }`.
+- Outcome: `agent_id` for exactly one fully configured agent.
+
+### 3. Contracts
+
+- The kernel validates principal/workspace ownership, normalized unique name, non-empty Harness, access policy, and tool-access policy before allocating an ID or mutating state.
+- On success the single inserted agent already contains every submitted configuration field and emits one state change.
+- No intermediate default-configured agent may be persisted or observed.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+|---|---|
+| Principal belongs to another workspace | reject; no agent, audit, or state-change effect |
+| Empty or duplicate name | reject before mutation |
+| Empty Harness or unknown access/tool-access value | reject before mutation |
+| Valid complete input | insert exactly one fully configured agent |
+
+### 5. Good / Base / Bad Cases
+
+- Good: creating a workspace-visible Claude reviewer stores its model, thinking, instructions, avatar, and Full Access tool policy in the returned agent.
+- Base: omitted access/tool access normalize to owner/Auto defaults.
+- Bad: the renderer creates a default agent, persists it, then sends a second update that can fail independently.
+
+### 6. Tests Required
+
+- Kernel tests must assert all configuration fields are present immediately after success.
+- A failing final validation field must leave agent count, audit count, and effect count unchanged.
+- Protocol parity tests must keep the Rust and TypeScript command shapes aligned.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+const created = await submit({ type: "CreateAgent", ...identity })
+await submit({ type: "UpdateAgent", agent_id: created.ids.agent_id, ...config })
+```
+
+#### Correct
+
+```ts
+await submit({ type: "CreateConfiguredAgent", ...identity, ...config })
 ```

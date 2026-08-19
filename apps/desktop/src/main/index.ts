@@ -15,7 +15,10 @@ import { cliBinaryPath } from "./daemon/daemon-binary-path";
 import { createEffectPoller } from "./daemon/effect-poller";
 import { installCliBinaries } from "./install-cli";
 import { listDirectory } from "./list-directory";
-import { discoverHarnessModels } from "./model-discovery";
+import {
+  canonicalModelDiscoveryHarnessId,
+  discoverHarnessModels,
+} from "./model-discovery";
 import { resolvePreloadPath } from "./preload-path";
 
 const daemon = new DaemonManager();
@@ -174,7 +177,10 @@ app
         const runtimes = (await daemon.client!.discoverAgents(false)) as Array<{
           id: string;
         }>;
-        const runtime = runtimes.find((item) => item.id === harness);
+        const wanted = canonicalModelDiscoveryHarnessId(harness);
+        const runtime = runtimes.find(
+          (item) => canonicalModelDiscoveryHarnessId(item.id) === wanted,
+        );
         if (!runtime) throw new Error("unknown harness");
         return discoverHarnessModels(runtime as never);
       },

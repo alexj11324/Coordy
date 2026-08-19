@@ -10,6 +10,14 @@ import type {
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
 
+const CLAUDE_MODELS: ReadonlyArray<
+  Pick<HarnessModelView, "id" | "label" | "default">
+> = [
+  { id: "sonnet", label: "Sonnet", default: true },
+  { id: "opus", label: "Opus", default: false },
+  { id: "haiku", label: "Haiku", default: false },
+];
+
 const ACP_ARGS: Record<string, string[]> = {
   codebuddy: ["--acp"],
   copilot: ["--acp"],
@@ -35,7 +43,7 @@ const ACP_ARGS: Record<string, string[]> = {
 };
 
 export const MODEL_DISCOVERY_STRATEGIES = {
-  claude: "claude-cli",
+  claude: "static-catalog+claude-effort",
   codebuddy: "acp",
   codex: "codex-cli",
   copilot: "acp",
@@ -64,7 +72,7 @@ export const MODEL_DISCOVERY_STRATEGIES = {
 export async function discoverHarnessModels(
   runtime: DiscoveredAgentView,
 ): Promise<HarnessModelCatalog> {
-  const provider = canonical(runtime.id);
+  const provider = canonicalModelDiscoveryHarnessId(runtime.id);
   const [binary, ...launchArgs] = splitCommand(runtime.command);
   if (runtime.protocol_family === "acp") {
     if (runtime.launch_state !== "ready" || !runtime.installed || !binary) {
@@ -75,24 +83,24 @@ export async function discoverHarnessModels(
       };
     }
     try {
+      const models = dedupe(
+        await discoverAcpModels(binary, launchArgs, provider),
+      );
+      if (models.length === 0) return runtimeManagedCatalog();
       return {
-        models: dedupe(await discoverAcpModels(binary, launchArgs, provider)),
+        models,
         model_selection_supported: true,
         source: "discovered",
       };
     } catch {
-      return {
-        models: [],
-        model_selection_supported: true,
-        source: "unavailable",
-      };
+      return runtimeManagedCatalog();
     }
   }
   if (provider === "qwenpaw" || provider === "mcode") {
-    return { models: [], model_selection_supported: false, source: "runtime" };
+    return runtimeManagedCatalog();
   }
   if (provider === "qwen" || provider === "gemini") {
-    return { models: [], model_selection_supported: true, source: "runtime" };
+    return runtimeManagedCatalog();
   }
   if (runtime.launch_state !== "ready" || !runtime.installed) {
     return {
@@ -102,17 +110,12 @@ export async function discoverHarnessModels(
     };
   }
 
-  if (!binary)
-    return {
-      models: [],
-      model_selection_supported: true,
-      source: "unavailable",
-    };
+  if (!binary) return runtimeManagedCatalog();
   try {
     let models: HarnessModelView[] = [];
     if (provider === "claude")
-      models = parseClaudeHelp(
-        await capture(binary, [...launchArgs, "--help"]),
+      models = claudeStaticCatalog(
+        await capture(binary, [...launchArgs, "--help"]).catch(() => ""),
       );
     else if (ACP_ARGS[provider])
       models = await discoverAcpModels(
@@ -154,31 +157,31 @@ export async function discoverHarnessModels(
     else if (provider === "openclaw" && launchArgs.length === 0)
       models = await discoverOpenClaw(binary);
     else {
-      return {
-        models: [],
-        model_selection_supported: false,
-        source: "unavailable",
-      };
+      return runtimeManagedCatalog();
     }
+    models = dedupe(models);
+    if (models.length === 0) return runtimeManagedCatalog();
     return {
-      models: dedupe(models),
+      models,
       model_selection_supported: true,
       source: "discovered",
     };
   } catch {
-    return {
-      models: [],
-      model_selection_supported: true,
-      source: "unavailable",
-    };
+    return runtimeManagedCatalog();
   }
 }
 
-function canonical(id: string): string {
+function runtimeManagedCatalog(): HarnessModelCatalog {
+  return { models: [], model_selection_supported: false, source: "runtime" };
+}
+
+export function canonicalModelDiscoveryHarnessId(id: string): string {
   return (
     (
       {
         "claude-acp": "claude",
+        claude_code: "claude",
+        "claude-code": "claude",
         "codebuddy-code": "codebuddy",
         "codex-acp": "codex",
         "github-copilot-cli": "copilot",
@@ -350,11 +353,13 @@ export function parseAcpSession(result: any): HarnessModelView[] {
   const block = result?.models ?? {};
   const current = block.currentModelId ?? block.current_model_id ?? "";
   const available = block.availableModels ?? block.available_models ?? [];
+  const thinking = parseAcpThinkingOptions(result);
   const direct = available
     .map((item: any) => ({
       id: String(item.modelId ?? item.model_id ?? "").trim(),
       label: String(item.name ?? item.modelId ?? item.model_id ?? "").trim(),
       default: String(item.modelId ?? item.model_id ?? "") === current,
+      ...(thinking.length ? { thinking } : {}),
     }))
     .filter((item: HarnessModelView) => item.id);
   if (direct.length) return direct;
@@ -369,18 +374,31 @@ export function parseAcpSession(result: any): HarnessModelView[] {
       id: String(item.value ?? "").trim(),
       label: String(item.name ?? item.value ?? "").trim(),
       default: item.value === selected,
+      ...(thinking.length ? { thinking } : {}),
     }))
     .filter((item: HarnessModelView) => item.id);
 }
 
-export function parseClaudeHelp(output: string): HarnessModelView[] {
-  const modelBlock =
-    output.match(
-      /--model <model>([\s\S]*?)(?=\n\s{2,}-{1,2}[a-zA-Z]|$)/,
-    )?.[1] ?? "";
-  const aliases = [...modelBlock.matchAll(/['"]([^'"]+)['"]/g)]
-    .map((match) => match[1].trim())
-    .filter((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value));
+function parseAcpThinkingOptions(result: any) {
+  const config = (result?.configOptions ?? result?.config_options ?? []).find(
+    (item: any) =>
+      ["thinking", "effort", "reasoning"].includes(
+        String(item.id ?? item.category).toLowerCase(),
+      ),
+  );
+  return (config?.options ?? [])
+    .map((item: any) => ({
+      id: String(item.value ?? item.id ?? "").trim(),
+      label: String(
+        item.name ?? item.label ?? item.value ?? item.id ?? "",
+      ).trim(),
+      description:
+        typeof item.description === "string" ? item.description : undefined,
+    }))
+    .filter((item: { id: string }) => item.id);
+}
+
+export function claudeStaticCatalog(output: string): HarnessModelView[] {
   const effortBlock =
     output.match(
       /--effort <level>([\s\S]*?)(?=\n\s{2,}-{1,2}[a-zA-Z]|$)/,
@@ -392,16 +410,7 @@ export function parseClaudeHelp(output: string): HarnessModelView[] {
       .map((value) => value.trim())
       .filter((value) => /^[a-z][a-z0-9_-]*$/i.test(value)) ?? [];
   const thinking = choices.map((id) => ({ id, label: id }));
-  return [...new Set(aliases)].map((id) => ({
-    id,
-    label: id.startsWith("claude-")
-      ? id
-          .split("-")
-          .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-          .join(" ")
-      : id.charAt(0).toUpperCase() + id.slice(1),
-    thinking,
-  }));
+  return CLAUDE_MODELS.map((model) => ({ ...model, thinking }));
 }
 
 export function parseCodex(output: string): HarnessModelView[] {

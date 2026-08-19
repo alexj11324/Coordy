@@ -325,8 +325,8 @@ export function RuntimeCapabilityFields({
         if (active)
           setCatalog({
             models: [],
-            model_selection_supported: true,
-            source: "unavailable",
+            model_selection_supported: false,
+            source: "runtime",
           });
       })
       .finally(() => {
@@ -346,7 +346,7 @@ export function RuntimeCapabilityFields({
         value={model}
         presets={catalog?.models ?? []}
         loading={loadingModels}
-        modelSelectionSupported={catalog?.model_selection_supported ?? true}
+        modelSelectionSupported={catalog?.model_selection_supported ?? false}
         disabled={disabled}
         onChange={onModelChange}
       />

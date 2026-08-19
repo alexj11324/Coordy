@@ -42,7 +42,7 @@ pub async fn suggest_task_split(
     let agents = match runtime
         .kernel
         .view(AuthorizedQuery {
-            actor,
+            actor: actor.clone(),
             query: Query::Agents {
                 workspace_id: workspace_id.to_string(),
             },
@@ -53,6 +53,9 @@ pub async fn suggest_task_split(
         _ => return Err(CoordyError::unavailable("unexpected agent view")),
     };
     let agent = resolve_assigned_agent(task.assignee_agent_id.as_deref(), &agents)?.clone();
+    if !runtime.kernel.can_command_agent(&actor, &agent.id) {
+        return Err(CoordyError::denied("cannot command this agent"));
+    }
     ensure_installed(&runtime.data_dir, &agent)?;
 
     let prompt = split_prompt(&task.title, &task.description);
@@ -207,8 +210,9 @@ impl Drop for AdvisoryDir {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_titles, resolve_assigned_agent, split_prompt};
-    use coordy_protocol::AgentView;
+    use super::{parse_titles, resolve_assigned_agent, split_prompt, suggest_task_split};
+    use crate::Runtime;
+    use coordy_protocol::{Actor, AgentView, AuthenticatedCommand, Command};
 
     fn agent(id: &str) -> AgentView {
         serde_json::from_value(serde_json::json!({
@@ -262,5 +266,102 @@ mod tests {
         let prompt = split_prompt("任务", "说明");
         assert!(prompt.contains("只返回 JSON"));
         assert!(!prompt.to_lowercase().contains("api key"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_workspace_peer_who_cannot_command_the_assigned_agent() {
+        let dir = std::env::temp_dir().join(format!(
+            "coordy-suggest-auth-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = Runtime::open(&dir, &dir.join("unused.sock"), "tok".into()).unwrap();
+        let submit =
+            |actor, command| runtime.submit_and_persist(AuthenticatedCommand { actor, command });
+        let workspace_id = submit(
+            Actor::Daemon,
+            Command::CreateWorkspace {
+                name: "restricted".into(),
+            },
+        )
+        .unwrap()
+        .ids["workspace_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let owner_id = submit(
+            Actor::Daemon,
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        )
+        .unwrap()
+        .ids["principal_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let peer_id = submit(
+            Actor::Daemon,
+            Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Peer".into(),
+            },
+        )
+        .unwrap()
+        .ids["principal_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let owner = Actor::Principal {
+            id: owner_id.clone(),
+        };
+        let agent_id = submit(
+            owner.clone(),
+            Command::CreateAgent {
+                workspace_id: workspace_id.clone(),
+                principal_id: owner_id,
+                name: "Private".into(),
+                harness: "definitely-not-installed".into(),
+            },
+        )
+        .unwrap()
+        .ids["agent_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let task_id = submit(
+            owner.clone(),
+            Command::CreateTask {
+                workspace_id: workspace_id.clone(),
+                title: "Split me".into(),
+                description: String::new(),
+            },
+        )
+        .unwrap()
+        .ids["task_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        submit(
+            owner,
+            Command::AssignTask {
+                task_id: task_id.clone(),
+                agent_id,
+            },
+        )
+        .unwrap();
+
+        let error = suggest_task_split(&runtime, &workspace_id, &task_id, &peer_id)
+            .await
+            .expect_err("workspace peers cannot run owner-only agents");
+        assert_eq!(error.code, "denied");
+        assert_eq!(error.message, "cannot command this agent");
+        assert!(
+            !dir.join("tmp").exists(),
+            "authorization must precede spawn"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

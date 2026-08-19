@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use coordy_local_runtime::{generate_token, serve, RpcClient, Runtime};
-use coordy_protocol::{Actor, AuthorizedQuery, Query};
+use coordy_protocol::{Actor, AuthenticatedCommand, AuthorizedQuery, Command, Query};
 use tokio::net::UnixStream;
 
 #[tokio::test]
@@ -71,6 +71,80 @@ fn sqlite_crash_replay() {
     let rt2 = Runtime::open(&dir, &sock, "tok".into()).unwrap();
     let world = rt2.kernel.export_world();
     assert_eq!(world.workspaces.len(), 1);
+}
+
+#[test]
+fn configured_agent_is_persisted_as_one_complete_command() {
+    let dir = std::env::temp_dir().join(format!("coordy-configured-agent-{}", uuid_like()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("unused.sock");
+    let rt = Runtime::open(&dir, &sock, "tok".into()).unwrap();
+    let workspace_id = rt
+        .submit_and_persist(AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: Command::CreateWorkspace {
+                name: "agents".into(),
+            },
+        })
+        .unwrap()
+        .ids["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let principal_id = rt
+        .submit_and_persist(AuthenticatedCommand {
+            actor: Actor::Daemon,
+            command: Command::CreatePrincipal {
+                workspace_id: workspace_id.clone(),
+                name: "Owner".into(),
+            },
+        })
+        .unwrap()
+        .ids["principal_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let agent_id = rt
+        .submit_and_persist(AuthenticatedCommand {
+            actor: Actor::Principal {
+                id: principal_id.clone(),
+            },
+            command: Command::CreateConfiguredAgent {
+                workspace_id,
+                principal_id,
+                name: "Reviewer".into(),
+                harness: "claude".into(),
+                description: "Reviews changes".into(),
+                instructions: "Run tests first".into(),
+                avatar: "asset:reviewer".into(),
+                model: "sonnet".into(),
+                thinking: "high".into(),
+                speed: String::new(),
+                access: "owner".into(),
+                tool_access: "auto".into(),
+            },
+        })
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let reopened = Runtime::open(&dir, &sock, "tok".into()).unwrap();
+    let agent = reopened
+        .kernel
+        .export_world()
+        .agents
+        .into_iter()
+        .find(|agent| agent.id == agent_id)
+        .expect("configured agent persisted");
+    assert_eq!(agent.name, "Reviewer");
+    assert_eq!(agent.harness, "claude");
+    assert_eq!(agent.description, "Reviews changes");
+    assert_eq!(agent.instructions, "Run tests first");
+    assert_eq!(agent.model, "sonnet");
+    assert_eq!(agent.thinking, "high");
 }
 
 #[test]
