@@ -1,17 +1,40 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Badge,
   Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
   Input,
-  Label,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Separator,
   Textarea,
+  cn,
 } from "@coordy/ui";
-import { FolderOpen, Paperclip, Play, Square, Terminal } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  ArrowUp,
+  CalendarDays,
+  ChevronRight,
+  Copy,
+  FolderKanban,
+  FolderOpen,
+  MoreHorizontal,
+  Paperclip,
+  Play,
+  Plus,
+  Square,
+  Tag,
+  Terminal,
+  UserRound,
+  Users,
+} from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
@@ -35,6 +58,7 @@ import {
   asRuns,
   asSquads,
   asTasks,
+  asWorkspaces,
   latestRunForTask,
   outcomeId,
 } from "../lib/coordy/views";
@@ -42,7 +66,10 @@ import { useSession } from "../state/session-store";
 import { useTabTitle } from "../shell/use-tab-title";
 import { ActivityLine } from "./activity-marker";
 import { NamedAgent } from "./agent-avatar";
-import { StatusGlyph } from "./issue-status";
+import { PriorityGlyph, StatusGlyph } from "./issue-status";
+
+const fieldTrigger =
+  "h-7 w-full justify-start gap-2 border-0 bg-transparent px-1.5 shadow-none hover:bg-muted/70 focus-visible:border-transparent focus-visible:ring-0 data-popup-open:bg-muted/70 [&>:last-child]:hidden";
 
 export function TaskDetailPage() {
   const { taskId } = useParams();
@@ -91,6 +118,10 @@ export function TaskDetailPage() {
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
   });
+  const workspaces = useQuery({
+    queryKey: ["view", { type: "Workspaces" }],
+    queryFn: () => view({ type: "Workspaces" }),
+  });
   const settings = useQuery({
     queryKey: ["settings", workspaceId],
     enabled: Boolean(workspaceId),
@@ -129,6 +160,7 @@ export function TaskDetailPage() {
   const [mode, setMode] = useState<"comment" | "run">("comment");
   const [notice, setNotice] = useState<string | null>(null);
   const [subtaskTitle, setSubtaskTitle] = useState("");
+  const [addingSubtask, setAddingSubtask] = useState(false);
   const [suggestedTitles, setSuggestedTitles] = useState<string[]>([]);
   const [suggestBusy, setSuggestBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -136,6 +168,8 @@ export function TaskDetailPage() {
   const [blockerPick, setBlockerPick] = useState("none");
   const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : null;
   const workPath = task?.worktree_path || repoPath;
+  const workspaceName =
+    asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)?.name?.trim() || "coordy";
   useTabTitle(task ? `${taskIdentifier(task)} ${task.title}` : undefined);
 
   useEffect(() => {
@@ -143,6 +177,10 @@ export function TaskDetailPage() {
     setTitle(task.title);
     setDescription(task.description ?? "");
   }, [task?.id, task?.title, task?.description]);
+
+  useEffect(() => {
+    setConfirmDelete(false);
+  }, [task?.id]);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -165,7 +203,7 @@ export function TaskDetailPage() {
   if (board.isFetched && !task) {
     return (
       <section className="flex h-full flex-col items-start gap-3 p-6">
-        <h1 className="text-lg font-semibold">未找到该事项</h1>
+        <h1 className="text-lg font-semibold tracking-tight">未找到该事项</h1>
         <p className="text-sm text-muted-foreground">该事项可能已被删除或移出当前工作区。</p>
         <Button variant="secondary" onClick={() => navigate("/board")}>
           回到任务
@@ -207,6 +245,10 @@ export function TaskDetailPage() {
     event.preventDefault();
     const text = composer.trim();
     if (!text) return;
+    if (mode === "run" && heldByBlockers) {
+      setNotice("前置事项完成前不能开始执行。");
+      return;
+    }
     setNotice(null);
     try {
       if (mode === "comment") {
@@ -252,6 +294,7 @@ export function TaskDetailPage() {
       });
     }
     setSubtaskTitle("");
+    setAddingSubtask(false);
     setSuggestedTitles((current) => current.filter((item) => item !== titleText));
     await refresh();
   };
@@ -271,6 +314,7 @@ export function TaskDetailPage() {
       );
       const titles = (draft.titles ?? []).filter(Boolean);
       setSuggestedTitles(titles);
+      setAddingSubtask(true);
       setNotice(titles.length ? "已生成拆分建议，确认后再创建。" : "模型没有返回可用标题。");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
@@ -279,143 +323,382 @@ export function TaskDetailPage() {
     }
   };
 
+  const startAssigned = () => {
+    if (!assignee || heldByBlockers) return;
+    void startAcpOnTask(task.id, composer.trim() || description.trim() || task.title, assignee)
+      .then(async () => {
+        setNotice("已派发给智能体，进度将写回该事项。");
+        setComposer("");
+        await refresh();
+      })
+      .catch((error: unknown) => {
+        setNotice(error instanceof Error ? error.message : String(error));
+      });
+  };
+
+  const copyId = () => {
+    const id = taskIdentifier(task);
+    void navigator.clipboard.writeText(id).then(
+      () => setNotice(`已复制 ${id}`),
+      () => setNotice("无法写入剪贴板。"),
+    );
+  };
+
+  const attachFiles = (list: FileList | null) => {
+    const files = pickedFilesFromList(list);
+    void (async () => {
+      for (const file of files) {
+        await submit({ type: "AddAttachment", task_id: task.id, name: file.name, path: file.path });
+      }
+      await refresh();
+    })();
+  };
+
   return (
-    <section className="flex h-full min-h-0 min-w-0">
+    <section className="flex h-full min-h-0 min-w-0 bg-background">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center gap-2 px-6 pt-4 text-xs text-muted-foreground">
-          <StatusGlyph status={task.status} />
-          <span className="font-mono">{taskIdentifier(task)}</span>
-          <span>{taskStatusLabel(task.status)}</span>
-        </div>
-        <Input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={persist}
-          className="h-auto border-0 px-6 py-3 text-2xl font-semibold shadow-none focus-visible:ring-0 md:text-2xl"
-        />
-        <Textarea
-          rows={8}
-          placeholder="添加说明…"
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          onBlur={persist}
-          className="min-h-[8rem] resize-none rounded-none border-0 px-6 shadow-none focus-visible:ring-0"
-        />
-        {notice ? <p className="px-6 text-sm text-muted-foreground">{notice}</p> : null}
-        {waitingMessage ? <p className="px-6 text-sm text-destructive">{waitingMessage}</p> : null}
-        <div className="min-h-0 flex-1 space-y-3 overflow-auto px-6 py-4">
-          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">时间线</h2>
-          {comments.length === 0 && activity.length === 0 ? (
-            <p className="text-sm text-muted-foreground">暂无评论或执行记录。发表评论不会改负责人；继续执行才会派发给当前负责人。</p>
-          ) : null}
-          {comments.map((comment) => (
-            <div key={comment.id} className="border-b border-border/70 pb-3 last:border-0">
-              <p className="text-[11px] text-muted-foreground">
-                评论 · {people.find((person) => person.id === comment.author_id)?.name ?? comment.author_id.slice(0, 8)}
-              </p>
-              <p className="mt-1 whitespace-pre-wrap text-sm">{comment.body}</p>
-            </div>
-          ))}
-          {activity.map((event) => (
-            <div key={`${event.runId}-${event.seq}`} className="border-b border-border/70 pb-3 last:border-0">
-              <ActivityLine event={event} />
-            </div>
-          ))}
-          {runList.map((run) =>
-            run.status === "failed" || run.status === "cancelled" ? (
-              <div key={`retry-${run.id}`} className="flex items-center justify-between gap-2 text-sm">
-                <span className="text-muted-foreground">
-                  {agentList.find((agent) => agent.id === run.agent_id)?.name ?? run.agent_id.slice(0, 8)}
-                  · {runStatusLabel(run.status)} · {run.trigger ?? "run"}
-                </span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    void submit({ type: "RetryRun", run_id: run.id })
-                      .then(async () => {
-                        setNotice("已按原指令重试。");
-                        await refresh();
-                      })
-                      .catch((error: unknown) => {
-                        setNotice(error instanceof Error ? error.message : String(error));
-                      });
+        <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border/80 px-5">
+          <nav className="flex min-w-0 items-center gap-1 text-[13px] text-muted-foreground">
+            <span className="truncate">{workspaceName}</span>
+            <ChevronRight className="size-3.5 shrink-0 opacity-40" />
+            <Link to="/board" className="hover:text-foreground">
+              任务
+            </Link>
+            <ChevronRight className="size-3.5 shrink-0 opacity-40" />
+            <span className="font-mono text-foreground">{taskIdentifier(task)}</span>
+          </nav>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              disabled={!assignee || heldByBlockers}
+              aria-label="指派并开始"
+              onClick={startAssigned}
+            >
+              <Play />
+            </Button>
+            {latest?.status === "running" ? (
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label="停止"
+                onClick={() => {
+                  void submit({ type: "CancelRun", run_id: latest.id }).then(async () => {
+                    setNotice("本次运行已停止。更改指派或状态不会自动停止运行；停止须使用此按钮。");
+                    await refresh();
+                  });
+                }}
+              >
+                <Square />
+              </Button>
+            ) : null}
+            <Button type="button" size="icon-sm" variant="ghost" aria-label="复制编号" onClick={copyId}>
+              <Copy />
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<Button type="button" size="icon-sm" variant="ghost" aria-label="更多" />}
+              >
+                <MoreHorizontal />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44">
+                <DropdownMenuItem disabled={!workPath} onClick={() => workPath && window.coordy.revealFile(workPath)}>
+                  <FolderOpen />
+                  打开目录
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!workPath} onClick={() => workPath && window.coordy.openTerminal(workPath)}>
+                  <Terminal />
+                  打开终端
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(true)}>
+                  删除事项
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </header>
+        {confirmDelete ? (
+          <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border/80 px-5 py-1.5 text-[13px]">
+            <span className="text-muted-foreground">删除该事项？此操作不可恢复。</span>
+            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setConfirmDelete(false)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="text-destructive hover:underline"
+              onClick={() => {
+                void submit({ type: "DeleteTask", task_id: task.id }).then(() => navigate("/board"));
+              }}
+            >
+              确认删除
+            </button>
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="mx-auto w-full max-w-[46rem] px-8 pt-7 pb-4">
+            <Input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              onBlur={persist}
+              className="h-auto border-0 px-0 py-1 text-[1.375rem] font-semibold tracking-tight shadow-none focus-visible:border-transparent focus-visible:ring-0 md:text-[1.375rem]"
+            />
+            <Textarea
+              rows={4}
+              placeholder="添加说明…"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              onBlur={persist}
+              className="mt-1 min-h-[4.5rem] resize-none border-0 px-0 py-1 text-[15px] leading-6 shadow-none placeholder:text-muted-foreground/80 focus-visible:border-transparent focus-visible:ring-0"
+            />
+            {notice ? <p className="mt-2 text-[13px] text-muted-foreground">{notice}</p> : null}
+            {waitingMessage ? <p className="mt-2 text-[13px] text-destructive">{waitingMessage}</p> : null}
+
+            <div className="mt-5">
+              {children.map((child) => (
+                <Link
+                  key={child.id}
+                  to={`/board/${child.id}`}
+                  className="flex h-8 items-center gap-2 rounded-md px-1 text-sm hover:bg-muted/60"
+                >
+                  <StatusGlyph status={child.status} />
+                  <span className="w-[5.25rem] shrink-0 font-mono text-xs text-muted-foreground">
+                    {taskIdentifier(child)}
+                  </span>
+                  <span className="min-w-0 truncate">{child.title}</span>
+                </Link>
+              ))}
+              {suggestedTitles.map((item) => (
+                <div key={item} className="flex h-8 items-center justify-between gap-2 px-1 text-sm">
+                  <span className="truncate text-muted-foreground">{item}</span>
+                  <button
+                    type="button"
+                    className="text-[13px] text-muted-foreground hover:text-foreground"
+                    onClick={() => void addSubtask(item)}
+                  >
+                    创建
+                  </button>
+                </div>
+              ))}
+              {addingSubtask ? (
+                <form
+                  className="mt-1 flex items-center gap-2 px-1"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void addSubtask(subtaskTitle);
                   }}
                 >
-                  重试
+                  <Input
+                    autoFocus
+                    value={subtaskTitle}
+                    placeholder="子事项标题"
+                    className="h-7 border-0 px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+                    onChange={(event) => setSubtaskTitle(event.target.value)}
+                    onBlur={() => {
+                      if (!subtaskTitle.trim()) setAddingSubtask(false);
+                    }}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!subtaskTitle.trim()}
+                    className="text-[13px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                  >
+                    添加
+                  </button>
+                </form>
+              ) : (
+                <div className="mt-1 flex items-center gap-3 px-1">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setAddingSubtask(true)}
+                  >
+                    <Plus className="size-3.5" />
+                    添加子事项
+                  </button>
+                  <button
+                    type="button"
+                    disabled={suggestBusy}
+                    className="text-[13px] text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    onClick={() => void suggestSplit()}
+                  >
+                    {suggestBusy ? "正在建议…" : "建议拆分"}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {(task.attachments ?? []).length > 0 ? (
+              <ul className="mt-4 space-y-1">
+                {(task.attachments ?? []).map((file) => (
+                  <li key={file.id} className="flex items-center gap-2 px-1 text-[13px]">
+                    <Paperclip className="size-3.5 text-muted-foreground" />
+                    <span className="min-w-0 truncate">{file.name}</span>
+                    <button
+                      type="button"
+                      className="ml-auto text-muted-foreground hover:text-foreground"
+                      onClick={() => void submit({ type: "RemoveAttachment", attachment_id: file.id }).then(refresh)}
+                    >
+                      删除
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+
+          <div className="mx-auto w-full max-w-[46rem] px-8 pb-8">
+            <Separator className="mb-4" />
+            <h2 className="mb-3 text-[13px] font-medium text-foreground">活动</h2>
+            {comments.length === 0 && activity.length === 0 ? (
+              <p className="text-[13px] text-muted-foreground">
+                暂无评论或执行记录。发表评论不会改负责人；继续执行才会派发给当前负责人。
+              </p>
+            ) : null}
+            <div className="space-y-4">
+              {comments.map((comment) => (
+                <div key={comment.id}>
+                  <p className="text-[13px] text-muted-foreground">
+                    <span className="text-foreground">
+                      {people.find((person) => person.id === comment.author_id)?.name ?? comment.author_id.slice(0, 8)}
+                    </span>
+                    {" · "}
+                    评论
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-6">{comment.body}</p>
+                </div>
+              ))}
+              {activity.map((event) => (
+                <div key={`${event.runId}-${event.seq}`}>
+                  <ActivityLine event={event} />
+                </div>
+              ))}
+              {runList.map((run) =>
+                run.status === "failed" || run.status === "cancelled" ? (
+                  <div key={`retry-${run.id}`} className="flex items-center justify-between gap-2 text-[13px]">
+                    <span className="text-muted-foreground">
+                      {agentList.find((agent) => agent.id === run.agent_id)?.name ?? run.agent_id.slice(0, 8)}
+                      · {runStatusLabel(run.status)} · {run.trigger ?? "run"}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => {
+                        void submit({ type: "RetryRun", run_id: run.id })
+                          .then(async () => {
+                            setNotice("已按原指令重试。");
+                            await refresh();
+                          })
+                          .catch((error: unknown) => {
+                            setNotice(error instanceof Error ? error.message : String(error));
+                          });
+                      }}
+                    >
+                      重试
+                    </button>
+                  </div>
+                ) : null,
+              )}
+            </div>
+          </div>
+        </div>
+
+        <form className="shrink-0 px-8 pb-5 pt-1" onSubmit={(event) => void send(event)}>
+          <div className="mx-auto w-full max-w-[46rem] rounded-xl border border-border bg-background p-3 shadow-sm">
+            <Textarea
+              rows={3}
+              placeholder={mode === "comment" ? "写评论。输入 @ 可提及智能体，不会改负责人。" : "补充指令，让当前负责人继续执行。"}
+              value={composer}
+              onChange={(event) => {
+                const value = event.target.value;
+                setComposer(value);
+                const cursor = event.target.selectionStart ?? value.length;
+                setMentionOpen(mode === "comment" && value.slice(0, cursor).endsWith("@"));
+              }}
+              className="min-h-[4.25rem] resize-none border-0 p-0.5 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+            />
+            {mentionOpen ? (
+              <div className="mt-1 flex flex-wrap gap-2">
+                {agentList.map((agent) => (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    className="text-[13px] text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setComposer((current) => {
+                        const trimmed = current.endsWith("@") ? current.slice(0, -1) : current;
+                        return insertAgentMention(trimmed, agent.id);
+                      });
+                      setMentionOpen(false);
+                    }}
+                  >
+                    @{agentDisplayName(agent, catalog.data)}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            {heldByBlockers && mode === "run" ? (
+              <p className="mt-1 text-[13px] text-muted-foreground">前置事项完成前不能开始执行。</p>
+            ) : null}
+            <div className="mt-2 flex items-center gap-1">
+              <ModeTab active={mode === "comment"} onClick={() => setMode("comment")}>
+                评论
+              </ModeTab>
+              <ModeTab active={mode === "run"} onClick={() => setMode("run")}>
+                继续执行
+              </ModeTab>
+              <div className="ml-auto flex items-center gap-0.5">
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    attachFiles(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="添加附件"
+                  onClick={() => fileRef.current?.click()}
+                >
+                  <Paperclip />
+                </Button>
+                <Button
+                  type="submit"
+                  size="icon-sm"
+                  variant={composer.trim() ? "default" : "ghost"}
+                  disabled={!composer.trim() || (mode === "run" && heldByBlockers)}
+                  aria-label={mode === "comment" ? "发表评论" : latest?.status === "running" ? "追加执行" : "开始执行"}
+                >
+                  <ArrowUp />
                 </Button>
               </div>
-            ) : null,
-          )}
-        </div>
-        <form className="flex shrink-0 flex-col gap-2 border-t border-border p-4" onSubmit={(event) => void send(event)}>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant={mode === "comment" ? "default" : "ghost"} onClick={() => setMode("comment")}>
-              评论
-            </Button>
-            <Button type="button" size="sm" variant={mode === "run" ? "default" : "ghost"} onClick={() => setMode("run")}>
-              让负责人继续执行
-            </Button>
-          </div>
-          {heldByBlockers && mode === "run" ? (
-            <p className="text-xs text-muted-foreground">前置事项完成前不能开始执行。</p>
-          ) : null}
-          <Textarea
-            rows={3}
-            placeholder={mode === "comment" ? "写评论。输入 @ 可提及智能体，不会改负责人。" : "补充指令，让当前负责人继续执行。"}
-            value={composer}
-            onChange={(event) => {
-              const value = event.target.value;
-              setComposer(value);
-              const cursor = event.target.selectionStart ?? value.length;
-              setMentionOpen(mode === "comment" && value.slice(0, cursor).endsWith("@"));
-            }}
-          />
-          {mentionOpen ? (
-            <div className="flex flex-wrap gap-2">
-              {agentList.map((agent) => (
-                <Button
-                  key={agent.id}
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setComposer((current) => {
-                      const trimmed = current.endsWith("@") ? current.slice(0, -1) : current;
-                      return insertAgentMention(trimmed, agent.id);
-                    });
-                    setMentionOpen(false);
-                  }}
-                >
-                  @{agentDisplayName(agent, catalog.data)}
-                </Button>
-              ))}
             </div>
-          ) : null}
-          <Button type="submit" className="w-fit" disabled={!composer.trim() || (mode === "run" && heldByBlockers)}>
-            {mode === "comment" ? "发表评论" : latest?.status === "running" ? "追加执行" : "开始执行"}
-          </Button>
+          </div>
         </form>
       </div>
-      <aside className="flex w-[min(100%,18rem)] shrink-0 flex-col gap-5 overflow-auto border-l border-border p-4">
-        <div>
-          <h2 className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">属性</h2>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label>状态</Label>
+
+      <aside className="flex w-[17.5rem] shrink-0 flex-col gap-6 overflow-auto border-l border-border/80 px-4 py-4">
+        <section>
+          <h2 className="mb-2 text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">属性</h2>
+          <div className="space-y-0.5">
+            <PropertyRow label="状态">
               <Select
                 value={task.status}
                 items={TASK_STATUS_ITEMS}
                 onValueChange={(value) => {
                   if (!value) return;
-                  void submit({ type: "SetTaskStatus", task_id: task.id, status: value })
-                    .then(refresh)
-                    .catch((error: unknown) => {
-                      setNotice(error instanceof Error ? error.message : String(error));
-                    });
+                  void submit({ type: "SetTaskStatus", task_id: task.id, status: value }).then(refresh);
                 }}
               >
-                <SelectTrigger>
+                <SelectTrigger size="sm" className={fieldTrigger}>
                   <SelectValue>
                     {(value: string | null) => (
                       <span className="flex items-center gap-2">
@@ -436,9 +719,8 @@ export function TaskDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>优先级</Label>
+            </PropertyRow>
+            <PropertyRow label="优先级">
               <Select
                 value={task.priority || "none"}
                 items={PRIORITY_ITEMS}
@@ -447,34 +729,46 @@ export function TaskDetailPage() {
                   void submit({ type: "UpdateTask", task_id: task.id, priority: value }).then(refresh);
                 }}
               >
-                <SelectTrigger>
-                  <SelectValue />
+                <SelectTrigger size="sm" className={fieldTrigger}>
+                  <SelectValue>
+                    {(value: string | null) => (
+                      <span className="flex items-center gap-2">
+                        <PriorityGlyph priority={value || task.priority} />
+                        {PRIORITY_ITEMS[value || task.priority || "none"] ?? "无"}
+                      </span>
+                    )}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(PRIORITY_ITEMS).map(([value, label]) => (
                     <SelectItem key={value} value={value}>
-                      {label}
+                      <span className="flex items-center gap-2">
+                        <PriorityGlyph priority={value} />
+                        {label}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>截止日期</Label>
-              <Input
-                type="date"
-                value={task.due_date?.slice(0, 10) ?? ""}
-                onChange={(event) => {
-                  void submit({
-                    type: "UpdateTask",
-                    task_id: task.id,
-                    due_date: event.target.value,
-                  }).then(refresh);
-                }}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>项目</Label>
+            </PropertyRow>
+            <PropertyRow label="截止日期">
+              <label className="flex h-7 cursor-pointer items-center gap-2 rounded-md px-1.5 hover:bg-muted/70">
+                <CalendarDays className="size-3.5 text-muted-foreground" />
+                <Input
+                  type="date"
+                  value={task.due_date?.slice(0, 10) ?? ""}
+                  className="h-7 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:border-transparent focus-visible:ring-0"
+                  onChange={(event) => {
+                    void submit({
+                      type: "UpdateTask",
+                      task_id: task.id,
+                      due_date: event.target.value,
+                    }).then(refresh);
+                  }}
+                />
+              </label>
+            </PropertyRow>
+            <PropertyRow label="项目">
               <Select
                 value={task.project_id || "none"}
                 items={projectItems}
@@ -487,8 +781,18 @@ export function TaskDetailPage() {
                   }).then(refresh);
                 }}
               >
-                <SelectTrigger>
-                  <SelectValue />
+                <SelectTrigger size="sm" className={fieldTrigger}>
+                  <SelectValue>
+                    {(value: string | null) => {
+                      const project = projectList.find((item) => item.id === value);
+                      return (
+                        <span className="flex items-center gap-2">
+                          <FolderKanban className="size-3.5 text-muted-foreground" />
+                          <span className="truncate">{project?.name ?? "无项目"}</span>
+                        </span>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">无项目</SelectItem>
@@ -499,9 +803,8 @@ export function TaskDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>标签</Label>
+            </PropertyRow>
+            <PropertyRow label="标签">
               <Select
                 value={task.labels?.[0] ?? "none"}
                 items={Object.fromEntries([["none", "无"], ...workspaceLabels.map((label) => [label.name, label.name])])}
@@ -514,8 +817,26 @@ export function TaskDetailPage() {
                   }).then(refresh);
                 }}
               >
-                <SelectTrigger>
-                  <SelectValue />
+                <SelectTrigger size="sm" className={fieldTrigger}>
+                  <SelectValue>
+                    {(value: string | null) => {
+                      const name = value && value !== "none" ? value : task.labels?.[0];
+                      if (!name) {
+                        return (
+                          <span className="flex items-center gap-2 text-muted-foreground">
+                            <Tag className="size-3.5" />
+                            无
+                          </span>
+                        );
+                      }
+                      return (
+                        <Badge variant="secondary" className="max-w-full">
+                          <span className="size-1.5 rounded-full bg-violet-500" />
+                          <span className="truncate">{name}</span>
+                        </Badge>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">无</SelectItem>
@@ -526,9 +847,8 @@ export function TaskDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>指派给</Label>
+            </PropertyRow>
+            <PropertyRow label="指派给">
               <Select
                 value={assignee || "none"}
                 items={agentItems}
@@ -541,12 +861,19 @@ export function TaskDetailPage() {
                   void submit({ type: "AssignTask", task_id: task.id, agent_id: value }).then(refresh);
                 }}
               >
-                <SelectTrigger>
+                <SelectTrigger size="sm" className={fieldTrigger}>
                   <SelectValue>
                     {(value: string | null) => {
                       const agent = agentList.find((item) => item.id === value);
-                      if (!agent) return "未指派";
-                      return <NamedAgent agent={agent} catalog={catalog.data} />;
+                      if (!agent) {
+                        return (
+                          <span className="flex items-center gap-2 text-muted-foreground">
+                            <UserRound className="size-3.5" />
+                            未指派
+                          </span>
+                        );
+                      }
+                      return <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />;
                     }}
                   </SelectValue>
                 </SelectTrigger>
@@ -559,9 +886,8 @@ export function TaskDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>成员</Label>
+            </PropertyRow>
+            <PropertyRow label="成员">
               <Select
                 value={task.assignee_principal_id || "none"}
                 items={peopleItems}
@@ -574,7 +900,7 @@ export function TaskDetailPage() {
                   }).then(refresh);
                 }}
               >
-                <SelectTrigger>
+                <SelectTrigger size="sm" className={fieldTrigger}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -586,9 +912,8 @@ export function TaskDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>小队</Label>
+            </PropertyRow>
+            <PropertyRow label="小队">
               <Select
                 value={task.assignee_squad_id || "none"}
                 items={squadItems}
@@ -606,8 +931,18 @@ export function TaskDetailPage() {
                   });
                 }}
               >
-                <SelectTrigger>
-                  <SelectValue />
+                <SelectTrigger size="sm" className={fieldTrigger}>
+                  <SelectValue>
+                    {(value: string | null) => {
+                      const squad = squadList.find((item) => item.id === value);
+                      return (
+                        <span className="flex items-center gap-2">
+                          <Users className="size-3.5 text-muted-foreground" />
+                          <span className="truncate">{squad?.name ?? "未指派"}</span>
+                        </span>
+                      );
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">未指派</SelectItem>
@@ -618,26 +953,30 @@ export function TaskDetailPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>运行</Label>
-              <p className="text-sm text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
-            </div>
+            </PropertyRow>
+            <PropertyRow label="运行">
+              <p className="px-1.5 text-[13px] text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
+            </PropertyRow>
           </div>
-        </div>
-        <div>
-          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">前置事项</h2>
-          <p className="mb-2 text-xs text-muted-foreground">这些事项完成后，才能开始或完成当前事项。</p>
-          {blockers.length === 0 ? <p className="text-sm text-muted-foreground">尚未设置前置事项。</p> : null}
+        </section>
+
+        <section>
+          <h2 className="mb-2 text-[11px] font-medium tracking-[0.14em] text-muted-foreground uppercase">前置事项</h2>
+          <p className="mb-2 px-1.5 text-[12px] leading-5 text-muted-foreground">完成后才能开始或完成当前事项。</p>
+          {blockers.length === 0 ? (
+            <p className="px-1.5 text-[13px] text-muted-foreground">尚未设置。</p>
+          ) : null}
           {blockers.map((blocker) => (
-            <div key={blocker.id} className="flex items-center justify-between gap-2 py-1">
-              <Link to={`/board/${blocker.id}`} className="min-w-0 truncate text-sm hover:underline">
-                {taskIdentifier(blocker)} {blocker.title}
-                <span className="ml-2 text-xs text-muted-foreground">{taskStatusLabel(blocker.status)}</span>
+            <div key={blocker.id} className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60">
+              <Link to={`/board/${blocker.id}`} className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
+                <StatusGlyph status={blocker.status} />
+                <span className="min-w-0 truncate">
+                  <span className="font-mono text-muted-foreground">{taskIdentifier(blocker)}</span> {blocker.title}
+                </span>
               </Link>
-              <Button
-                size="sm"
-                variant="ghost"
+              <button
+                type="button"
+                className="shrink-0 text-[12px] text-muted-foreground hover:text-foreground"
                 onClick={() => {
                   void submit({ type: "RemoveIssueBlocker", task_id: task.id, blocker_id: blocker.id })
                     .then(refresh)
@@ -647,7 +986,7 @@ export function TaskDetailPage() {
                 }}
               >
                 移除
-              </Button>
+              </button>
             </div>
           ))}
           {blockerCandidates.length > 0 ? (
@@ -667,7 +1006,7 @@ export function TaskDetailPage() {
                   });
               }}
             >
-              <SelectTrigger>
+              <SelectTrigger size="sm" className={cn(fieldTrigger, "mt-1 text-muted-foreground")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -680,143 +1019,40 @@ export function TaskDetailPage() {
               </SelectContent>
             </Select>
           ) : null}
-        </div>
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">子事项</h2>
-            <Button size="sm" variant="ghost" disabled={suggestBusy} onClick={() => void suggestSplit()}>
-              {suggestBusy ? "正在建议…" : "建议拆分"}
-            </Button>
-          </div>
-          {children.length === 0 && suggestedTitles.length === 0 ? (
-            <p className="text-sm text-muted-foreground">尚无子事项。</p>
-          ) : null}
-          {children.map((child) => (
-            <Link key={child.id} to={`/board/${child.id}`} className="block py-1 text-sm hover:underline">
-              {taskIdentifier(child)} {child.title}
-            </Link>
-          ))}
-          {suggestedTitles.map((item) => (
-            <div key={item} className="flex items-center justify-between gap-2 py-1">
-              <span className="text-sm">{item}</span>
-              <Button size="sm" variant="ghost" onClick={() => void addSubtask(item)}>
-                创建
-              </Button>
-            </div>
-          ))}
-          <form
-            className="mt-2 flex gap-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void addSubtask(subtaskTitle);
-            }}
-          >
-            <Input value={subtaskTitle} placeholder="新子事项标题" onChange={(event) => setSubtaskTitle(event.target.value)} />
-            <Button type="submit" size="sm" disabled={!subtaskTitle.trim()}>
-              添加
-            </Button>
-          </form>
-        </div>
-        <div>
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">附件</h2>
-            <Button size="sm" variant="ghost" onClick={() => fileRef.current?.click()}>
-              <Paperclip data-icon="inline-start" />
-              添加
-            </Button>
-          </div>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              const files = pickedFilesFromList(event.target.files);
-              event.target.value = "";
-              void (async () => {
-                for (const file of files) {
-                  await submit({ type: "AddAttachment", task_id: task.id, name: file.name, path: file.path });
-                }
-                await refresh();
-              })();
-            }}
-          />
-          {(task.attachments ?? []).length === 0 ? <p className="text-sm text-muted-foreground">没有附件。</p> : null}
-          {(task.attachments ?? []).map((file) => (
-            <div key={file.id} className="flex items-center justify-between gap-2 py-1 text-sm">
-              <span className="truncate">{file.name}</span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void submit({ type: "RemoveAttachment", attachment_id: file.id }).then(refresh)}
-              >
-                删除
-              </Button>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-col gap-2">
-          <Button
-            disabled={!assignee || heldByBlockers}
-            onClick={() => {
-              if (!assignee) return;
-              void startAcpOnTask(task.id, composer.trim() || description.trim() || task.title, assignee).then(
-                async () => {
-                  setNotice("已派发给智能体，进度将写回该事项。");
-                  setComposer("");
-                  await refresh();
-                },
-              ).catch((error: unknown) => {
-                setNotice(error instanceof Error ? error.message : String(error));
-              });
-            }}
-          >
-            <Play data-icon="inline-start" />
-            指派并开始
-          </Button>
-          {latest?.status === "running" ? (
-            <Button
-              variant="destructive"
-              onClick={() => {
-                void submit({ type: "CancelRun", run_id: latest.id }).then(async () => {
-                  setNotice("本次运行已停止。更改指派或状态不会自动停止运行；停止须使用此按钮。");
-                  await refresh();
-                });
-              }}
-            >
-              <Square data-icon="inline-start" />
-              停止
-            </Button>
-          ) : null}
-          <Button variant="secondary" disabled={!workPath} onClick={() => workPath && window.coordy.revealFile(workPath)}>
-            <FolderOpen data-icon="inline-start" />
-            打开目录
-          </Button>
-          <Button variant="secondary" disabled={!workPath} onClick={() => workPath && window.coordy.openTerminal(workPath)}>
-            <Terminal data-icon="inline-start" />
-            打开终端
-          </Button>
-          {confirmDelete ? (
-            <div className="flex gap-2">
-              <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
-                取消
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  void submit({ type: "DeleteTask", task_id: task.id }).then(() => navigate("/board"));
-                }}
-              >
-                确认删除
-              </Button>
-            </div>
-          ) : (
-            <Button variant="ghost" onClick={() => setConfirmDelete(true)}>
-              删除事项
-            </Button>
-          )}
-        </div>
+        </section>
       </aside>
     </section>
+  );
+}
+
+function PropertyRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[4.75rem_minmax(0,1fr)] items-center gap-x-1">
+      <span className="px-1.5 text-[13px] text-muted-foreground">{label}</span>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function ModeTab({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-md px-1.5 py-0.5 text-[13px] transition-colors",
+        active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
   );
 }

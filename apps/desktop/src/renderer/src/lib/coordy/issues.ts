@@ -73,6 +73,19 @@ export function priorityTone(priority: string | undefined): string {
   }
 }
 
+export function priorityBarCount(priority: string | undefined | null): number {
+  switch (priority) {
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    case "low":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 export type IssueFilters = {
   query: string;
   status: string;

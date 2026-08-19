@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { closeTab, openNewTab, replaceActiveTab, titleFromPath } from "../lib/coordy/tab-path";
 import { formatShortcut, matchShortcut, modifierSymbol, SHORTCUTS } from "../lib/coordy/shortcuts";
-import { filterIssues, issuesInColumn, taskIdentifier, blockerWaitMessage, hasUnresolvedBlockers } from "../lib/coordy/issues";
+import { filterIssues, issuesInColumn, priorityBarCount, taskIdentifier, blockerWaitMessage, hasUnresolvedBlockers } from "../lib/coordy/issues";
 import { canGoBack, canGoForward, emptyHistory, historyBack, historyForward, recordVisit } from "../lib/coordy/nav-history";
 import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
 import type { TaskView } from "@coordy/protocol";
@@ -18,6 +18,14 @@ describe("issue identifiers and filters", () => {
     expect(taskIdentifier({ id: "task_ab12cd34ef" })).toBe("COOR-AB12CD");
     expect(taskIdentifier({ id: "task_1" })).toBe("COOR-1");
     expect(taskIdentifier({ id: "task_x", identifier: "COOR-12" })).toBe("COOR-12");
+  });
+
+  it("maps Linear-style priority bars, leaving urgent to the alert icon", () => {
+    expect(priorityBarCount("high")).toBe(3);
+    expect(priorityBarCount("medium")).toBe(2);
+    expect(priorityBarCount("low")).toBe(1);
+    expect(priorityBarCount("urgent")).toBe(0);
+    expect(priorityBarCount("none")).toBe(0);
   });
 
   it("filters by status, title, and identifier", () => {
