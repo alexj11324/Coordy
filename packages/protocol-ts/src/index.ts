@@ -456,7 +456,9 @@ export type RunView = {
   retry_count?: number;
   chat_id?: string | null;
   trigger?: string;
+  role?: RunRole;
 };
+export type RunRole = "executor" | "validator" | "conductor_review" | "human_approval";
 export type RunEventView = { seq: number; kind: string; payload: string };
 export type InboxView = {
   id: string;

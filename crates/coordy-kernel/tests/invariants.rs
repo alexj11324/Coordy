@@ -4,7 +4,7 @@ use coordy_kernel::{
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, GraphEdgeKind, GraphEdgeState,
-    HarnessEvent, NodeKind, Query, RunSource, View, STALE_DEPENDENCY_REASON,
+    HarnessEvent, NodeKind, Query, RunRole, RunSource, View, STALE_DEPENDENCY_REASON,
 };
 
 fn daemon() -> Actor {
@@ -1664,6 +1664,211 @@ fn graph_evaluation_ready_set_only_includes_upstream() {
         }
         other => panic!("expected graph evaluation, got {other:?}"),
     }
+}
+
+fn complete_session(h: &Harness, run_id: &str) {
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::IngestHarnessEvent {
+                run_id: run_id.into(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: "acp".into(),
+                    output: "end_turn".into(),
+                    exit_code: Some(0),
+                },
+            },
+        ))
+        .unwrap();
+}
+
+fn graph_execute_runs(h: &Harness) -> Vec<coordy_protocol::RunView> {
+    alice_runs(h)
+        .into_iter()
+        .filter(|run| run.trigger == "graph_execute")
+        .collect()
+}
+
+#[test]
+fn graph_scheduler_starts_only_ready_upstream_when_both_assigned() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let started = graph_execute_runs(&h);
+    assert_eq!(started.len(), 1);
+    assert_eq!(started[0].task_id, producer);
+    assert_eq!(started[0].role, RunRole::Executor);
+    assert!(!started.iter().any(|run| run.task_id == consumer));
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == producer)
+            .count(),
+        1
+    );
+    assert!(!world
+        .node_attempts
+        .iter()
+        .any(|attempt| attempt.node_id == consumer));
+}
+
+#[test]
+fn graph_scheduler_opens_downstream_once_after_upstream_session() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+    complete_session(&h, &producer_run.id);
+    complete_session(&h, &producer_run.id);
+    let consumer_runs: Vec<_> = graph_execute_runs(&h)
+        .into_iter()
+        .filter(|run| run.task_id == consumer)
+        .collect();
+    assert_eq!(consumer_runs.len(), 1);
+    assert_eq!(consumer_runs[0].role, RunRole::Executor);
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .node_attempts
+            .iter()
+            .filter(|attempt| attempt.node_id == consumer)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn graph_scheduler_skips_ready_node_without_executor() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    let producer_run = graph_execute_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("producer run");
+    complete_session(&h, &producer_run.id);
+    assert!(!graph_execute_runs(&h)
+        .iter()
+        .any(|run| run.task_id == consumer));
+    assert!(!h
+        .kernel
+        .export_world()
+        .node_attempts
+        .iter()
+        .any(|attempt| attempt.node_id == consumer));
+}
+
+#[test]
+fn graph_scheduler_replay_from_world_does_not_add_attempts() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &producer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    let before = h.kernel.export_world();
+    let attempt_count = before.node_attempts.len();
+    h.kernel.replace_world(before.clone());
+    assign_a1(&h, &producer);
+    let after = h.kernel.export_world();
+    assert_eq!(after.node_attempts.len(), attempt_count);
+    assert_eq!(
+        after
+            .runs
+            .iter()
+            .filter(|run| run.trigger == "graph_execute")
+            .count(),
+        before
+            .runs
+            .iter()
+            .filter(|run| run.trigger == "graph_execute")
+            .count()
+    );
+}
+
+#[test]
+fn graph_scheduler_writes_executor_role_even_when_agent_is_named_conductor() {
+    let h = setup();
+    let conductor_id = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::CreateAgent {
+                workspace_id: h.workspace_id.clone(),
+                principal_id: h.alice.clone(),
+                name: "conductor".into(),
+                harness: "jsonl".into(),
+            },
+        ))
+        .unwrap()
+        .ids["agent_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: producer.clone(),
+                agent_id: conductor_id.clone(),
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    let attempt = world
+        .node_attempts
+        .iter()
+        .find(|attempt| attempt.node_id == producer)
+        .expect("attempt");
+    assert_eq!(attempt.role, RunRole::Executor);
+    let run = alice_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == producer)
+        .expect("run");
+    assert_eq!(run.role, RunRole::Executor);
+    assert_eq!(run.trigger, "graph_execute");
+    assert_eq!(run.agent_id, conductor_id);
 }
 
 #[test]
