@@ -74,6 +74,7 @@
 - [x] 名称、描述、指令、harness、模型、思考强度、Codex Fast
 - [x] DiceBear 头像；编辑；归档；名称工作区唯一
 - [x] Access：仅自己 / 整个工作区 / 指定成员
+- [x] 工具权限：Auto / Full Access（按 harness 下发不同启动参数）
 - [x] 绑定 Skills（`SetAgentSkills`，下一次 `StartRun` 注入正文）
 - [x] 并发上限（running 超额则拒绝 `StartRun`）
 - [x] `cli_args` 追加到原生启动参数（ACP 忽略）
@@ -88,6 +89,8 @@
 - [x] Daemon 绿灯时 `RegisterComputer` 登记当前主机
 - [x] 设置 Daemon 页展示已登记电脑
 - [x] 智能体并发上限
+- [x] 无人值守 auto-approve：按 harness 注入 skip/yolo/sandbox，ACP 自动放行权限请求
+- [x] 智能体工具权限 Auto / Full Access：Auto 仍拦危险步骤，Full Access 才跳过审批
 - [ ] 执行队列状态机的完整产品页
 - [ ] 云端 / 远程运行时
 - [ ] 应用商店更新通道
@@ -113,10 +116,11 @@
 - [x] 我的账号：资料、偏好、快捷键列表、任务/聊天说明、通知、模型密钥、Daemon、更新说明
 - [x] 工作区常规：名称、描述、上下文、slug、任务前缀、离开/删除
 - [x] 代码仓库（绑定本机目录）
-- [x] 云通道：一条说明，本机不提供 GitHub / IM 云通道（不造 OAuth 表单）
+- [x] 云通道：一条说明，本机不提供 IM 云通道（不造 OAuth 表单）
 - [x] 成员、标签、实验室顾问开关
 - [x] MCP 页：Coordy 不托管 MCP，各 CLI 读自己的配置
-- [ ] GitHub App / PR 侧栏 / CI
+- [x] GitHub：本机 `gh` 同步 PR / CI，事项侧栏展示状态、检查与可合并性
+- [ ] GitHub App / 公网 webhook / OAuth 安装
 - [ ] 飞书 / Slack / 钉钉 / 企业微信
 - [ ] 自定义属性编辑入口
 - [ ] 快捷键录制 / 冲突 / 重置
@@ -124,7 +128,7 @@
 ## CLI 与集成（本机不做）
 
 - [ ] 产品级 CLI 覆盖 issue / project / agent / skill / squad / automation / runtime
-- [ ] GitHub App：按编号关联 PR、合并关 issue
+- [ ] GitHub App：按编号关联 PR、合并关 issue（本机 `gh` 路径已覆盖只读同步与关闭语句转 Done）
 - [ ] 聊天工具接入（飞书 / Slack / 钉钉 / 企业微信）
 - [ ] 公网 Webhook 监听
 

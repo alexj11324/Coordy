@@ -27,7 +27,11 @@ export function contentSecurityPolicy(): string {
   return process.env.ELECTRON_RENDERER_URL ? DEV_CSP : CSP;
 }
 
-export const EXTERNAL_LINK_ALLOWLIST = ["https://discord.com/", "https://discord.gg/"] as const;
+export const EXTERNAL_LINK_ALLOWLIST = [
+  "https://discord.com/",
+  "https://discord.gg/",
+  "https://github.com/",
+] as const;
 
 export function canOpenExternal(url: string): boolean {
   try {

@@ -143,6 +143,8 @@ pub enum Command {
         slug: Option<String>,
         #[serde(default)]
         issue_prefix: Option<String>,
+        #[serde(default)]
+        conductor_agent_id: Option<String>,
     },
     DeleteWorkspace {
         workspace_id: String,
@@ -200,6 +202,8 @@ pub enum Command {
         concurrency_limit: Option<u32>,
         #[serde(default)]
         cli_args: Option<String>,
+        #[serde(default)]
+        tool_access: Option<String>,
         #[serde(default)]
         mcp_servers: Option<Vec<String>>,
     },
@@ -592,6 +596,14 @@ pub enum Command {
         #[serde(default)]
         url: String,
     },
+    UnlinkPullRequest {
+        task_id: String,
+        number: u32,
+    },
+    RefreshGithub {
+        workspace_id: String,
+    },
+    SyncGithubPullRequests(Box<GithubSync>),
     SetIntegration {
         workspace_id: String,
         kind: String,
@@ -765,6 +777,8 @@ pub enum View {
         llm_advisor_enabled: bool,
         #[serde(default)]
         notification_kinds: Vec<String>,
+        #[serde(default)]
+        github: GithubView,
     },
     AgentContext {
         context: AgentContextView,
@@ -832,6 +846,8 @@ pub struct WorkspaceView {
     pub issue_prefix: String,
     #[serde(default)]
     pub next_issue_number: u64,
+    #[serde(default)]
+    pub conductor_agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -936,6 +952,8 @@ pub struct AgentView {
     pub concurrency_limit: u32,
     #[serde(default)]
     pub cli_args: String,
+    #[serde(default)]
+    pub tool_access: String,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]
@@ -1245,11 +1263,164 @@ pub struct AttachmentView {
     pub path: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PullRequestView {
     pub number: u32,
     #[serde(default)]
     pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
+    #[serde(default)]
+    pub changed_files: u32,
+    #[serde(default)]
+    pub mergeable: String,
+    #[serde(default)]
+    pub merge_state: String,
+    #[serde(default)]
+    pub checks_rollup: String,
+    #[serde(default)]
+    pub checks_total: u32,
+    #[serde(default)]
+    pub checks_passed: u32,
+    #[serde(default)]
+    pub checks_failed: u32,
+    #[serde(default)]
+    pub checks_running: u32,
+    #[serde(default)]
+    pub failed_check_names: Vec<String>,
+    #[serde(default)]
+    pub snapshot_available: bool,
+    #[serde(default)]
+    pub snapshot_stale: bool,
+    #[serde(default)]
+    pub snapshot_fetched_at: String,
+    #[serde(default)]
+    pub linked_by: String,
+    #[serde(default)]
+    pub close_intent: bool,
+}
+
+impl PullRequestView {
+    pub fn manual(number: u32, url: String) -> Self {
+        Self {
+            number,
+            url,
+            linked_by: "manual".into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Snapshot collected from the local GitHub CLI. Kernel matches identifiers.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GithubPullRequestItem {
+    pub number: u32,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub additions: u32,
+    #[serde(default)]
+    pub deletions: u32,
+    #[serde(default)]
+    pub changed_files: u32,
+    #[serde(default)]
+    pub mergeable: String,
+    #[serde(default)]
+    pub merge_state: String,
+    #[serde(default)]
+    pub checks_rollup: String,
+    #[serde(default)]
+    pub checks_total: u32,
+    #[serde(default)]
+    pub checks_passed: u32,
+    #[serde(default)]
+    pub checks_failed: u32,
+    #[serde(default)]
+    pub checks_running: u32,
+    #[serde(default)]
+    pub failed_check_names: Vec<String>,
+    #[serde(default)]
+    pub snapshot_available: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GithubSync {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub cli_available: bool,
+    #[serde(default)]
+    pub authenticated: bool,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub fetched_at: String,
+    #[serde(default)]
+    pub items: Vec<GithubPullRequestItem>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GithubView {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_true")]
+    pub pr_sidebar: bool,
+    #[serde(default = "default_true")]
+    pub auto_link: bool,
+    #[serde(default)]
+    pub cli_available: bool,
+    #[serde(default)]
+    pub authenticated: bool,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub last_error: String,
+    #[serde(default)]
+    pub last_synced_at: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for GithubView {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            pr_sidebar: true,
+            auto_link: true,
+            cli_available: false,
+            authenticated: false,
+            account: String::new(),
+            last_error: String::new(),
+            last_synced_at: String::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -16,6 +16,7 @@ import {
 } from "@coordy/ui";
 import {
   ArrowUp,
+  Bot,
   CalendarDays,
   ChevronRight,
   Copy,
@@ -33,6 +34,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { DatePickerField } from "./date-picker-field";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
 import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
@@ -58,6 +60,7 @@ import { useTabTitle } from "../shell/use-tab-title";
 import { ActivityLine } from "./activity-marker";
 import { AgentAvatar, NamedAgent } from "./agent-avatar";
 import { PriorityGlyph, StatusGlyph } from "./issue-status";
+import { IssuePullRequests } from "./issue-pull-requests";
 
 const uiText = "text-[13px] leading-5 md:text-[13px]";
 const titleField =
@@ -114,14 +117,14 @@ export function TaskDetailPage() {
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
   });
-  const workspaces = useQuery({
-    queryKey: ["view", { type: "Workspaces" }],
-    queryFn: () => view({ type: "Workspaces" }),
-  });
-  const settings = useQuery({
+  const settingsQuery = useQuery({
     queryKey: ["settings", workspaceId],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Settings", workspace_id: workspaceId! }),
+  });
+  const workspaces = useQuery({
+    queryKey: ["view", { type: "Workspaces" }],
+    queryFn: () => view({ type: "Workspaces" }),
   });
   const catalog = useQuery({
     queryKey: ["discover-agents"],
@@ -162,7 +165,7 @@ export function TaskDetailPage() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [blockerPick, setBlockerPick] = useState("none");
-  const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : null;
+  const repoPath = settingsQuery.data?.type === "Settings" ? settingsQuery.data.repo_path : null;
   const workPath = task?.worktree_path || repoPath;
   const workspaceName =
     asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)?.name?.trim() || "coordy";
@@ -212,12 +215,12 @@ export function TaskDetailPage() {
   const assignee = task.assignee_agent_id || "";
   const assignedAgent = agentList.find((item) => item.id === assignee);
   const agentItems = Object.fromEntries([
-    ["none", "未指派"],
+    ["none", "未指派智能体"],
     ...agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)]),
   ]);
   const projectItems = Object.fromEntries([["none", "无项目"], ...projectList.map((project) => [project.id, project.name])]);
-  const squadItems = Object.fromEntries([["none", "未指派"], ...squadList.map((squad) => [squad.id, squad.name])]);
-  const peopleItems = Object.fromEntries([["none", "未指派"], ...people.map((person) => [person.id, person.name])]);
+  const squadItems = Object.fromEntries([["none", "未指派小队"], ...squadList.map((squad) => [squad.id, squad.name])]);
+  const peopleItems = Object.fromEntries([["none", "未指派成员"], ...people.map((person) => [person.id, person.name])]);
   const blockers = (task.blocker_ids ?? [])
     .map((id) => tasks.find((item) => item.id === id))
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
@@ -739,23 +742,13 @@ export function TaskDetailPage() {
               </Select>
             </PropertyRow>
             <PropertyRow icon={<CalendarDays />}>
-              <label className="relative flex h-8 cursor-pointer items-center">
-                <span className={task.due_date ? "text-foreground" : "text-muted-foreground"}>
-                  {task.due_date?.slice(0, 10) || "截止日期"}
-                </span>
-                <input
-                  type="date"
-                  value={task.due_date?.slice(0, 10) ?? ""}
-                  className="absolute inset-0 cursor-pointer opacity-0"
-                  onChange={(event) => {
-                    void submit({
-                      type: "UpdateTask",
-                      task_id: task.id,
-                      due_date: event.target.value,
-                    }).then(refresh);
-                  }}
-                />
-              </label>
+              <DatePickerField
+                value={task.due_date}
+                placeholder="截止日期"
+                onChange={(due_date) => {
+                  void submit({ type: "UpdateTask", task_id: task.id, due_date }).then(refresh);
+                }}
+              />
             </PropertyRow>
             <PropertyRow icon={<FolderKanban />}>
               <Select
@@ -821,7 +814,7 @@ export function TaskDetailPage() {
                 assignedAgent ? (
                   <AgentAvatar agent={assignedAgent} className="size-4" />
                 ) : (
-                  <UserRound />
+                  <Bot />
                 )
               }
             >
@@ -843,7 +836,7 @@ export function TaskDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派</FieldItem>
+                  <FieldItem value="none">未指派智能体</FieldItem>
                   {agentList.map((agent) => (
                     <FieldItem key={agent.id} value={agent.id}>
                       <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />
@@ -871,7 +864,7 @@ export function TaskDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派</FieldItem>
+                  <FieldItem value="none">未指派成员</FieldItem>
                   {people.map((person) => (
                     <FieldItem key={person.id} value={person.id}>
                       {person.name}
@@ -880,6 +873,7 @@ export function TaskDetailPage() {
                 </SelectContent>
               </Select>
             </PropertyRow>
+            {squadList.length > 0 ? (
             <PropertyRow icon={<Users />}>
               <Select
                 value={task.assignee_squad_id || "none"}
@@ -904,7 +898,7 @@ export function TaskDetailPage() {
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派</FieldItem>
+                  <FieldItem value="none">未指派小队</FieldItem>
                   {squadList.map((squad) => (
                     <FieldItem key={squad.id} value={squad.id}>
                       {squad.name}
@@ -913,20 +907,21 @@ export function TaskDetailPage() {
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow icon={<Play />}>
-              <p className="text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
-            </PropertyRow>
+            ) : null}
           </div>
         </section>
 
+        {taskId ? (
+          <IssuePullRequests
+            taskId={taskId}
+            pullRequests={task.pull_requests ?? []}
+            github={settingsQuery.data?.type === "Settings" ? settingsQuery.data.github : undefined}
+            onChanged={refresh}
+          />
+        ) : null}
+
         <section>
           <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">前置事项</h2>
-          <p className={cn("mb-2 px-1.5 text-muted-foreground", uiText)}>
-            这些事项完成后，当前事项才能开始或完成。若已指派负责人，前置一解除就会自动开跑。
-          </p>
-          {blockers.length === 0 ? (
-            <p className="px-1.5 text-muted-foreground">尚未设置。</p>
-          ) : null}
           {blockers.map((blocker) => (
             <div key={blocker.id} className="flex h-8 items-center gap-2 rounded-md px-1.5 hover:bg-muted/60">
               <StatusGlyph status={blocker.status} className="size-4" />
@@ -948,40 +943,43 @@ export function TaskDetailPage() {
               </button>
             </div>
           ))}
-          {blockerCandidates.length > 0 ? (
-            <PropertyRow icon={<Plus />}>
-              <Select
-                value={blockerPick}
-                items={blockerItems}
-                onValueChange={(value) => {
-                  if (!value || value === "none") {
-                    setBlockerPick("none");
-                    return;
-                  }
+          <PropertyRow icon={<Plus />}>
+            <Select
+              value={blockerPick}
+              items={blockerItems}
+              onValueChange={(value) => {
+                if (!value || value === "none") {
                   setBlockerPick("none");
-                  void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
-                    .then(refresh)
-                    .catch((error: unknown) => {
-                      setNotice(error instanceof Error ? error.message : String(error));
-                    });
-                }}
-              >
-                <SelectTrigger className={cn(fieldTrigger, "text-muted-foreground")}>
-                  <SelectValue>
-                    {() => <span className="text-muted-foreground">选择前置事项</span>}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className={uiText}>
-                  <FieldItem value="none">选择前置事项</FieldItem>
-                  {blockerCandidates.map((item) => (
+                  return;
+                }
+                setBlockerPick("none");
+                void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
+                  .then(refresh)
+                  .catch((error: unknown) => {
+                    setNotice(error instanceof Error ? error.message : String(error));
+                  });
+              }}
+            >
+              <SelectTrigger className={cn(fieldTrigger, "text-muted-foreground")}>
+                <SelectValue>
+                  {() => <span className="text-muted-foreground">选择前置事项</span>}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className={uiText}>
+                {blockerCandidates.length === 0 ? (
+                  <FieldItem value="none" disabled>
+                    暂无其他事项可选择
+                  </FieldItem>
+                ) : (
+                  blockerCandidates.map((item) => (
                     <FieldItem key={item.id} value={item.id}>
                       {taskIdentifier(item)} {item.title}
                     </FieldItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </PropertyRow>
-          ) : null}
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </PropertyRow>
         </section>
       </aside>
     </section>
@@ -999,11 +997,14 @@ function FieldItem({ className, ...props }: ComponentProps<typeof SelectItem>) {
 
 function PropertyRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   return (
-    <div className="flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] md:text-[13px] hover:bg-muted/60">
-      <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
+    <div className="relative flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] md:text-[13px] hover:bg-muted/60">
+      <span className="pointer-events-none relative z-10 flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
         {icon}
       </span>
-      <div className="min-w-0 flex-1">{children}</div>
+      {/* The control extends under the glyph so clicking the icon opens the same picker. */}
+      <div className="-ml-6 min-w-0 flex-1 [&_[data-slot=select-trigger]]:cursor-pointer [&_[data-slot=select-trigger]]:pl-6 [&_button]:h-8 [&_button]:w-full [&_button]:cursor-pointer [&_button]:pl-6">
+        {children}
+      </div>
     </div>
   );
 }

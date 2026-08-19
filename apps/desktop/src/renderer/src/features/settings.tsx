@@ -29,6 +29,7 @@ import {
   User,
   Users,
   FlaskConical,
+  Github,
   Zap,
   type LucideIcon,
 } from "lucide-react";
@@ -60,8 +61,10 @@ import {
   asWorkspaces,
 } from "../lib/coordy/views";
 import { StatusLamp } from "./status-lamp";
+import { updateWorkspaceConductorCommand } from "./graph/graph-commands";
 import { useSession } from "../state/session-store";
 import { applyTheme, FONT_SIZE_OPTIONS, useThemeStore, type ThemePreference } from "../state/theme-store";
+import type { GithubView } from "@coordy/protocol";
 
 const ACCOUNT_TABS = [
   { id: "profile", label: "个人资料", icon: User },
@@ -78,6 +81,7 @@ const ACCOUNT_TABS = [
 const WORKSPACE_TABS = [
   { id: "general", label: "常规", icon: SettingsIcon },
   { id: "repositories", label: "代码仓库", icon: FolderGit2 },
+  { id: "github", label: "GitHub", icon: Github },
   { id: "cloud", label: "云通道", icon: Plug },
   { id: "labs", label: "实验室", icon: FlaskConical },
   { id: "members", label: "成员", icon: Users },
@@ -126,8 +130,8 @@ export function SettingsPage() {
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const tab: SettingsTab =
-    raw === "github" || raw === "integrations"
-      ? "cloud"
+    raw === "integrations"
+      ? "github"
       : isSettingsTab(raw)
         ? raw
         : "profile";
@@ -241,7 +245,7 @@ function SettingsPane({
   });
   const agents = useQuery({
     queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
-    enabled: Boolean(workspaceId) && tab === "chat",
+    enabled: Boolean(workspaceId) && (tab === "chat" || tab === "general"),
     queryFn: () => view({ type: "Agents", workspace_id: workspaceId! }),
   });
   const secrets = useQuery({
@@ -335,7 +339,14 @@ function SettingsPane({
         </Pane>
       );
     case "general":
-      return <GeneralPane workspaceId={workspaceId} workspace={ws} onSaved={invalidate} />;
+      return (
+        <GeneralPane
+          workspaceId={workspaceId}
+          workspace={ws}
+          agents={listableAgents(asAgents(agents.data))}
+          onSaved={invalidate}
+        />
+      );
     case "repositories":
       return (
         <Pane title="代码仓库" description="绑定本机目录。智能体在该目录中执行，路径不会上传。">
@@ -354,11 +365,20 @@ function SettingsPane({
           </Button>
         </Pane>
       );
+    case "github":
+      return (
+        <GithubPane
+          workspaceId={workspaceId}
+          repoPath={repoPath ?? null}
+          github={settings.data?.type === "Settings" ? settings.data.github : undefined}
+          onSaved={invalidate}
+        />
+      );
     case "cloud":
       return (
-        <Pane title="云通道" description="本机桌面不提供云通道，也不假装有 OAuth 或公网入站。">
+        <Pane title="云通道" description="本机桌面不提供公网入站或即时通讯云通道。">
           <p className="text-sm text-muted-foreground">
-            不提供 GitHub App、Pull Request 侧栏、CI，也不提供飞书 / Slack / 钉钉 / 企业微信。仓库绑定入口位于「代码仓库」。模型密钥位于「模型密钥」。
+            不提供飞书 / Slack / 钉钉 / 企业微信。GitHub 已改走本机 GitHub CLI，入口在「GitHub」。仓库绑定入口位于「代码仓库」。模型密钥位于「模型密钥」。
           </p>
         </Pane>
       );
@@ -616,6 +636,88 @@ function ShortcutsPane({ os }: { os?: string }) {
   );
 }
 
+function GithubPane({
+  workspaceId,
+  repoPath,
+  github,
+  onSaved,
+}: {
+  workspaceId: string | null;
+  repoPath: string | null;
+  github?: GithubView;
+  onSaved: () => void;
+}) {
+  const enabled = github?.enabled !== false;
+  const sidebar = github?.pr_sidebar !== false;
+  const autoLink = github?.auto_link !== false;
+  const [busy, setBusy] = useState(false);
+  const lamp = !github?.last_synced_at
+    ? { tone: "gray" as const, label: "尚未探测" }
+    : !github.cli_available
+      ? { tone: "red" as const, label: "未安装 gh" }
+      : github.authenticated
+        ? { tone: "green" as const, label: github.account ? `已登录 · ${github.account}` : "已登录" }
+        : { tone: "yellow" as const, label: "未登录" };
+
+  async function setFlag(kind: string, next: boolean) {
+    if (!workspaceId) return;
+    await submit({ type: "SetIntegration", workspace_id: workspaceId, kind, enabled: next });
+    onSaved();
+  }
+
+  return (
+    <Pane
+      title="GitHub"
+      description="通过本机 GitHub CLI（gh）读取 PR 状态与 CI。不需要在 Coordy 里做 GitHub OAuth 或安装 GitHub App。"
+    >
+      <Row label="GitHub CLI" hint={github?.last_error || (repoPath ? repoPath : "先在「代码仓库」绑定本机目录")}>
+        <span className="inline-flex items-center justify-end gap-2 text-sm">
+          <StatusLamp tone={lamp.tone} label={lamp.label} className="size-2.5" />
+          {lamp.label}
+        </span>
+      </Row>
+      <Row label="上次同步" hint={github?.last_synced_at ? github.last_synced_at.replace("T", " ").slice(0, 19) : "尚未同步"}>
+        <Button
+          variant="secondary"
+          disabled={!workspaceId || busy}
+          onClick={async () => {
+            if (!workspaceId) return;
+            setBusy(true);
+            try {
+              await submit({ type: "RefreshGithub", workspace_id: workspaceId });
+              onSaved();
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "同步中…" : "立即同步"}
+        </Button>
+      </Row>
+      <Row label="GitHub 集成" hint="关闭后停止自动关联与 CI 刷新，已关联的 PR 仍保留。">
+        <Switch checked={enabled} disabled={!workspaceId} onCheckedChange={(next) => void setFlag("github", Boolean(next))} />
+      </Row>
+      <Row label="PR 侧栏" hint="在事项详情显示关联的 pull request、CI 与可合并性。">
+        <Switch
+          checked={sidebar}
+          disabled={!workspaceId || !enabled}
+          onCheckedChange={(next) => void setFlag("github_pr_sidebar", Boolean(next))}
+        />
+      </Row>
+      <Row label="自动关联 PR" hint="从分支名、标题识别事项编号；正文需使用 Closes / Fixes / Resolves 紧跟编号。">
+        <Switch
+          checked={autoLink}
+          disabled={!workspaceId || !enabled}
+          onCheckedChange={(next) => void setFlag("github_auto_link", Boolean(next))}
+        />
+      </Row>
+      <p className="pt-2 text-sm text-muted-foreground">
+        未安装时：安装 GitHub CLI 后运行 `gh auth login`。CI 来自 `gh pr list` 的 statusCheckRollup；没有检查不会显示为通过。已合并且带关闭语句的 PR 会在没有其他 Open/Draft 工作 PR 时把事项标为完成。
+      </p>
+    </Pane>
+  );
+}
+
 function NotificationsPane({
   kinds,
   disabled,
@@ -737,29 +839,46 @@ function TokensPane({ status }: { status?: { key_configured?: boolean; base_url?
 function GeneralPane({
   workspaceId,
   workspace,
+  agents,
   onSaved,
 }: {
   workspaceId: string | null;
   workspace: ReturnType<typeof asWorkspace>;
+  agents: ReturnType<typeof listableAgents>;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(workspace?.name ?? "");
   const [description, setDescription] = useState(workspace?.description ?? "");
   const [context, setContext] = useState(workspace?.context ?? "");
   const [prefix, setPrefix] = useState(workspace?.issue_prefix ?? "COOR");
+  const [conductor, setConductor] = useState(workspace?.conductor_agent_id || "none");
   useEffect(() => {
     setName(workspace?.name ?? "");
     setDescription(workspace?.description ?? "");
     setContext(workspace?.context ?? "");
     setPrefix(workspace?.issue_prefix ?? "COOR");
-  }, [workspace?.id, workspace?.name, workspace?.description, workspace?.context, workspace?.issue_prefix]);
+    setConductor(workspace?.conductor_agent_id || "none");
+  }, [
+    workspace?.id,
+    workspace?.name,
+    workspace?.description,
+    workspace?.context,
+    workspace?.issue_prefix,
+    workspace?.conductor_agent_id,
+  ]);
   const dirty =
     name !== (workspace?.name ?? "") ||
     description !== (workspace?.description ?? "") ||
     context !== (workspace?.context ?? "") ||
-    prefix !== (workspace?.issue_prefix ?? "COOR");
+    prefix !== (workspace?.issue_prefix ?? "COOR") ||
+    conductor !== (workspace?.conductor_agent_id || "none");
+  const conductorItems = {
+    none: "未指定",
+    ...Object.fromEntries(agents.map((agent) => [agent.id, agentDisplayName(agent)])),
+  };
+  const selectedConductor = agents.find((agent) => agent.id === conductor);
   return (
-    <Pane title="常规" description="工作区名称、智能体背景上下文与事项前缀保存在本机内核。">
+    <Pane title="常规" description="工作区名称、智能体背景上下文、事项前缀与图总管保存在本机内核。">
       <div className="space-y-1.5">
         <Label htmlFor="ws-name">名称</Label>
         <Input id="ws-name" value={name} onChange={(event) => setName(event.target.value)} />
@@ -782,13 +901,40 @@ function GeneralPane({
         <Label htmlFor="ws-prefix">事项前缀</Label>
         <Input id="ws-prefix" value={prefix} onChange={(event) => setPrefix(event.target.value)} />
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="ws-conductor">图总管</Label>
+        <Select
+          value={conductor}
+          items={conductorItems}
+          onValueChange={(value) => value && setConductor(value)}
+        >
+          <SelectTrigger id="ws-conductor">
+            <SelectValue>{selectedConductor ? agentDisplayName(selectedConductor) : "未指定"}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">未指定</SelectItem>
+            {agents.map((agent) => (
+              <SelectItem key={agent.id} value={agent.id}>
+                {agentDisplayName(agent)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          指定后，绿灯已指派事项由内核按图自动开工；失效边由总管批准。未指定时仍由成员点开工或确认。
+        </p>
+      </div>
       <Button
         disabled={!workspaceId || !dirty || !name.trim()}
         onClick={() => {
           if (!workspaceId) return;
+          const conductorCmd = updateWorkspaceConductorCommand(
+            workspaceId,
+            conductor === "none" ? null : conductor,
+          );
+          if (conductorCmd.type !== "UpdateWorkspace") return;
           void submit({
-            type: "UpdateWorkspace",
-            workspace_id: workspaceId,
+            ...conductorCmd,
             name: name.trim(),
             description,
             context,

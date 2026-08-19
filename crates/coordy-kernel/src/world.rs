@@ -60,6 +60,8 @@ pub struct World {
     #[serde(default)]
     pub integrations: Vec<Integration>,
     #[serde(default)]
+    pub github: Vec<GithubState>,
+    #[serde(default)]
     pub notification_kinds: Vec<String>,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
@@ -95,6 +97,8 @@ pub struct Workspace {
     pub next_issue_number: u64,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub conductor_agent_id: Option<String>,
 }
 
 fn default_issue_prefix() -> String {
@@ -147,6 +151,8 @@ pub struct Agent {
     pub concurrency_limit: u32,
     #[serde(default)]
     pub cli_args: String,
+    #[serde(default = "default_tool_access")]
+    pub tool_access: String,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]
@@ -159,6 +165,10 @@ fn default_access() -> String {
 
 fn default_agent_concurrency() -> u32 {
     6
+}
+
+fn default_tool_access() -> String {
+    "auto".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -640,6 +650,21 @@ pub struct Integration {
     pub enabled: bool,
     #[serde(default)]
     pub config: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct GithubState {
+    pub workspace_id: String,
+    #[serde(default)]
+    pub cli_available: bool,
+    #[serde(default)]
+    pub authenticated: bool,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub last_error: String,
+    #[serde(default)]
+    pub last_synced_at: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
