@@ -97,9 +97,10 @@ describe("skill starters", () => {
     expect(starter?.body).toContain("GOAL:");
     expect(starter?.body).toContain("CONSTRAINT:");
     expect(starter?.body).toContain("DECISION:");
-    expect(starter?.body).toContain("DEPENDS:");
+    expect(starter?.body).toContain("DEPENDS: <id 或 COOR-n> [entity]");
     expect(starter?.body).toContain("PLAN:");
     expect(starter?.body).toContain("ACCEPTANCE:");
+    expect(starter?.body).toContain("失效后须确认");
     expect(starter?.body.includes("React Flow")).toBe(false);
     expect(starter?.body.includes("LangGraph")).toBe(false);
     expect(skillStarterById(null)).toBeNull();

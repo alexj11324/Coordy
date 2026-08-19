@@ -27,6 +27,7 @@ export function DataEdge({
   data,
   markerEnd,
   style,
+  selected,
 }: EdgeProps<DataEdgeType>) {
   const [edgePath, labelX, labelY] = getBezierPath({
     sourceX,
@@ -49,6 +50,7 @@ export function DataEdge({
         style={{
           stroke: stale ? "var(--destructive)" : undefined,
           strokeDasharray: stale ? "6 4" : data?.kind === "assigned" ? "5 4" : undefined,
+          strokeWidth: selected ? 2 : 1,
           ...style,
         }}
       />
