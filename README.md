@@ -1,78 +1,107 @@
+<div align="center">
+
 # Coordy
 
-本机优先的编码智能体工作区。Electron 桌面把任务、聊天和自动化交给本地 Rust 守护进程 `coordyd`；真正干活的是你本机已安装的 CLI（Claude Code、Codex、Gemini 等）。
+### A local command center for coding agents
 
-A local-first workspace for coding agents: an Electron app plus a Rust daemon. Agents run as the CLIs already on your `PATH`.
+Plan work, delegate issues, coordinate agent teams, and follow every run from one desktop workspace.
 
-[简体中文](#简体中文) · [English](#english)
+[简体中文](README.zh-CN.md) · [Get started](#get-started) · [Features](#features) · [Development](#development)
 
-当前版本 **0.2.0** · 协议 `coordy-local-v1` · [Apache-2.0](LICENSE)
+![Version](https://img.shields.io/badge/version-0.2.0-6d5dfc?style=flat-square)
+![Rust](https://img.shields.io/badge/core-Rust-dea584?style=flat-square&logo=rust)
+![Electron](https://img.shields.io/badge/desktop-Electron-47848f?style=flat-square&logo=electron)
+![Local first](https://img.shields.io/badge/data-local--first-16a34a?style=flat-square)
 
----
+</div>
 
-## 简体中文
+Coordy brings your coding agents into one organized workspace. Create issues, assign the right agent, connect dependencies, automate recurring work, and see what is running without juggling terminals and disconnected chat sessions.
 
-Coordy 不是云端 Agent 平台，也不再是「检测长程任务漂移」的研究仓库。产品入口是桌面应用：侧栏、标签页、看板、智能体、Harness、设置。业务状态只经过内核的 `submit` / `view` / `watch`。
+It works with the agent CLIs already installed on your computer—including Claude Code, Codex, Gemini CLI, GitHub Copilot, OpenCode, and Cursor. Your projects, execution history, and credentials stay on your machine.
 
-```text
-Electron renderer  →  preload  →  Electron main  →  Unix socket / named pipe  →  coordyd
+## Features
+
+|                         | What you can do                                                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Issues and projects** | Plan work on a board or list, add priorities, due dates, labels, attachments, subtasks, and project context.           |
+| **Agent workspace**     | Create reusable agent profiles with instructions, models, skills, access rules, and concurrency limits.                |
+| **Agent teams**         | Assign work to individual agents or squads, choose a conductor, and let ready tasks move through the dependency graph. |
+| **Live execution**      | Follow runs, comments, retries, tool activity, inbox updates, and graph changes as they happen.                        |
+| **Automations**         | Turn runbooks into scheduled or on-demand work using local agents.                                                     |
+| **GitHub context**      | Sync pull requests, checks, and merge status through your local `gh` CLI.                                              |
+
+## A typical workflow
+
+1. Create a workspace for your repository.
+2. Import a discovered coding CLI or create a specialized agent.
+3. Break the goal into issues and connect their dependencies.
+4. Assign agents or a squad and start the work.
+5. Watch progress from the board, activity feed, or live graph.
+6. Review the result, retry a failed run, or turn a repeatable process into an automation.
+
+Coordy keeps task state separate from chat history, so the team can continue from the same plan even when individual agent sessions end.
+
+## Get started
+
+> [!NOTE]
+> Coordy currently runs from source. You need Rust stable, Node.js 22, and pnpm 9.
+
+```bash
+git clone https://github.com/alexj11324/Coordy.git
+cd Coordy
+corepack enable
+pnpm install
+bash scripts/dev.sh
 ```
 
-`coordyd` 不监听本机 HTTP。数据在本机 SQLite；模型密钥写成 `0600` 文件，不进数据库、不上传。
+On first launch, Coordy starts its local daemon, creates a workspace, and discovers compatible CLIs on your `PATH`. Install at least one supported coding-agent CLI to run real work.
 
-### 能做什么
-
-桌面侧栏分三块：
-
-- **个人**：收件箱、与智能体一对一聊天、我的任务
-- **工作区**：任务看板 / 列表、项目、自动化、智能体、小队、统计
-- **配置**：Harness、Skills、设置
-
-已经可用的路径包括：
-
-- 多工作区（创建 / 切换 / 离开 / 删除），成员角色 owner / admin / member
-- Issue：标题、说明、状态（含 backlog）、优先级、截止日期、标签、附件、子事项、指派智能体 / 成员 / 小队 / 项目
-- 评论与执行分开；`@智能体` 触发运行且不改负责人；失败后可按原 prompt 重试
-- 启动时从 `PATH` 发现本机 CLI，按各家原生无头协议 spawn（不是统一 ACP 总线）
-- 智能体身份：指令、harness、模型、思考强度、访问范围、并发上限、Skills 绑定、复制
-- 工作区 Skills 库；自动化 runbook + 本机间隔调度（`every:30m` / `1h` / `1d`）
-- 设置里粘贴自己的模型密钥（BYOK）；Agent Builder 和建议拆分依赖这份密钥
-
-本机**明确不做**：云账号 / PAT、GitHub App、飞书 / Slack 等 IM、公网 Webhook、甘特图。缺口清单见 [`TODO.md`](TODO.md)。
-
-常用快捷键：`C` 新建任务，`Mod+K` 搜索，`Mod+J` 悬浮聊天，`Mod+B` 收起侧栏。
-
-### 本机 Harness
-
-Coordy 启动时扫描 `PATH`，对已安装的 CLI 使用**该 CLI 自己的**无头协议：
-
-| 发现的二进制 | 协议 |
-| --- | --- |
-| `claude` / `claude-code` | Claude `stream-json` |
-| `codex` | Codex `exec --json` |
-| `gemini` | Gemini CLI `-p` |
-| `copilot` | Copilot `-p` |
-| `opencode` | OpenCode `run` |
-| `cursor-agent` / `agent` | Cursor `--print` / stream-json |
-
-[ACP](https://agentclientprotocol.com/get-started/registry) 只用于 `coordy acp-stub`，以及只存在于 ACP Registry、本机没有对应 CLI 的智能体。本机没装 Codex / Claude 时，用 stub 做演示：
+No agent CLI installed yet? Start the built-in ACP demo in another terminal:
 
 ```bash
 cargo run -p coordy -- acp-stub
 ```
 
-### 开发
+## Supported coding agents
 
-需要 **Rust stable**（含 rustfmt / clippy）、**Node 22**、**pnpm 9**。
+Coordy launches each tool through its native headless interface instead of forcing every agent through one adapter.
+
+| CLI on `PATH`            | Integration                    |
+| ------------------------ | ------------------------------ |
+| `claude` / `claude-code` | Claude stream JSON             |
+| `codex`                  | Codex `exec --json`            |
+| `gemini`                 | Gemini CLI prompt mode         |
+| `copilot`                | GitHub Copilot CLI prompt mode |
+| `opencode`               | OpenCode `run`                 |
+| `cursor-agent` / `agent` | Cursor print / stream mode     |
+
+Agents found only in the [Agent Client Protocol Registry](https://agentclientprotocol.com/get-started/registry) can use ACP. You can configure model access in Settings with your own provider key.
+
+## Local by design
+
+```text
+Electron app  →  secure preload  →  local IPC  →  coordyd  →  agent CLI
+                                              ↘  SQLite
+```
+
+- `coordyd` owns workspace state and execution.
+- The desktop connects through a user-scoped Unix socket or Windows named pipe.
+- Workspace data and run history live in local SQLite.
+- API keys are stored in a private `0600` file, never in the database.
+- Private agent memory stays local and is excluded from shared sync data.
+
+The optional `coordy-server` binary provides a shared control plane when you need one; a single-user desktop setup does not require it.
+
+## Development
+
+Start the full desktop stack:
 
 ```bash
 pnpm install
 bash scripts/dev.sh
 ```
 
-`scripts/dev.sh` 会先编译 `coordyd` 和 `coordy`，再启动桌面。Linux 云桌面默认使用软件渲染，并传入 `--disable-gpu --disable-dev-shm-usage`，避免窗口闪一下就退出。
-
-只跑守护进程和 CLI（与桌面共用同一套 socket / token）：
+Run the daemon and CLI separately:
 
 ```bash
 cargo run -p coordyd
@@ -80,15 +109,7 @@ cargo run -p coordy -- health
 cargo run -p coordy -- inspect
 ```
 
-可选共享控制面（单人本机不需要）：
-
-```bash
-cargo run -p coordy-server -- --bind 127.0.0.1:8787
-```
-
-默认数据目录是平台 data dir 下的 `coordy/`（Linux 上多为 `~/.local/share/coordy`）。Socket 走 `XDG_RUNTIME_DIR`（Unix）或 named pipe（Windows），token 文件权限 `0600`。
-
-### 测试（与 CI 对齐）
+Run the main quality checks:
 
 ```bash
 cargo fmt --all -- --check
@@ -97,82 +118,27 @@ cargo run -p xtask -- verify-protocol
 cargo test --workspace
 pnpm --filter @coordy/desktop test
 pnpm --filter @coordy/desktop typecheck
+pnpm --filter @coordy/desktop build
 ```
 
-根目录 `pnpm test` / `pnpm typecheck` 走 Turbo。协议以 Rust `crates/coordy-protocol` 为准，`packages/protocol-ts` 是校验过的镜像。
+> [!TIP]
+> GitHub Actions are manual-only. Run the **CI** or **CD** workflow from the Actions tab when you want a remote build.
 
-CI 还会在 Python 3.11 / 3.12 下安装并测试已归档的 `research/s0-validation/`，同时构建其发行包并检查 review UI 语法；这些检查维护研究归档，不属于桌面运行时的开发前置步骤。
-
-### 仓库结构
+## Repository map
 
 ```text
-apps/desktop/                 Electron（React + electron-vite）
-bins/coordyd/                 本机守护进程
-bins/coordy/                  CLI：health / inspect / workspace / acp-stub
-bins/coordy-server/           可选控制面
-crates/coordy-protocol/       协议 DTO
-crates/coordy-kernel/         内核（权威、记忆、契约、漂移门）
-crates/coordy-harness/        CLI 发现与原生 spawn
-crates/coordy-local-runtime/  SQLite、socket、密钥、执行
-crates/coordy-advisor/        顾问预标注，不能提交内核状态
-packages/ui/                  shadcn 原语
-packages/protocol-ts/         协议 TypeScript 镜像
-docs/adr/                     架构决策
-research/s0-validation/       已归档的 S0 研究管线（不是运行时）
+apps/desktop/                 Electron + React desktop app
+bins/coordyd/                 Local daemon
+bins/coordy/                  Health, inspect, workspace, and ACP demo CLI
+bins/coordy-server/           Optional shared control plane
+crates/coordy-kernel/         Tasks, agents, permissions, graph, and scheduling
+crates/coordy-harness/        CLI discovery and native process launch
+crates/coordy-local-runtime/  SQLite, local IPC, secrets, and execution
+crates/coordy-protocol/       Rust protocol source of truth
+packages/protocol-ts/         Verified TypeScript protocol mirror
+packages/ui/                  Shared UI components
+docs/adr/                     Architecture decisions
+research/s0-validation/       Archived task-drift research
 ```
 
-内核里还有记忆、契约、授权委托、依赖边、compaction 冲突等对象；它们不是侧栏里的「对照产品导航」，不要把它们理解成未完成的主功能。
-
-实现约束见 [`AGENTS.md`](AGENTS.md)，贡献说明见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。不要提交 `.local-specs/` 或 `apps/desktop/resources/native/` 下的本机二进制。
-
-### 已归档的研究代码
-
-[`research/s0-validation/`](research/s0-validation/) 是冻结的 Python 实验：用历史会话评估 compaction 之后的任务漂移检测。它不是桌面运行时，筛选结论只能是 `STOP` / `PIVOT` / `PROCEED_TO_CONFIRMATION`，不会发出 `GO`。
-
----
-
-## English
-
-Coordy is a **local-first desktop** for coordinating coding agents on issues, chats, projects, automations, and squads. The UI is Electron; authority lives in `coordyd`. The daemon talks to whatever CLIs you already installed, using each vendor’s native headless protocol.
-
-This repository is no longer a research-only harness for long-horizon drift detection. That Python pipeline remains under [`research/s0-validation/`](research/s0-validation/) and is archived.
-
-### Architecture
-
-```text
-Electron renderer  →  preload  →  Electron main  →  Unix socket / named pipe  →  coordyd
-```
-
-External callers may use only `submit`, `view`, and `watch` (`crates/coordy-protocol`). Electron does not implement authority, memory, contracts, or drift rules. Agent private memory never syncs. Model API keys are BYOK files mode `0600`, never SQLite.
-
-On launch Coordy discovers CLIs on `PATH`: Claude Code (`stream-json`), Codex (`exec --json`), Gemini, Copilot, OpenCode, Cursor. ACP is used only for `coordy acp-stub` and agents that exist solely in the [ACP Registry](https://agentclientprotocol.com/get-started/registry).
-
-### Develop
-
-Requires Rust stable (rustfmt + clippy), Node 22, and pnpm 9.
-
-```bash
-pnpm install
-bash scripts/dev.sh          # build coordyd + coordy, then start the desktop
-```
-
-```bash
-cargo run -p coordyd
-cargo run -p coordy -- health
-cargo run -p coordy-server -- --bind 127.0.0.1:8787   # optional shared control plane
-```
-
-CI-equivalent checks:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo run -p xtask -- verify-protocol
-cargo test --workspace
-pnpm --filter @coordy/desktop test
-pnpm --filter @coordy/desktop typecheck
-```
-
-CI additionally installs and tests the archived `research/s0-validation/` package on Python 3.11 and 3.12, builds its distribution, and checks the review UI syntax. Those jobs preserve the research archive and are not prerequisites for running the desktop product locally.
-
-Product gaps versus the intended desktop surface: [`TODO.md`](TODO.md). Invariants: [`AGENTS.md`](AGENTS.md). ADRs: [`docs/adr/`](docs/adr/).
+See [`TODO.md`](TODO.md) for the product roadmap and [`docs/adr/`](docs/adr/) for the architectural decisions behind Coordy.
