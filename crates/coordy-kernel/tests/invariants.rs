@@ -1,12 +1,14 @@
 use coordy_advisor::DeterministicAdvisor;
 use coordy_kernel::{
-    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, RecordingPorts,
+    parse_sync_projection, sync_batch, sync_omits_private_memory, Kernel, NoopPorts,
+    RecordingPorts,
 };
 use coordy_protocol::{
     Actor, AuthenticatedCommand, AuthorizedQuery, Command, Effect, GraphEdgeKind, GraphEdgeState,
     HarnessEvent, NodeKind, Query, RunRole, RunSource, ValidationChoice, View,
     STALE_DEPENDENCY_REASON,
 };
+use std::sync::Arc;
 
 fn daemon() -> Actor {
     Actor::Daemon
@@ -1097,9 +1099,13 @@ fn reaffirm_dep(h: &Harness, dependency_id: &str) {
     h.kernel
         .submit_sync(cmd(
             alice_actor(h),
-            Command::ReaffirmDependency {
+            Command::ValidationDecision {
                 dependency_id: dependency_id.into(),
                 expected_generation: generation,
+                decision: ValidationChoice::Reaffirm,
+                evidence_refs: vec!["human-review".into()],
+                rationale: "human reaffirmed current dependency generation".into(),
+                validator_run_id: None,
             },
         ))
         .unwrap();
@@ -1489,6 +1495,83 @@ fn invalidate_only_consumes_from_changed_source() {
 }
 
 #[test]
+fn every_source_change_advances_a_stale_dependency_generation() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "api");
+    bind_demo_repo(&h);
+    create_worktree(&h, &producer);
+
+    for patch in ["first change", "second change"] {
+        h.kernel
+            .submit_sync(cmd(
+                alice_actor(&h),
+                Command::ApplyPatch {
+                    task_id: producer.clone(),
+                    patch: patch.into(),
+                },
+            ))
+            .unwrap();
+    }
+
+    let dep = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dependency");
+    assert_eq!(dep.state, GraphEdgeState::Stale);
+    assert_eq!(dep.generation, 3);
+    assert_eq!(dep.current_version, Some(2));
+}
+
+#[test]
+fn legacy_dependency_endpoint_rejects_archived_agent() {
+    let h = setup();
+    let consumer = issue_title(&h, "ui");
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ArchiveAgent {
+                agent_id: h.a1.clone(),
+            },
+        ))
+        .unwrap();
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            declare_cmd(&h.workspace_id, &consumer, &h.a1, "repo"),
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("不存在"));
+}
+
+#[test]
+fn public_dependency_cannot_claim_an_unrelated_same_workspace_run() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let unrelated = issue_title(&h, "unrelated");
+    assign_a1(&h, &unrelated);
+    let unrelated_run = start_fixture(&h, &unrelated, vec![]);
+    let mut command = declare_cmd(&h.workspace_id, &consumer, &producer, "repo");
+    let Command::DeclareDependency { origin_run_id, .. } = &mut command else {
+        unreachable!();
+    };
+    *origin_run_id = Some(unrelated_run);
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(alice_actor(&h), command))
+        .unwrap_err();
+    assert_eq!(err.code, "invalid");
+    assert!(err.message.contains("origin run"));
+    assert!(alice_deps(&h).is_empty());
+}
+
+#[test]
 fn done_consumer_stays_done_when_materialization_goes_stale() {
     let h = setup();
     let producer = issue_title(&h, "api");
@@ -1549,7 +1632,7 @@ fn done_consumer_stays_done_when_materialization_goes_stale() {
 }
 
 #[test]
-fn reaffirm_rejects_stale_generation_and_does_not_start_run() {
+fn stale_consumes_reaffirm_requires_validation_decision_and_does_not_start_run() {
     let h = setup();
     let producer = issue_title(&h, "api");
     let consumer = issue_title(&h, "ui");
@@ -1581,8 +1664,8 @@ fn reaffirm_rejects_stale_generation_and_does_not_start_run() {
             },
         ))
         .unwrap_err();
-    assert_eq!(err.code, "invalid");
-    assert!(err.message.contains("generation"));
+    assert_eq!(err.code, "denied");
+    assert!(err.message.contains("ValidationDecision"));
     reaffirm_dep(&h, &dep_id);
     assert_eq!(
         alice_runs(&h)
@@ -1813,6 +1896,36 @@ fn graph_scheduler_opens_downstream_once_after_upstream_session() {
             .count(),
         1
     );
+}
+
+#[test]
+fn graph_scheduler_does_not_leave_running_run_after_spawn_failure() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    declare_dep(&h, &consumer, &producer, "repo");
+    let failing = Harness {
+        kernel: Kernel::with_world(
+            h.kernel.export_world(),
+            Arc::new(NoopPorts),
+            Arc::new(DeterministicAdvisor),
+        ),
+        workspace_id: h.workspace_id.clone(),
+        alice: h.alice.clone(),
+        bob: h.bob.clone(),
+        a1: h.a1.clone(),
+        a2: h.a2.clone(),
+    };
+
+    assign_a1(&failing, &producer);
+    let first = graph_execute_runs(&failing);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].status, "failed");
+
+    assign_a1(&failing, &producer);
+    let second = graph_execute_runs(&failing);
+    assert_eq!(second.len(), 2, "a failed spawn must remain retryable");
+    assert!(second.iter().all(|run| run.status == "failed"));
 }
 
 #[test]
@@ -2083,6 +2196,156 @@ fn human_validation_uses_the_same_command_as_conductor() {
         .expect("dep");
     assert_eq!(edge.state, GraphEdgeState::Active);
     assert_eq!(edge.observed_version, edge.current_version);
+}
+
+#[test]
+fn executor_cannot_bypass_validation_with_direct_commands_or_review_run_id() {
+    let h = setup();
+    set_conductor(&h, &h.a1);
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    assign_a1(&h, &consumer);
+    invalidate_producer(&h, &producer);
+    let edge = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep");
+    let review = graph_review_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == consumer)
+        .expect("review run");
+    let executor = Actor::Agent {
+        id: h.a2.clone(),
+        principal_id: h.alice.clone(),
+    };
+
+    for command in [
+        Command::ReaffirmDependency {
+            dependency_id: dep_id.clone(),
+            expected_generation: edge.generation,
+        },
+        Command::RemoveDependency {
+            dependency_id: dep_id.clone(),
+        },
+        Command::ValidationDecision {
+            dependency_id: dep_id.clone(),
+            expected_generation: edge.generation,
+            decision: ValidationChoice::Reaffirm,
+            evidence_refs: vec!["forged".into()],
+            rationale: "executor attempted to approve itself".into(),
+            validator_run_id: Some(review.id),
+        },
+    ] {
+        let err = h
+            .kernel
+            .submit_sync(cmd(executor.clone(), command))
+            .unwrap_err();
+        assert_eq!(err.code, "denied");
+    }
+    assert_eq!(
+        alice_deps(&h)
+            .into_iter()
+            .find(|dep| dep.id == dep_id)
+            .expect("dep")
+            .state,
+        GraphEdgeState::Stale
+    );
+}
+
+#[test]
+fn stale_consumes_removal_requires_generation_bound_validation_decision() {
+    let h = setup();
+    let producer = issue_title(&h, "api");
+    let consumer = issue_title(&h, "ui");
+    let dep_id = declare_dep(&h, &consumer, &producer, "repo");
+    invalidate_producer(&h, &producer);
+    let edge = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == dep_id)
+        .expect("dep");
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::RemoveDependency {
+                dependency_id: dep_id.clone(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::ValidationDecision {
+                dependency_id: dep_id.clone(),
+                expected_generation: edge.generation,
+                decision: ValidationChoice::Remove,
+                evidence_refs: vec!["graph-inspector".into()],
+                rationale: "remove obsolete dependency".into(),
+                validator_run_id: None,
+            },
+        ))
+        .unwrap();
+    assert!(!alice_deps(&h).into_iter().any(|dep| dep.id == dep_id));
+}
+
+#[test]
+fn review_run_is_bound_to_its_dependency_target_and_generation() {
+    let h = setup();
+    set_conductor(&h, &h.a1);
+    let producer = issue_title(&h, "api");
+    let first_consumer = issue_title(&h, "ui-one");
+    let second_consumer = issue_title(&h, "ui-two");
+    let first_dep = declare_dep(&h, &first_consumer, &producer, "repo");
+    let second_dep = declare_dep(&h, &second_consumer, &producer, "repo");
+    assign_a1(&h, &first_consumer);
+    h.kernel
+        .submit_sync(cmd(
+            alice_actor(&h),
+            Command::AssignTask {
+                task_id: second_consumer.clone(),
+                agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap();
+    invalidate_producer(&h, &producer);
+    let first_review = graph_review_runs(&h)
+        .into_iter()
+        .find(|run| run.task_id == first_consumer)
+        .expect("first review run");
+    let second_generation = alice_deps(&h)
+        .into_iter()
+        .find(|dep| dep.id == second_dep)
+        .expect("second dep")
+        .generation;
+
+    let err = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::ValidationDecision {
+                dependency_id: second_dep.clone(),
+                expected_generation: second_generation,
+                decision: ValidationChoice::Reaffirm,
+                evidence_refs: vec!["wrong-review".into()],
+                rationale: "reuse another review".into(),
+                validator_run_id: Some(first_review.id),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(err.code, "denied");
+    assert_eq!(
+        alice_deps(&h)
+            .into_iter()
+            .find(|dep| dep.id == second_dep)
+            .expect("second dep")
+            .state,
+        GraphEdgeState::Stale
+    );
+    assert!(alice_deps(&h).into_iter().any(|dep| dep.id == first_dep));
 }
 
 #[test]

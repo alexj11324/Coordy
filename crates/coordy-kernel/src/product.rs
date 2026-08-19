@@ -2316,6 +2316,9 @@ pub(crate) fn resolve_node_in_workspace(
         return Ok(NodeRef::task(id));
     }
     if let Some(agent) = world.agent(id) {
+        if agent.archived {
+            return Err(CoordyError::invalid("依赖端点不存在"));
+        }
         if agent.workspace_id != workspace_id {
             return Err(CoordyError::invalid("依赖端点不能跨工作区"));
         }
@@ -2491,9 +2494,13 @@ pub(crate) fn record_dependency_edge(
         json!({
             "source": draft.source.id,
             "target": draft.target.id,
+            "source_kind": draft.source.kind,
+            "target_kind": draft.target.kind,
             "kind": draft.kind,
             "entity": entity,
             "origin_run_id": draft.origin_run_id,
+            "observed_version": version,
+            "current_version": version,
         }),
     );
     emit_changed(world, workspace_id.to_string());
@@ -2519,6 +2526,11 @@ pub(crate) fn declare_dependency(
         &request.from_id,
         &request.to_id,
     )?;
+    if request.origin_run_id.is_some() {
+        return Err(CoordyError::invalid(
+            "origin run is reserved for internally observed dependencies",
+        ));
+    }
     record_dependency_edge(
         world,
         actor,
@@ -2541,6 +2553,7 @@ pub(crate) fn reaffirm_dependency(
     dependency_id: &str,
     expected_generation: u64,
 ) -> Result<Outcome, CoordyError> {
+    require_not_agent(actor)?;
     let dep = world
         .dependencies
         .iter()
@@ -2600,6 +2613,7 @@ pub(crate) fn remove_dependency(
     actor: &Actor,
     dependency_id: &str,
 ) -> Result<Outcome, CoordyError> {
+    require_not_agent(actor)?;
     let dep = world
         .dependencies
         .iter()
@@ -2667,7 +2681,18 @@ pub(crate) fn apply_validation_decision(
     rationale: String,
     validator_run_id: Option<String>,
 ) -> Result<Outcome, CoordyError> {
+    let dep = world
+        .dependencies
+        .iter()
+        .find(|dep| dep.id == dependency_id)
+        .cloned()
+        .ok_or_else(|| CoordyError::not_found("dependency"))?;
     if let Some(run_id) = validator_run_id.as_ref() {
+        if !matches!(actor, Actor::Daemon) {
+            return Err(CoordyError::denied(
+                "only the daemon may submit a run-backed validation decision",
+            ));
+        }
         let Some(run) = world.run(run_id) else {
             return Err(CoordyError::not_found("run"));
         };
@@ -2676,19 +2701,34 @@ pub(crate) fn apply_validation_decision(
                 "validator run role must be conductor_review or human_approval",
             ));
         }
+        if run.workspace_id != dep.workspace_id || run.task_id != dep.target.id {
+            return Err(CoordyError::denied(
+                "validator run does not belong to this dependency target",
+            ));
+        }
+        let expected_fingerprint = format!("validate:{dependency_id}:{expected_generation}");
+        let bound_attempt = world.node_attempts.iter().any(|attempt| {
+            attempt.run_id.as_deref() == Some(run_id.as_str())
+                && attempt.workspace_id == dep.workspace_id
+                && attempt.node_id == dep.target.id
+                && attempt.role == run.role
+                && attempt.input_fingerprint == expected_fingerprint
+        });
+        if !bound_attempt {
+            return Err(CoordyError::denied(
+                "validator run is not bound to this dependency generation",
+            ));
+        }
     } else if actor.is_agent() {
         return Err(CoordyError::denied(
             "executor cannot submit a validation decision",
         ));
     }
-    let dep = world
-        .dependencies
-        .iter()
-        .find(|dep| dep.id == dependency_id)
-        .cloned()
-        .ok_or_else(|| CoordyError::not_found("dependency"))?;
     if !actor_in_workspace(world, actor, &dep.workspace_id) && !matches!(actor, Actor::Daemon) {
         return Err(CoordyError::denied("not in workspace"));
+    }
+    if dep.generation != expected_generation {
+        return Err(CoordyError::invalid("dependency generation mismatch"));
     }
     record_graph_event(
         world,
@@ -2710,15 +2750,9 @@ pub(crate) fn apply_validation_decision(
             reaffirm_dependency(world, actor, dependency_id, expected_generation)
         }
         ValidationChoice::Remove => {
-            if dep.generation != expected_generation {
-                return Err(CoordyError::invalid("dependency generation mismatch"));
-            }
             remove_dependency(world, actor, dependency_id)
         }
         ValidationChoice::Hold | ValidationChoice::Replan => {
-            if dep.generation != expected_generation {
-                return Err(CoordyError::invalid("dependency generation mismatch"));
-            }
             let next_state = if decision == ValidationChoice::Hold {
                 GraphEdgeState::PendingValidation
             } else {
