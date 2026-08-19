@@ -12,6 +12,12 @@ import {
 } from "../features/create-agent";
 import { AgentDetailPage } from "../features/agent-detail";
 import { AutomationsPage, ProjectsPage, SkillsPage, SquadsPage } from "../features/catalog-pages";
+import {
+  AutomationDetailPage,
+  ProjectDetailPage,
+  SkillDetailPage,
+  SquadDetailPage,
+} from "../features/catalog-detail";
 import { RuntimesPage } from "../features/runtimes";
 import { SettingsPage } from "../features/settings";
 import {
@@ -54,10 +60,14 @@ export function AppRouter() {
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/mine" element={<MyIssuesPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
+          <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="/automations" element={<AutomationsPage />} />
+          <Route path="/automations/:automationId" element={<AutomationDetailPage />} />
           <Route path="/squads" element={<SquadsPage />} />
+          <Route path="/squads/:squadId" element={<SquadDetailPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/skills/:skillId" element={<SkillDetailPage />} />
           <Route path="/agents/new" element={<ChooseCreateMethodPage />} />
           <Route path="/agents/new/blank" element={<ManualCreateAgentPage />} />
           <Route path="/agents/new/ai" element={<AiCreateAgentPage />} />

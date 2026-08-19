@@ -65,6 +65,10 @@ export function titleFromPath(path: string): string {
   if (pathname.startsWith("/board/")) return "事项";
   if (pathname.startsWith("/agents/new/")) return "创建智能体";
   if (pathname.startsWith("/agents/")) return "智能体";
+  if (pathname.startsWith("/projects/")) return "项目";
+  if (pathname.startsWith("/automations/")) return "自动化";
+  if (pathname.startsWith("/skills/")) return "Skills";
+  if (pathname.startsWith("/squads/")) return "小队";
   return pathname;
 }
 
