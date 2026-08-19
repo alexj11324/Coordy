@@ -93,9 +93,13 @@ export function IssueCreateDialog({ os }: { os?: string }) {
           expanded ? "h-[min(46rem,86vh)] max-w-4xl" : mode === "agent" ? "max-w-xl" : "max-w-2xl",
         )}
       >
-        {mode === "manual" ? (
+        <div
+          hidden={mode !== "manual"}
+          className={mode === "manual" ? cn("flex min-h-0 flex-col", expanded && "flex-1") : undefined}
+        >
           <ManualCreatePanel
             key={`manual-${session}`}
+            active={mode === "manual"}
             os={os}
             statusSeed={statusSeed}
             expanded={expanded}
@@ -108,9 +112,14 @@ export function IssueCreateDialog({ os }: { os?: string }) {
               setMode("agent");
             }}
           />
-        ) : (
+        </div>
+        <div
+          hidden={mode !== "agent"}
+          className={mode === "agent" ? cn("flex min-h-0 flex-col", expanded && "flex-1") : undefined}
+        >
           <AgentCreatePanel
             key={`agent-${session}`}
+            active={mode === "agent"}
             os={os}
             expanded={expanded}
             setExpanded={setExpanded}
@@ -122,7 +131,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
               setMode("manual");
             }}
           />
-        )}
+        </div>
       </div>
     </div>,
     document.body,
@@ -130,6 +139,7 @@ export function IssueCreateDialog({ os }: { os?: string }) {
 }
 
 function ManualCreatePanel({
+  active,
   os,
   statusSeed,
   expanded,
@@ -138,6 +148,7 @@ function ManualCreatePanel({
   onClose,
   onSwitchToAgent,
 }: {
+  active: boolean;
   os?: string;
   statusSeed: string;
   expanded: boolean;
@@ -200,10 +211,11 @@ function ManualCreatePanel({
   }, [seed]);
 
   useEffect(() => {
+    if (!active) return;
     useLayoutStore.getState().consumePendingFocus();
     const timer = window.setTimeout(() => document.getElementById("issue-create-title")?.focus(), 20);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [active]);
 
   const agentItems = useMemo(
     () =>
@@ -291,14 +303,14 @@ function ManualCreatePanel({
       className={cn("flex flex-col", expanded && "h-full min-h-0")}
       onSubmit={(event) => {
         event.preventDefault();
-        create.mutate();
+        if (active) create.mutate();
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           onClose();
         }
-        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        if (active && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           create.mutate();
         }
@@ -484,6 +496,7 @@ function ManualCreatePanel({
 }
 
 function AgentCreatePanel({
+  active,
   os,
   expanded,
   setExpanded,
@@ -491,6 +504,7 @@ function AgentCreatePanel({
   onClose,
   onSwitchToManual,
 }: {
+  active: boolean;
   os?: string;
   expanded: boolean;
   setExpanded: (value: boolean | ((current: boolean) => boolean)) => void;
@@ -554,9 +568,10 @@ function AgentCreatePanel({
   }, [agentId, agentList]);
 
   useEffect(() => {
+    if (!active) return;
     const timer = window.setTimeout(() => document.getElementById("issue-create-prompt")?.focus(), 20);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [active]);
 
   const projectItems = useMemo(
     () => Object.fromEntries([["none", "无项目"], ...projectList.map((project) => [project.id, project.name])]),
@@ -624,14 +639,14 @@ function AgentCreatePanel({
       className={cn("flex flex-col", expanded && "h-full min-h-0")}
       onSubmit={(event) => {
         event.preventDefault();
-        create.mutate();
+        if (active) create.mutate();
       }}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.preventDefault();
           onClose();
         }
-        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        if (active && event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
           event.preventDefault();
           create.mutate();
         }
