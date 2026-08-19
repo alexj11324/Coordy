@@ -84,6 +84,8 @@ pub struct World {
     #[serde(default)]
     pub task_plan_applications: Vec<TaskPlanApplication>,
     #[serde(default)]
+    pub task_plan_auto_completed_parent_ids: Vec<String>,
+    #[serde(default)]
     pub task_plan_artifact_errors: Vec<TaskPlanArtifactError>,
 }
 

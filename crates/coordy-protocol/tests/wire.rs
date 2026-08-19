@@ -292,4 +292,5 @@ fn task_view_blocker_fields_default_when_omitted() {
     assert!(view.blocker_ids.is_empty());
     assert!(view.blocking_ids.is_empty());
     assert!(view.unresolved_blocker_ids.is_empty());
+    assert!(view.task_plan_progress.is_none());
 }

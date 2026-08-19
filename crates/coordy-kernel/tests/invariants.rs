@@ -8041,7 +8041,7 @@ fn task_plan_create_parent_applies_exact_graph_and_is_idempotent() {
             },
         ))
         .unwrap();
-    assert_eq!(h.kernel.export_world().runs.len(), runs_before_apply);
+    assert_eq!(h.kernel.export_world().runs.len(), runs_before_apply + 1);
     let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
     let child_ids: Vec<String> = applied.ids["child_task_ids"]
         .as_array()
@@ -8109,6 +8109,770 @@ fn task_plan_create_parent_applies_exact_graph_and_is_idempotent() {
         applied.ids["child_task_ids"]
     );
     assert_eq!(h.kernel.export_world().tasks.len(), before_retry);
+}
+
+#[test]
+fn confirmed_task_plan_dispatches_parallel_stage_then_releases_once_and_rolls_up() {
+    let h = setup();
+    let mut draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Coordinated launch".into(),
+            description: "Complete every launch workstream".into(),
+            project_id: None,
+        },
+    );
+    let mut research = draft.children[0].clone();
+    research.key = "research".into();
+    research.title = "Research".into();
+    research.description = "Validate the approach".into();
+    research.acceptance_criteria = vec!["Approach validated".into()];
+    research.assignee = Some(TaskPlanAssignee::Agent { id: h.a2.clone() });
+    let mut build = draft.children[1].clone();
+    build.depends_on = vec!["design".into(), "research".into()];
+    build.assignee = Some(TaskPlanAssignee::Agent { id: h.a1.clone() });
+    draft.children = vec![draft.children[0].clone(), research, build];
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "parallel-stage".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let world = h.kernel.export_world();
+    let planned_runs = world
+        .runs
+        .iter()
+        .filter(|run| child_ids.contains(&run.task_id))
+        .collect::<Vec<_>>();
+    assert_eq!(planned_runs.len(), 2);
+    assert!(planned_runs.iter().all(|run| run.trigger == "task_plan"));
+    assert_eq!(world.task(&child_ids[0]).unwrap().status, "open");
+    assert_eq!(world.task(&child_ids[1]).unwrap().status, "open");
+    assert_eq!(world.task(&child_ids[2]).unwrap().status, "backlog");
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[0].clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    assert!(!h
+        .kernel
+        .export_world()
+        .runs
+        .iter()
+        .any(|run| run.task_id == child_ids[2]));
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[1].clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[1].clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .runs
+            .iter()
+            .filter(|run| run.task_id == child_ids[2])
+            .count(),
+        1
+    );
+    let board = h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = board else {
+        panic!("board");
+    };
+    let progress = tasks
+        .iter()
+        .find(|task| task.id == parent_id)
+        .unwrap()
+        .task_plan_progress
+        .as_ref()
+        .unwrap();
+    assert_eq!(progress.total, 3);
+    assert_eq!(progress.done, 2);
+    assert_eq!(progress.running, 1);
+    assert_eq!(progress.remaining, 1);
+    assert_eq!(progress.current_stage, Some(2));
+
+    let serialized = serde_json::to_string(&world).unwrap();
+    let restored: coordy_kernel::World = serde_json::from_str(&serialized).unwrap();
+    let restored_kernel = Kernel::default_in_process();
+    restored_kernel.replace_world(restored);
+    restored_kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[2].clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let completed = restored_kernel.export_world();
+    assert_eq!(completed.task(&parent_id).unwrap().status, "done");
+    assert!(completed
+        .task_plan_auto_completed_parent_ids
+        .contains(&parent_id));
+    let completed_board = restored_kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Board {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap();
+    let View::Board { tasks } = completed_board else {
+        panic!("board");
+    };
+    let progress = tasks
+        .iter()
+        .find(|task| task.id == parent_id)
+        .unwrap()
+        .task_plan_progress
+        .as_ref()
+        .unwrap();
+    assert_eq!(progress.done, 3);
+    assert_eq!(progress.running, 0);
+    assert_eq!(progress.remaining, 0);
+    assert_eq!(progress.current_stage, None);
+
+    restored_kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[2].clone(),
+                status: "cancelled".into(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        restored_kernel
+            .export_world()
+            .task(&parent_id)
+            .unwrap()
+            .status,
+        "open"
+    );
+    let error = restored_kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: parent_id,
+                status: "done".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid");
+}
+
+#[test]
+fn cancelled_or_blocked_plan_child_holds_later_stage_and_manual_parents_stay_manual() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Managed parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "cancelled-stage".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[0].clone(),
+                status: "blocked".into(),
+            },
+        ))
+        .unwrap();
+    let blocked_world = h.kernel.export_world();
+    assert_eq!(blocked_world.task(&parent_id).unwrap().status, "open");
+    assert_eq!(blocked_world.task(&child_ids[1]).unwrap().status, "backlog");
+    assert!(!blocked_world
+        .runs
+        .iter()
+        .any(|run| run.task_id == child_ids[1]));
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[0].clone(),
+                status: "cancelled".into(),
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(world.task(&parent_id).unwrap().status, "open");
+    assert_eq!(world.task(&child_ids[1]).unwrap().status, "backlog");
+    assert!(!world.runs.iter().any(|run| run.task_id == child_ids[1]));
+
+    let manual_parent = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Manual parent".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let manual_child = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Manual child".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::AssignIssue {
+                task_id: manual_child,
+                agent_id: None,
+                principal_id: None,
+                squad_id: None,
+                project_id: None,
+                parent_id: Some(manual_parent.clone()),
+                stage: None,
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: manual_parent.clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(world.task(&manual_parent).unwrap().status, "done");
+}
+
+#[test]
+fn confirmed_task_plan_dispatches_a_ready_squad_through_its_leader() {
+    let h = setup();
+    let squad_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateSquad {
+                workspace_id: h.workspace_id.clone(),
+                name: "Delivery".into(),
+                leader_agent_id: h.a2.clone(),
+            },
+        ))
+        .unwrap()
+        .ids["squad_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Squad plan".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    draft.children[0].assignee = Some(TaskPlanAssignee::Squad {
+        id: squad_id.clone(),
+    });
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "squad-stage".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    let first_child_id = applied.ids["child_task_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let world = h.kernel.export_world();
+    let run = world
+        .runs
+        .iter()
+        .find(|run| run.task_id == first_child_id)
+        .expect("squad leader run");
+    assert_eq!(run.agent_id, h.a2);
+    assert_eq!(run.trigger, "squad");
+    assert_eq!(
+        world
+            .task(&first_child_id)
+            .unwrap()
+            .assignee_squad_id
+            .as_deref(),
+        Some(squad_id.as_str())
+    );
+}
+
+#[test]
+fn failed_plan_child_run_does_not_release_stage_or_complete_parent() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Failure-aware plan".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "failed-child".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let run_id = h
+        .kernel
+        .export_world()
+        .runs
+        .iter()
+        .find(|run| run.task_id == child_ids[0])
+        .unwrap()
+        .id
+        .clone();
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: run_id.clone(),
+                event: HarnessEvent::Tool {
+                    name: coordy_protocol::HARNESS_SESSION_TOOL.into(),
+                    input: String::new(),
+                    output: "failed".into(),
+                    exit_code: Some(1),
+                },
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(world.run(&run_id).unwrap().status, "failed");
+    assert_eq!(world.task(&parent_id).unwrap().status, "open");
+    assert_eq!(world.task(&child_ids[1]).unwrap().status, "backlog");
+    assert!(!world.runs.iter().any(|run| run.task_id == child_ids[1]));
+}
+
+#[test]
+fn confirmed_plan_spawn_failure_is_audited_once_without_auto_retry() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Spawn-failure plan".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let failing = Kernel::with_world(
+        h.kernel.export_world(),
+        Arc::new(NoopPorts),
+        Arc::new(DeterministicAdvisor),
+    );
+    let applied = failing
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "spawn-failure".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    let first_child_id = applied.ids["child_task_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let failed_runs = || {
+        failing
+            .export_world()
+            .runs
+            .into_iter()
+            .filter(|run| run.task_id == first_child_id)
+            .collect::<Vec<_>>()
+    };
+    let runs = failed_runs();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, "failed");
+    assert_eq!(runs[0].queue_status, "failed");
+
+    failing
+        .submit_sync(cmd(
+            Actor::Principal { id: h.alice },
+            Command::SetTaskStatus {
+                task_id: first_child_id.clone(),
+                status: "open".into(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(failed_runs().len(), 1);
+}
+
+#[test]
+fn confirmed_plan_retries_capacity_blocked_sibling_after_run_cancellation() {
+    let h = setup();
+    let mut draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Capacity-aware plan".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    draft.children[1].stage = 1;
+    draft.children[1].depends_on.clear();
+    draft.children[1].assignee = Some(TaskPlanAssignee::Agent { id: h.a1.clone() });
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let mut world = h.kernel.export_world();
+    world
+        .agents
+        .iter_mut()
+        .find(|agent| agent.id == h.a1)
+        .unwrap()
+        .concurrency_limit = 2;
+    h.kernel.replace_world(world);
+
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "capacity-stage".into(),
+                mode: TaskPlanApplyMode::ConfirmAndStart,
+            },
+        ))
+        .unwrap();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let first_run = h
+        .kernel
+        .export_world()
+        .runs
+        .iter()
+        .find(|run| child_ids.contains(&run.task_id) && run.status == "running")
+        .expect("one child uses the remaining capacity")
+        .clone();
+    assert_eq!(
+        h.kernel
+            .export_world()
+            .runs
+            .iter()
+            .filter(|run| child_ids.contains(&run.task_id))
+            .count(),
+        1
+    );
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CancelRun {
+                run_id: first_run.id,
+            },
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(
+        world
+            .runs
+            .iter()
+            .filter(|run| child_ids.contains(&run.task_id))
+            .count(),
+        2
+    );
+    assert!(world.runs.iter().any(|run| {
+        child_ids.contains(&run.task_id)
+            && run.task_id != first_run.task_id
+            && run.status == "running"
+    }));
+}
+
+#[test]
+fn create_only_plan_cannot_be_auto_dispatched_by_legacy_blocker_release() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "Parked plan".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "parked-plan".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[1].clone(),
+                status: "open".into(),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[0].clone(),
+                status: "done".into(),
+            },
+        ))
+        .unwrap();
+    assert!(!h
+        .kernel
+        .export_world()
+        .runs
+        .iter()
+        .any(|run| run.task_id == child_ids[1]));
+}
+
+#[test]
+fn github_cannot_bypass_managed_parent_rollup_tracking() {
+    let h = setup();
+    let draft = plan_draft(
+        &h,
+        TaskPlanParent::Create {
+            title: "GitHub guarded parent".into(),
+            description: String::new(),
+            project_id: None,
+        },
+    );
+    let (proposal_id, revision) = save_plan(&h, draft);
+    let applied = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision: revision,
+                idempotency_key: "github-guard".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap();
+    let parent_id = applied.ids["parent_task_id"].as_str().unwrap().to_string();
+    let child_ids = applied.ids["child_task_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+    let mut world = h.kernel.export_world();
+    for child_id in &child_ids {
+        world.task_mut(child_id).unwrap().status = "done".into();
+    }
+    let parent_identifier = world.task(&parent_id).unwrap().identifier.clone();
+    h.kernel.replace_world(world);
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Daemon,
+            Command::SyncGithubPullRequests(Box::new(GithubSync {
+                workspace_id: h.workspace_id.clone(),
+                cli_available: true,
+                authenticated: true,
+                account: "dev".into(),
+                error: String::new(),
+                fetched_at: String::new(),
+                items: vec![pr_item(
+                    77,
+                    "feat",
+                    "guarded parent",
+                    &format!("Closes {parent_identifier}"),
+                    "merged",
+                )],
+            })),
+        ))
+        .unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(world.task(&parent_id).unwrap().status, "done");
+    assert!(world
+        .task_plan_auto_completed_parent_ids
+        .contains(&parent_id));
+
+    h.kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::SetTaskStatus {
+                task_id: child_ids[0].clone(),
+                status: "open".into(),
+            },
+        ))
+        .unwrap();
+    assert_eq!(
+        h.kernel.export_world().task(&parent_id).unwrap().status,
+        "open"
+    );
 }
 
 #[test]
@@ -8655,7 +9419,9 @@ fn stored_world_defaults_task_plan_collections_for_older_snapshots() {
     let object = value.as_object_mut().unwrap();
     object.remove("task_plan_proposals");
     object.remove("task_plan_applications");
+    object.remove("task_plan_auto_completed_parent_ids");
     let restored: coordy_kernel::World = serde_json::from_value(value).unwrap();
     assert!(restored.task_plan_proposals.is_empty());
     assert!(restored.task_plan_applications.is_empty());
+    assert!(restored.task_plan_auto_completed_parent_ids.is_empty());
 }

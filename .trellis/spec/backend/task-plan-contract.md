@@ -266,3 +266,95 @@ cannot be validated reliably.
 For each private chat run, allocate the run ID first and inject one bounded,
 actor-filtered context containing exact stable IDs. Keep all mutation behind the
 kernel's later authenticated confirmation command.
+
+## Scenario: Confirmed-plan scheduling and managed parent rollup
+
+### 1. Scope / Trigger
+
+This orchestration applies only to parents recorded by `TaskPlanApplication`.
+Automatic dispatch applies only when that application's mode is
+`confirm_and_start`; `create_only` remains parked until a user acts.
+
+### 2. Signatures
+
+`TaskView` adds the derived field:
+
+```text
+task_plan_progress?: {
+  total, done, running, blocked, remaining, current_stage?
+}
+```
+
+`World` persists `task_plan_auto_completed_parent_ids` so a parent completed by
+rollup can be reopened if a child later leaves `done`.
+
+### 3. Contracts
+
+- The current stage is the lowest numeric stage containing a non-`done`
+  application child. Only children in that stage are eligible.
+- An eligible child requires every explicit blocker to be `done`; `cancelled`
+  does not satisfy managed-plan scheduling even though legacy blocker flows may
+  treat it as released.
+- Later-stage children remain `backlog`. Generic blocker dispatch skips managed
+  plan children so it cannot bypass stage rules.
+- All eligible assigned children in one stage dispatch together. Agent tasks use
+  the recorded confirming principal and squad tasks dispatch through the
+  validated leader.
+- Any prior run for a child prevents another automatic start. Capacity failures
+  with no created run may be reconsidered after another managed run terminates.
+- Progress is derived from all direct non-deleted children of a managed parent,
+  including later manual children. Running includes an active run; blocked
+  includes status, reason, or unresolved blocker state.
+- A managed parent becomes `done` only when every direct non-deleted child is
+  `done`. `cancelled`, `blocked`, failed-run, review, open, backlog, or any other
+  incomplete state prevents completion.
+- A parent auto-completed by rollup reopens if a child later leaves `done`.
+  Manually assembled parents retain their prior behavior.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+|---|---|
+| Confirm-and-start with two ready stage-1 assignees | Dispatch both once |
+| Stage-2 blocker incomplete | Keep stage 2 parked |
+| Blocker becomes `done` and all earlier-stage work is `done` | Open and dispatch ready next-stage children |
+| Blocker becomes `cancelled` or `blocked` | Keep later stages parked and parent open |
+| Child run fails | Do not retry automatically, release next stage, or complete parent |
+| Member marks managed parent done early | Reject |
+| All direct children become `done` | Complete parent and release its dependents |
+| Manual parent has incomplete manual child | No new managed completion rule |
+
+### 5. Good/Base/Bad Cases
+
+- Good: two stage-1 runs start in parallel; after both children are marked done,
+  one stage-2 run starts; finishing it completes the parent.
+- Base: a create-only plan exposes progress but creates no runs.
+- Bad: cancelling the sole stage-1 blocker must not exploit legacy blocker
+  release to start stage 2.
+
+### 6. Tests Required
+
+- Parallel agent dispatch, squad-leader dispatch, serial release, and repeated
+  reconciliation with exactly one child run.
+- Blocked, cancelled, and failed-run cases holding later stages and the parent.
+- Derived progress counts/current stage before and after JSON persistence reload.
+- All-done auto-completion, child regression reopening, and early manual parent
+  completion rejection.
+- Compatibility test proving a manually assembled parent remains manual and old
+  stored worlds default the new auto-completion collection.
+- Protocol parity, kernel suite, desktop tests/typecheck/build, and narrow-window
+  runtime inspection of the progress card.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+Let the generic blocker release path treat `cancelled` as success, immediately
+start the next assigned child, and mark the parent done when every child is merely
+terminal.
+
+#### Correct
+
+Route managed children through the plan scheduler, require actual `done` for
+stage and parent completion, derive progress from child source of truth, and
+dispatch each newly eligible assignment at most once.

@@ -443,6 +443,15 @@ export type TaskView = {
   blocker_ids?: string[];
   blocking_ids?: string[];
   unresolved_blocker_ids?: string[];
+  task_plan_progress?: TaskPlanProgressView | null;
+};
+export type TaskPlanProgressView = {
+  total: number;
+  done: number;
+  running: number;
+  blocked: number;
+  remaining: number;
+  current_stage?: number | null;
 };
 export type CommitmentView = {
   id: string;

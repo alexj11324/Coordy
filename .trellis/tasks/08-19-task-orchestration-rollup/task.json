@@ -3,7 +3,7 @@
   "name": "task-orchestration-rollup",
   "title": "Task orchestration and parent rollup",
   "description": "Dispatch confirmed ready children by stage/dependency and roll child progress up to the parent, including the approved automatic completion rule.",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": null,
   "scope": null,
   "package": null,

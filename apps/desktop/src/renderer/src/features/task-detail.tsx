@@ -467,6 +467,44 @@ export function TaskDetailPage() {
             {notice ? <p className={cn("mt-2 text-muted-foreground", uiText)}>{notice}</p> : null}
             {waitingMessage ? <p className={cn("mt-2 text-destructive", uiText)}>{waitingMessage}</p> : null}
 
+            {task.task_plan_progress ? (
+              <section aria-label="计划进度" className="mt-4 rounded-lg border border-border/80 bg-muted/20 px-3 py-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+                  <span className="font-medium">计划进度</span>
+                  <span className="text-xs text-muted-foreground">
+                    {task.task_plan_progress.current_stage != null
+                      ? `当前阶段 ${task.task_plan_progress.current_stage}`
+                      : task.task_plan_progress.remaining === 0
+                        ? "全部阶段已完成"
+                        : "未分阶段事项待完成"}
+                  </span>
+                </div>
+                {task.task_plan_progress.total > 0 ? (
+                  <div
+                    role="progressbar"
+                    aria-label="已完成子事项"
+                    aria-valuemin={0}
+                    aria-valuemax={task.task_plan_progress.total}
+                    aria-valuenow={task.task_plan_progress.done}
+                    className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+                  >
+                    <div
+                      className="h-full rounded-full bg-foreground transition-[width]"
+                      style={{
+                        width: `${(task.task_plan_progress.done / task.task_plan_progress.total) * 100}%`,
+                      }}
+                    />
+                  </div>
+                ) : null}
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span>{task.task_plan_progress.done}/{task.task_plan_progress.total} 已完成</span>
+                  <span>{task.task_plan_progress.running} 运行中</span>
+                  <span>{task.task_plan_progress.blocked} 阻塞</span>
+                  <span>{task.task_plan_progress.remaining} 待完成</span>
+                </div>
+              </section>
+            ) : null}
+
             <div className="mt-5">
               {children.map((child) => (
                 <Link

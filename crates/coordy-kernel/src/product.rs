@@ -7,8 +7,8 @@ use coordy_protocol::{
     GraphTimelineEventView, InboxView, LabelView, Mention, NodeKind, NodeMaterializationView,
     NodeRef, Outcome, ProjectView, PullRequestView, ReviewPacket, RunRole, SkillView, SquadView,
     StatsView, TaskPlanApplyMode, TaskPlanAssignee, TaskPlanDraft, TaskPlanParent,
-    TaskPlanProposalView, TaskView, ValidationChoice, WorkspaceView, ISSUE_BLOCKER_REASON,
-    STALE_DEPENDENCY_REASON, TASK_PLAN_VERSION,
+    TaskPlanProgressView, TaskPlanProposalView, TaskView, ValidationChoice, WorkspaceView,
+    ISSUE_BLOCKER_REASON, STALE_DEPENDENCY_REASON, TASK_PLAN_VERSION,
 };
 use serde_json::json;
 
@@ -165,7 +165,81 @@ pub fn task_view(world: &World, task: &Task, actor: &Actor) -> TaskView {
         blocker_ids: issue_blocker_ids(world, &task.id),
         blocking_ids: issue_blocking_ids(world, &task.id),
         unresolved_blocker_ids: unresolved_blocker_ids(world, &task.id),
+        task_plan_progress: task_plan_progress(world, &task.id),
     }
+}
+
+pub(crate) fn is_managed_task_plan_parent(world: &World, task_id: &str) -> bool {
+    world
+        .task_plan_applications
+        .iter()
+        .any(|application| application.parent_task_id == task_id)
+}
+
+pub(crate) fn direct_task_plan_children<'a>(
+    world: &'a World,
+    parent_task_id: &str,
+) -> Vec<&'a Task> {
+    world
+        .tasks
+        .iter()
+        .filter(|task| !task.deleted && task.parent_id.as_deref() == Some(parent_task_id))
+        .collect()
+}
+
+pub(crate) fn managed_parent_children_all_done(world: &World, parent_task_id: &str) -> bool {
+    if !is_managed_task_plan_parent(world, parent_task_id) {
+        return false;
+    }
+    let children = direct_task_plan_children(world, parent_task_id);
+    !children.is_empty() && children.iter().all(|child| child.status == "done")
+}
+
+pub(crate) fn task_plan_progress(
+    world: &World,
+    parent_task_id: &str,
+) -> Option<TaskPlanProgressView> {
+    if !is_managed_task_plan_parent(world, parent_task_id) {
+        return None;
+    }
+    let children = direct_task_plan_children(world, parent_task_id);
+    let total = children.len() as u32;
+    let done = children
+        .iter()
+        .filter(|child| child.status == "done")
+        .count() as u32;
+    let running = children
+        .iter()
+        .filter(|child| {
+            !matches!(child.status.as_str(), "done" | "cancelled")
+                && (child.status == "running"
+                    || world
+                        .runs
+                        .iter()
+                        .any(|run| run.task_id == child.id && run.status == "running"))
+        })
+        .count() as u32;
+    let blocked = children
+        .iter()
+        .filter(|child| {
+            child.status == "blocked"
+                || child.blocked_reason.is_some()
+                || !unresolved_blocker_ids(world, &child.id).is_empty()
+        })
+        .count() as u32;
+    let current_stage = children
+        .iter()
+        .filter(|child| child.status != "done")
+        .filter_map(|child| child.stage.parse::<u32>().ok())
+        .min();
+    Some(TaskPlanProgressView {
+        total,
+        done,
+        running,
+        blocked,
+        remaining: total.saturating_sub(done),
+        current_stage,
+    })
 }
 
 pub fn require_member(world: &World, actor: &Actor, workspace_id: &str) -> Result<(), CoordyError> {
@@ -722,6 +796,9 @@ fn complete_issues_from_merged_prs(
                     .pull_requests
                     .iter()
                     .any(|pr| crate::github::is_working_state(&pr.state))
+                // Managed parents complete only through the rollup so the
+                // runtime records that it may reopen them if a child regresses.
+                && !is_managed_task_plan_parent(world, &task.id)
         })
         .map(|task| (task.id.clone(), task.title.clone()))
         .collect();

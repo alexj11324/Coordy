@@ -467,6 +467,13 @@ impl Kernel {
         released: &[String],
     ) {
         for task_id in released {
+            if world
+                .task_plan_applications
+                .iter()
+                .any(|application| application.child_task_ids.contains(task_id))
+            {
+                continue;
+            }
             let Some(task) = world.task(task_id).cloned() else {
                 continue;
             };
@@ -872,6 +879,175 @@ impl Kernel {
             "squad",
             true,
         )
+    }
+
+    fn reconcile_task_plan_scheduling(&self, world: &mut World) {
+        let applications = world
+            .task_plan_applications
+            .iter()
+            .filter(|application| {
+                application.mode == coordy_protocol::TaskPlanApplyMode::ConfirmAndStart
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for application in applications {
+            let children = application
+                .child_task_ids
+                .iter()
+                .filter_map(|task_id| world.task(task_id).cloned())
+                .filter(|task| {
+                    !task.deleted
+                        && task.parent_id.as_deref() == Some(application.parent_task_id.as_str())
+                })
+                .collect::<Vec<_>>();
+            let Some(current_stage) = children
+                .iter()
+                .filter(|task| task.status != "done")
+                .filter_map(|task| task.stage.parse::<u32>().ok())
+                .min()
+            else {
+                continue;
+            };
+            for task in &children {
+                if task
+                    .stage
+                    .parse::<u32>()
+                    .is_ok_and(|stage| stage > current_stage)
+                    && (task.status == "open"
+                        || (task.status == "blocked"
+                            && task.blocked_reason.as_deref()
+                                == Some(coordy_protocol::ISSUE_BLOCKER_REASON)))
+                {
+                    if let Some(task) = world.task_mut(&task.id) {
+                        task.status = "backlog".into();
+                        task.blocked_reason = None;
+                    }
+                }
+            }
+            let ready = children
+                .iter()
+                .filter(|task| task.stage.parse::<u32>().ok() == Some(current_stage))
+                .filter(|task| matches!(task.status.as_str(), "backlog" | "open"))
+                .filter(|task| {
+                    product::issue_blocker_ids(world, &task.id)
+                        .iter()
+                        .all(|blocker_id| {
+                            world
+                                .task(blocker_id)
+                                .is_none_or(|blocker| blocker.deleted || blocker.status == "done")
+                        })
+                })
+                .map(|task| task.id.clone())
+                .collect::<Vec<_>>();
+            let actor = if application.applied_by == "daemon" {
+                Actor::Daemon
+            } else {
+                Actor::Principal {
+                    id: application.applied_by.clone(),
+                }
+            };
+            for task_id in ready {
+                if world.runs.iter().any(|run| run.task_id == task_id) {
+                    continue;
+                }
+                if let Some(task) = world.task_mut(&task_id) {
+                    if task.status == "backlog" {
+                        task.status = "open".into();
+                        task.blocked_reason = None;
+                    }
+                }
+                let Some(task) = world.task(&task_id).cloned() else {
+                    continue;
+                };
+                let prompt = product::blocker_release_prompt(&task);
+                let started = if let Some(agent_id) = task.assignee_agent_id.clone() {
+                    self.start_prompt_on_task(
+                        world,
+                        &actor,
+                        &task_id,
+                        &agent_id,
+                        prompt,
+                        None,
+                        "task_plan",
+                        true,
+                    )
+                } else if let Some(squad_id) = task.assignee_squad_id.clone() {
+                    self.dispatch_squad_leader(world, &actor, &task_id, &squad_id)
+                } else {
+                    continue;
+                };
+                if let Err(error) = started {
+                    product::push_notice(
+                        world,
+                        &task.workspace_id,
+                        "task_plan",
+                        "计划子事项尚未能自动开始",
+                        &error.message,
+                        Some(task_id),
+                    );
+                }
+            }
+        }
+    }
+
+    fn reconcile_task_plan_parent_statuses(&self, world: &mut World) -> Vec<String> {
+        let mut parent_ids = world
+            .task_plan_applications
+            .iter()
+            .map(|application| application.parent_task_id.clone())
+            .collect::<Vec<_>>();
+        parent_ids.sort();
+        parent_ids.dedup();
+        let mut released = Vec::new();
+        for parent_id in parent_ids {
+            let all_done = product::managed_parent_children_all_done(world, &parent_id);
+            let was_auto_completed = world
+                .task_plan_auto_completed_parent_ids
+                .iter()
+                .any(|id| id == &parent_id);
+            if all_done {
+                let parent_snapshot = world.task(&parent_id).cloned();
+                let transitioned = parent_snapshot
+                    .as_ref()
+                    .is_some_and(|parent| parent.status != "done");
+                if let Some(parent) = world.task_mut(&parent_id) {
+                    if transitioned {
+                        parent.status = "done".into();
+                        parent.blocked_reason = None;
+                    }
+                }
+                if transitioned && !was_auto_completed {
+                    world
+                        .task_plan_auto_completed_parent_ids
+                        .push(parent_id.clone());
+                }
+                if transitioned {
+                    if let Some(parent) = world.task(&parent_id).cloned() {
+                        product::mark_node_succeeded(world, &parent.workspace_id, &parent_id);
+                        released
+                            .extend(product::refresh_issue_blocker_dependents(world, &parent_id));
+                        product::push_notice(
+                            world,
+                            &parent.workspace_id,
+                            "task_plan",
+                            "所有计划子事项已完成",
+                            &parent.title,
+                            Some(parent_id.clone()),
+                        );
+                    }
+                }
+            } else if was_auto_completed {
+                if let Some(parent) = world.task_mut(&parent_id) {
+                    if parent.status == "done" {
+                        parent.status = "open".into();
+                    }
+                }
+                world
+                    .task_plan_auto_completed_parent_ids
+                    .retain(|id| id != &parent_id);
+            }
+        }
+        released
     }
 
     pub fn watch(&self, cursor: Option<u64>) -> Vec<Effect> {
@@ -1455,6 +1631,7 @@ impl Kernel {
                     std::slice::from_ref(&task_id),
                     GraphPromptKind::Ready,
                 );
+                self.reconcile_task_plan_scheduling(&mut world);
                 Ok(Outcome::ok(
                     "assigned",
                     json!({ "task_id": task_id, "agent_id": agent_id }),
@@ -1595,6 +1772,14 @@ impl Kernel {
                 if product::status_needs_clear_blockers(&status) {
                     product::reject_if_unresolved_blockers(&world, &task_id)?;
                 }
+                if status == "done"
+                    && product::is_managed_task_plan_parent(&world, &task_id)
+                    && !product::managed_parent_children_all_done(&world, &task_id)
+                {
+                    return Err(CoordyError::invalid(
+                        "managed parent requires every direct child to be done",
+                    ));
+                }
                 {
                     let task = world
                         .task_mut(&task_id)
@@ -1616,7 +1801,10 @@ impl Kernel {
                     );
                 }
                 self.reconcile_graph(&mut world, &workspace_id);
+                let mut released = released;
+                released.extend(self.reconcile_task_plan_parent_statuses(&mut world));
                 self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
+                self.reconcile_task_plan_scheduling(&mut world);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok(
                     "status updated",
@@ -2192,6 +2380,7 @@ impl Kernel {
                         content: "运行已停止".into(),
                     },
                 )?;
+                self.reconcile_task_plan_scheduling(&mut world);
                 drop(world);
                 self.ports.cancel_harness(&run_id)?;
                 Ok(Outcome::ok("run cancelled", json!({ "run_id": run_id })))
@@ -2227,6 +2416,7 @@ impl Kernel {
                     self.reconcile_graph(&mut world, &run.workspace_id);
                 }
                 self.after_harness_event(&mut world, &run_id, &event, was_active)?;
+                self.reconcile_task_plan_scheduling(&mut world);
                 Ok(Outcome::ok("ingested", json!({ "run_id": run_id })))
             }
             Command::ApplyPatch { task_id, patch } => {
@@ -2591,6 +2781,28 @@ impl Kernel {
                     std::slice::from_ref(&issue_id),
                     GraphPromptKind::Ready,
                 );
+                self.reconcile_task_plan_scheduling(&mut world);
+                Ok(outcome)
+            }
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision,
+                idempotency_key,
+                mode,
+            } => {
+                let outcome = product::submit(
+                    &mut world,
+                    &actor,
+                    Command::ApplyTaskPlan {
+                        proposal_id,
+                        expected_revision,
+                        idempotency_key,
+                        mode,
+                    },
+                )?;
+                self.reconcile_task_plan_scheduling(&mut world);
+                let released = self.reconcile_task_plan_parent_statuses(&mut world);
+                self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
                 Ok(outcome)
             }
             Command::TriggerAutomation { automation_id } => {
@@ -2641,8 +2853,10 @@ impl Kernel {
                     _ => None,
                 };
                 let outcome = product::submit(&mut world, &actor, other)?;
-                let released = Self::released_task_ids(&outcome);
+                let mut released = Self::released_task_ids(&outcome);
+                released.extend(self.reconcile_task_plan_parent_statuses(&mut world));
                 self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
+                self.reconcile_task_plan_scheduling(&mut world);
                 let workspace_id = outcome
                     .ids
                     .get("workspace_id")

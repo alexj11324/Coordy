@@ -1043,6 +1043,19 @@ pub struct TaskView {
     /// Declared blockers that are not yet `done` or `cancelled`.
     #[serde(default)]
     pub unresolved_blocker_ids: Vec<String>,
+    #[serde(default)]
+    pub task_plan_progress: Option<TaskPlanProgressView>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskPlanProgressView {
+    pub total: u32,
+    pub done: u32,
+    pub running: u32,
+    pub blocked: u32,
+    pub remaining: u32,
+    #[serde(default)]
+    pub current_stage: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
