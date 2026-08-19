@@ -36,6 +36,7 @@ import { useEffect, useRef, useState, type ComponentProps, type FormEvent, type 
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
+import { openNativeDatePicker } from "../lib/coordy/date-picker";
 import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
 import { agentDisplayName, listableAgents, runStatusLabel, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
 import { insertAgentMention, mentionsFromBody } from "../lib/coordy/mentions";
@@ -741,23 +742,12 @@ export function TaskDetailPage() {
               </Select>
             </PropertyRow>
             <PropertyRow icon={<CalendarDays />}>
-              <label className="relative flex h-8 cursor-pointer items-center">
-                <span className={task.due_date ? "text-foreground" : "text-muted-foreground"}>
-                  {task.due_date?.slice(0, 10) || "截止日期"}
-                </span>
-                <input
-                  type="date"
-                  value={task.due_date?.slice(0, 10) ?? ""}
-                  className="absolute inset-0 cursor-pointer opacity-0"
-                  onChange={(event) => {
-                    void submit({
-                      type: "UpdateTask",
-                      task_id: task.id,
-                      due_date: event.target.value,
-                    }).then(refresh);
-                  }}
-                />
-              </label>
+              <DueDateField
+                value={task.due_date}
+                onChange={(due_date) => {
+                  void submit({ type: "UpdateTask", task_id: task.id, due_date }).then(refresh);
+                }}
+              />
             </PropertyRow>
             <PropertyRow icon={<FolderKanban />}>
               <Select
@@ -917,9 +907,6 @@ export function TaskDetailPage() {
               </Select>
             </PropertyRow>
             ) : null}
-            <PropertyRow icon={<Play />}>
-              <p className="text-muted-foreground">{latest ? runStatusLabel(latest.status) : "尚未启动"}</p>
-            </PropertyRow>
           </div>
         </section>
 
@@ -934,12 +921,6 @@ export function TaskDetailPage() {
 
         <section>
           <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">前置事项</h2>
-          <p className={cn("mb-2 px-1.5 text-muted-foreground", uiText)}>
-            这些事项完成后，当前事项才能开始或完成。若已指派负责人，前置一解除就会自动开跑。
-          </p>
-          {blockers.length === 0 ? (
-            <p className="px-1.5 text-muted-foreground">尚未设置。</p>
-          ) : null}
           {blockers.map((blocker) => (
             <div key={blocker.id} className="flex h-8 items-center gap-2 rounded-md px-1.5 hover:bg-muted/60">
               <StatusGlyph status={blocker.status} className="size-4" />
@@ -961,43 +942,80 @@ export function TaskDetailPage() {
               </button>
             </div>
           ))}
-          {blockerCandidates.length > 0 ? (
-            <PropertyRow icon={<Plus />}>
-              <Select
-                value={blockerPick}
-                items={blockerItems}
-                onValueChange={(value) => {
-                  if (!value || value === "none") {
-                    setBlockerPick("none");
-                    return;
-                  }
+          <PropertyRow icon={<Plus />}>
+            <Select
+              value={blockerPick}
+              items={blockerItems}
+              onValueChange={(value) => {
+                if (!value || value === "none") {
                   setBlockerPick("none");
-                  void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
-                    .then(refresh)
-                    .catch((error: unknown) => {
-                      setNotice(error instanceof Error ? error.message : String(error));
-                    });
-                }}
-              >
-                <SelectTrigger className={cn(fieldTrigger, "text-muted-foreground")}>
-                  <SelectValue>
-                    {() => <span className="text-muted-foreground">选择前置事项</span>}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className={uiText}>
-                  <FieldItem value="none">选择前置事项</FieldItem>
-                  {blockerCandidates.map((item) => (
+                  return;
+                }
+                setBlockerPick("none");
+                void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
+                  .then(refresh)
+                  .catch((error: unknown) => {
+                    setNotice(error instanceof Error ? error.message : String(error));
+                  });
+              }}
+            >
+              <SelectTrigger className={cn(fieldTrigger, "text-muted-foreground")}>
+                <SelectValue>
+                  {() => <span className="text-muted-foreground">选择前置事项</span>}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className={uiText}>
+                {blockerCandidates.length === 0 ? (
+                  <FieldItem value="none" disabled>
+                    暂无其他事项可选择
+                  </FieldItem>
+                ) : (
+                  blockerCandidates.map((item) => (
                     <FieldItem key={item.id} value={item.id}>
                       {taskIdentifier(item)} {item.title}
                     </FieldItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </PropertyRow>
-          ) : null}
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+          </PropertyRow>
         </section>
       </aside>
     </section>
+  );
+}
+
+function DueDateField({
+  value,
+  onChange,
+}: {
+  value?: string | null;
+  onChange: (next: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const day = value?.slice(0, 10) ?? "";
+  return (
+    <div className="relative h-8 w-full">
+      <button
+        type="button"
+        className="flex h-8 w-full items-center text-left"
+        onClick={() => {
+          const input = inputRef.current;
+          if (input) openNativeDatePicker(input);
+        }}
+      >
+        <span className={day ? "text-foreground" : "text-muted-foreground"}>{day || "截止日期"}</span>
+      </button>
+      <input
+        ref={inputRef}
+        type="date"
+        value={day}
+        aria-label="截止日期"
+        tabIndex={-1}
+        className="pointer-events-none absolute inset-0 opacity-0"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </div>
   );
 }
 
@@ -1017,7 +1035,7 @@ function PropertyRow({ icon, children }: { icon: ReactNode; children: ReactNode 
         {icon}
       </span>
       {/* The control extends under the glyph so clicking the icon opens the same picker. */}
-      <div className="-ml-6 min-w-0 flex-1 [&_[data-slot=select-trigger]]:cursor-pointer [&_[data-slot=select-trigger]]:pl-6 [&_label]:w-full [&_label]:cursor-pointer [&_label]:pl-6 [&_p]:pl-6">
+      <div className="-ml-6 min-w-0 flex-1 [&_[data-slot=select-trigger]]:cursor-pointer [&_[data-slot=select-trigger]]:pl-6 [&_button]:h-8 [&_button]:w-full [&_button]:cursor-pointer [&_button]:pl-6">
         {children}
       </div>
     </div>
