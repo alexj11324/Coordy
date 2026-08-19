@@ -1,6 +1,7 @@
 //! Coordy kernel: the only deep business module.
 
 mod authority;
+mod github;
 mod graph;
 mod jsonl;
 mod memory;

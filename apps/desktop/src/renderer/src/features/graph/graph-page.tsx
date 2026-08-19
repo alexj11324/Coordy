@@ -38,11 +38,12 @@ import {
   type GraphNode,
 } from "../../lib/coordy/graph-projection";
 import {
+  agentDisplayName,
   harnessLabel,
   runStatusLabel,
   taskStatusLabel,
 } from "../../lib/coordy/labels";
-import { asGraphSnapshot } from "../../lib/coordy/views";
+import { asAgents, asGraphSnapshot, asWorkspace } from "../../lib/coordy/views";
 import { useSession } from "../../state/session-store";
 import { resolvedTheme, useThemeStore } from "../../state/theme-store";
 import { useCommand, useWorkspaceQuery } from "../pages";
@@ -51,8 +52,10 @@ import { AgentGraphNode, TaskGraphNode, type GraphCanvasNode } from "./canvas-no
 import { DataEdge, type DataEdgeType } from "./data-edge";
 import {
   declareDependencyCommand,
+  graphConductorStatusLabel,
   reaffirmCommandForStaleEdge,
   removeCommandForDependencyEdge,
+  staleDependencyHoldLabel,
 } from "./graph-commands";
 import { layoutGraph } from "./layout";
 
@@ -244,11 +247,13 @@ function InspectorField({ label, value }: { label: string; value: string }) {
 function DependencyActions({
   dependency,
   disabled,
+  hasConductor,
   onReaffirm,
   onRemove,
 }: {
   dependency: GraphEdgeView;
   disabled: boolean;
+  hasConductor: boolean;
   onReaffirm: (id: string, generation: number) => void;
   onRemove: (id: string) => void;
 }) {
@@ -268,6 +273,9 @@ function DependencyActions({
       <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => onRemove(dependency.id)}>
         移除
       </Button>
+      {dependency.valid ? null : (
+        <span className="self-center text-[11px] text-muted-foreground">{staleDependencyHoldLabel(hasConductor)}</span>
+      )}
     </div>
   );
 }
@@ -287,6 +295,8 @@ function GraphInspector({
   snapshotEdges,
   nodes,
   workspaceId,
+  hasConductor,
+  conductorName,
 }: {
   selected: GraphNode | null;
   selectedEdge: GraphEdge | null;
@@ -294,6 +304,8 @@ function GraphInspector({
   snapshotEdges: GraphEdgeView[];
   nodes: GraphNode[];
   workspaceId: string | null;
+  hasConductor: boolean;
+  conductorName: string | null;
 }) {
   const navigate = useNavigate();
   const command = useCommand();
@@ -330,7 +342,8 @@ function GraphInspector({
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
           <Share2 className="size-4 text-muted-foreground" />
           <h2 className="truncate text-sm font-medium">{selectedEdge.label || "边"}</h2>
-          {selectedEdge.stale ? <Badge variant="destructive">失效</Badge> : null}
+          {selectedEdge.stale ? <Badge variant="destructive">{staleDependencyHoldLabel(hasConductor)}</Badge> : null}
+          {hasConductor ? <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge> : null}
         </header>
         <ScrollArea className="min-h-0 flex-1">
           <div className="space-y-3 p-4">
@@ -346,6 +359,7 @@ function GraphInspector({
             <DependencyActions
               dependency={dependency}
               disabled={command.isPending}
+              hasConductor={hasConductor}
               onReaffirm={reaffirm}
               onRemove={remove}
             />
@@ -357,7 +371,10 @@ function GraphInspector({
 
   if (!selected) {
     return (
-      <div className="flex h-full items-center px-4 text-sm text-muted-foreground">选中节点或边以声明、确认或移除依赖</div>
+      <div className="flex h-full flex-col justify-center gap-2 px-4 text-sm text-muted-foreground">
+        <p>选中节点或边以声明、确认或移除依赖</p>
+        {hasConductor ? <p>{graphConductorStatusLabel(true)}{conductorName ? ` · ${conductorName}` : ""}</p> : null}
+      </div>
     );
   }
   const detail = snapshotNode(snapshotNodes, selected.id);
@@ -400,6 +417,7 @@ function GraphInspector({
       <header className="flex items-center gap-2 border-b border-border px-4 py-3">
         <ListTodo className="size-4 text-muted-foreground" />
         <h2 className="truncate text-sm font-medium">{selected.label}</h2>
+        {hasConductor ? <Badge variant="secondary">{graphConductorStatusLabel(true)}</Badge> : null}
       </header>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-4 p-4">
@@ -432,12 +450,13 @@ function GraphInspector({
                     {dep.valid ? (
                       <Badge variant="secondary">{dep.entity || "依赖"}</Badge>
                     ) : (
-                      <Badge variant="destructive">失效</Badge>
+                      <Badge variant="destructive">{staleDependencyHoldLabel(hasConductor)}</Badge>
                     )}
                   </div>
                   <DependencyActions
                     dependency={dep}
                     disabled={command.isPending}
+                    hasConductor={hasConductor}
                     onReaffirm={reaffirm}
                     onRemove={remove}
                   />
@@ -496,8 +515,16 @@ function GraphInspector({
 }
 
 export function GraphPage() {
+  const agentsQuery = useWorkspaceQuery((workspace_id) => ({ type: "Agents", workspace_id }));
+  const workspaceQuery = useWorkspaceQuery((workspace_id) => ({ type: "Workspace", workspace_id }));
   const snapQuery = useWorkspaceQuery((workspace_id) => ({ type: "GraphSnapshot", workspace_id }));
   const workspaceId = useSession((s) => s.workspaceId);
+  const agents = asAgents(agentsQuery.data);
+  const workspace = asWorkspace(workspaceQuery.data);
+  const conductorId = workspace?.conductor_agent_id?.trim() || null;
+  const hasConductor = Boolean(conductorId);
+  const conductorAgent = conductorId ? agents.find((agent) => agent.id === conductorId) : undefined;
+  const conductorName = conductorAgent ? agentDisplayName(conductorAgent) : conductorId;
   const snapshot = asGraphSnapshot(snapQuery.data);
   const [layers, setLayers] = useState<GraphLayers>(DEFAULT_GRAPH_LAYERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -589,14 +616,21 @@ export function GraphPage() {
             snapshotEdges={snapshot?.edges ?? []}
             nodes={projected.nodes}
             workspaceId={workspaceId}
+            hasConductor={hasConductor}
+            conductorName={conductorName}
           />
         </aside>
       </div>
       <footer className="flex h-8 shrink-0 items-center gap-2 border-t border-border px-3 text-xs text-muted-foreground">
         <StatusLamp tone={liveTone} label="Live" />
         <span>{live ? "Live" : `cursor lag ${health?.lag ?? "?"}`}</span>
+        {hasConductor ? (
+          <span>
+            {graphConductorStatusLabel(true)}
+            {conductorName ? ` · ${conductorName}` : ""}
+          </span>
+        ) : null}
       </footer>
     </section>
   );
 }
-

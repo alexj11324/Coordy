@@ -1,6 +1,7 @@
 export { cn } from "./lib/utils";
 export { Badge, badgeVariants } from "./components/ui/badge";
 export { Button, buttonVariants } from "./components/ui/button";
+export { Calendar, CalendarDayButton } from "./components/ui/calendar";
 export {
   Card,
   CardAction,
@@ -34,6 +35,14 @@ export {
 export { Separator } from "./components/ui/separator";
 export { Switch } from "./components/ui/switch";
 export { Textarea } from "./components/ui/textarea";
+export {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "./components/ui/popover";
 export { PageHeader } from "./components/page-header";
 export {
   Avatar,

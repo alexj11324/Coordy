@@ -198,9 +198,9 @@ pub fn resolve_depends_target(world: &World, workspace_id: &str, token: &str) ->
 pub fn invalidate_dependencies(
     world: &mut World,
     changed_entity: &str,
-    changer_task: &str,
+    changer_id: &str,
 ) -> Vec<String> {
-    let current_version = world.node_artifacts.get(changer_task).copied();
+    let current_version = world.node_artifacts.get(changer_id).copied();
     let mut consumers = Vec::new();
     let mut conflicts = Vec::new();
     let mut invalidated = Vec::new();
@@ -208,7 +208,7 @@ pub fn invalidate_dependencies(
         if dep.kind != GraphEdgeKind::Consumes {
             continue;
         }
-        if dep.source.id != changer_task {
+        if dep.source.id != changer_id {
             continue;
         }
         if dep.state == GraphEdgeState::Superseded {
@@ -217,7 +217,7 @@ pub fn invalidate_dependencies(
         dep.state = GraphEdgeState::Stale;
         dep.generation = dep.generation.saturating_add(1);
         dep.current_version = current_version;
-        dep.source_event = Some(format!("invalidate:{changer_task}"));
+        dep.source_event = Some(format!("invalidate:{changer_id}"));
         consumers.push(dep.target.id.clone());
         invalidated.push((
             dep.id.clone(),
@@ -228,7 +228,7 @@ pub fn invalidate_dependencies(
         conflicts.push(crate::world::Conflict {
             id: crate::ids::new("conflict"),
             workspace_id: dep.workspace_id.clone(),
-            summary: format!("dependency {} invalidated by {}", dep.id, changer_task),
+            summary: format!("dependency {} invalidated by {}", dep.id, changer_id),
             status: "open".into(),
         });
     }
@@ -241,7 +241,7 @@ pub fn invalidate_dependencies(
             Some(&edge_id),
             Some(&node_id),
             serde_json::json!({
-                "changer": changer_task,
+                "changer": changer_id,
                 "entity": changed_entity,
                 "generation": generation,
             }),

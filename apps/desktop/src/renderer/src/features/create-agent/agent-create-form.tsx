@@ -28,6 +28,7 @@ import {
   type AgentAccess,
   type AgentDraft,
   type HarnessModelOption,
+  type ToolAccess,
 } from "../../lib/coordy/agent-draft";
 import { harnessIdsMatch, runtimeChipLabel, runtimeSubtitle } from "../../lib/coordy/labels";
 import { AgentAvatarField } from "../agent-avatar";
@@ -36,6 +37,19 @@ import { ProviderLogo } from "../provider-logo";
 const ACCESS_OPTIONS: { id: AgentAccess; title: string; description: string }[] = [
   { id: "owner", title: "仅自己", description: "仅创建者可运行此智能体。" },
   { id: "workspace", title: "整个工作区", description: "工作区全体成员均可运行。" },
+];
+
+const TOOL_ACCESS_OPTIONS: { id: ToolAccess; title: string; description: string }[] = [
+  {
+    id: "auto",
+    title: "Auto",
+    description: "常见操作自动放行，但仍拦危险或越界的步骤。Claude 用分类器判断每一步；Codex 只能改当前工作区。",
+  },
+  {
+    id: "full_access",
+    title: "Full Access",
+    description: "不拦工具审批；Codex 也不再限制只能写工作区。隔离环境再用。",
+  },
 ];
 
 export function AgentConfigurationPanel({
@@ -129,38 +143,20 @@ export function AgentConfigurationPanel({
         </div>
       </SettingsBlock>
 
+      <SettingsBlock
+        title="工具权限"
+        description="Auto 和 Full Access 不是同一档。选好后，这个智能体下次跑任务就会按对应方式处理工具审批。"
+      >
+        <ToolAccessField value={draft.toolAccess} onChange={(toolAccess) => set("toolAccess", toolAccess)} />
+      </SettingsBlock>
+
       <SettingsBlock title="访问权限" description="启动运行时按此权限校验。保存后可在详情页改为指定成员、并发上限与 CLI 参数。">
-        <div className="space-y-1 p-2" role="radiogroup" aria-label="访问权限">
-          {ACCESS_OPTIONS.map((option) => {
-            const selected = draft.access === option.id;
-            return (
-              <button
-                key={option.id}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => set("access", option.id)}
-                className={cn(
-                  "flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                  selected ? "bg-muted" : "hover:bg-muted/50",
-                )}
-              >
-                <span
-                  className={cn(
-                    "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-                    selected ? "border-foreground" : "border-muted-foreground/40",
-                  )}
-                >
-                  {selected ? <span className="size-2 rounded-full bg-foreground" /> : null}
-                </span>
-                <span>
-                  <span className="block text-sm font-medium">{option.title}</span>
-                  <span className="block text-xs text-muted-foreground">{option.description}</span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
+        <ChoiceRadios
+          ariaLabel="访问权限"
+          value={draft.access}
+          onChange={(access) => set("access", access)}
+          options={ACCESS_OPTIONS}
+        />
       </SettingsBlock>
     </div>
   );
@@ -415,6 +411,64 @@ function SettingsBlock({ title, description, children }: { title: string; descri
       </div>
       <div className="overflow-hidden rounded-xl border bg-card">{children}</div>
     </section>
+  );
+}
+
+export function ToolAccessField({
+  value,
+  onChange,
+}: {
+  value: ToolAccess;
+  onChange: (value: ToolAccess) => void;
+}) {
+  return (
+    <ChoiceRadios ariaLabel="工具权限" value={value} onChange={onChange} options={TOOL_ACCESS_OPTIONS} />
+  );
+}
+
+function ChoiceRadios<T extends string>({
+  ariaLabel,
+  value,
+  onChange,
+  options,
+}: {
+  ariaLabel: string;
+  value: T;
+  onChange: (value: T) => void;
+  options: { id: T; title: string; description: string }[];
+}) {
+  return (
+    <div className="space-y-1 p-2" role="radiogroup" aria-label={ariaLabel}>
+      {options.map((option) => {
+        const selected = value === option.id;
+        return (
+          <button
+            key={option.id}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(option.id)}
+            className={cn(
+              "flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+              selected ? "bg-muted" : "hover:bg-muted/50",
+            )}
+          >
+            <span
+              className={cn(
+                "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                selected ? "border-foreground" : "border-muted-foreground/40",
+              )}
+            >
+              {selected ? <span className="size-2 rounded-full bg-foreground" /> : null}
+            </span>
+            <span>
+              <span className="block text-sm font-medium">{option.title}</span>
+              <span className="block text-xs text-muted-foreground">{option.description}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
