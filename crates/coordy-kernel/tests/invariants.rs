@@ -126,6 +126,105 @@ fn setup_kernel(kernel: Kernel) -> Harness {
 }
 
 #[test]
+fn chat_backing_tasks_do_not_change_user_visible_issue_stats() {
+    let h = setup();
+    let actor = Actor::Principal {
+        id: h.alice.clone(),
+    };
+    let visible_task_id = h
+        .kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateTask {
+                workspace_id: h.workspace_id.clone(),
+                title: "Visible issue".into(),
+                description: String::new(),
+            },
+        ))
+        .unwrap()
+        .ids["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::UpdateTask {
+                task_id: visible_task_id,
+                title: None,
+                description: None,
+                priority: None,
+                start_date: None,
+                due_date: None,
+                labels: Some(vec!["chat".into()]),
+                custom_fields: None,
+                sort_key: None,
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::CreateChat {
+                workspace_id: h.workspace_id.clone(),
+                agent_id: h.a1.clone(),
+                project_id: None,
+            },
+        ))
+        .unwrap();
+    let chat_task_id = h.kernel.export_world().chats[0]
+        .task_id
+        .clone()
+        .expect("chat backing task");
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::AssignIssue {
+                task_id: chat_task_id.clone(),
+                agent_id: None,
+                principal_id: None,
+                squad_id: None,
+                project_id: None,
+                parent_id: None,
+                stage: Some("backlog".into()),
+            },
+        ))
+        .unwrap();
+    h.kernel
+        .submit_sync(cmd(
+            actor.clone(),
+            Command::UpdateTask {
+                task_id: chat_task_id,
+                title: None,
+                description: None,
+                priority: None,
+                start_date: None,
+                due_date: None,
+                labels: Some(Vec::new()),
+                custom_fields: None,
+                sort_key: None,
+            },
+        ))
+        .unwrap();
+
+    let View::Stats { stats } = h
+        .kernel
+        .view_sync(q(
+            actor,
+            Query::Stats {
+                workspace_id: h.workspace_id.clone(),
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("stats");
+    };
+    assert_eq!(stats.issue_count, 1);
+    assert_eq!(stats.open_count, 1);
+    assert_eq!(stats.done_count, 0);
+}
+
+#[test]
 fn private_memory_isolated() {
     let h = setup();
     let mem = h

@@ -2,25 +2,39 @@ use std::sync::Arc;
 
 use coordy_local_runtime::{generate_token, serve, RpcClient, Runtime};
 use coordy_protocol::{Actor, AuthenticatedCommand, AuthorizedQuery, Command, Query};
-use tokio::net::UnixStream;
-
 #[tokio::test]
 async fn ipc_roundtrip_health() {
-    let dir = std::env::temp_dir().join(format!("coordy-ipc-{}", uuid_like()));
+    #[cfg(target_os = "macos")]
+    let temp_root = std::path::PathBuf::from("/private/tmp");
+    #[cfg(not(target_os = "macos"))]
+    let temp_root = std::env::temp_dir();
+    let dir = temp_root.join(format!("cdy-ipc-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let sock = dir.join("coordyd.sock");
     let token = generate_token();
     let runtime = Arc::new(Runtime::open(&dir, &sock, token.clone()).unwrap());
-    let server = tokio::spawn(async move {
-        let _ = serve(runtime).await;
-    });
-    for _ in 0..50 {
-        if UnixStream::connect(&sock).await.is_ok() {
-            break;
+    let server = tokio::spawn(async move { serve(runtime).await });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut client = None;
+    let mut last_error = None;
+    while tokio::time::Instant::now() < deadline {
+        match RpcClient::connect(&sock, &token).await {
+            Ok(connected) => {
+                client = Some(connected);
+                break;
+            }
+            Err(error) => {
+                last_error = Some(error);
+                if server.is_finished() {
+                    let result = server.await;
+                    panic!("coordyd exited before ready: {result:?}");
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
         }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    let mut client = RpcClient::connect(&sock, &token).await.unwrap();
+    let mut client =
+        client.unwrap_or_else(|| panic!("coordyd did not become ready: {last_error:?}"));
     let health = client.health().await.unwrap();
     assert!(health.ok);
     let view = client
@@ -47,6 +61,8 @@ async fn ipc_roundtrip_health() {
     assert_eq!(status["acp_command"], "codex acp");
     assert!(!status.to_string().contains("sk-ipc-only"));
     server.abort();
+    let _ = server.await;
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 fn uuid_like() -> String {

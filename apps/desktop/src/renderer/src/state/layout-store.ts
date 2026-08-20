@@ -45,6 +45,7 @@ type LayoutState = {
   requestFocus: (focus: PendingFocus) => void;
   consumePendingFocus: () => PendingFocus | null;
   openChatDock: (chatId?: string | null) => void;
+  startNewChat: () => void;
   closeChatDock: () => void;
   minimizeChatDock: () => void;
   toggleChatDock: () => void;
@@ -102,7 +103,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       return;
     }
     if (focus === "new-chat") {
-      set({ pendingFocus: focus, chatDock: "open" });
+      set({ pendingFocus: focus, chatDock: "open", chatExpanded: false, activeChatId: null });
       return;
     }
     set({ pendingFocus: focus });
@@ -112,6 +113,13 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       chatDock: "open",
       chatExpanded: false,
       activeChatId: chatId === undefined ? get().activeChatId : chatId,
+    }),
+  startNewChat: () =>
+    set({
+      pendingFocus: null,
+      chatDock: "open",
+      chatExpanded: false,
+      activeChatId: null,
     }),
   closeChatDock: () => set({ chatDock: "closed", chatExpanded: false }),
   minimizeChatDock: () => set({ chatDock: "minimized", chatExpanded: false }),
