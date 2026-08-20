@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Coordy Open Core</title>
+  <desc id="desc">Seven black square modules form an open C around a shared central space.</desc>
+  <g fill="#000000">
+    <rect x="156" y="56" width="100" height="100"/>
+    <rect x="256" y="56" width="100" height="100"/>
+    <rect x="56" y="156" width="100" height="100"/>
+    <rect x="56" y="256" width="100" height="100"/>
+    <rect x="156" y="356" width="100" height="100"/>
+    <rect x="256" y="356" width="100" height="100"/>
+    <rect x="356" y="256" width="100" height="100"/>
+  </g>
+</svg>
