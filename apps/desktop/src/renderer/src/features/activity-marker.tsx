@@ -1,4 +1,18 @@
-import { Collapsible, CollapsibleContent, CollapsibleTrigger, cn } from "@coordy/ui";
+import {
+  Bubble,
+  BubbleContent,
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  Marker,
+  MarkerContent,
+  MarkerIcon,
+  Message,
+  MessageContent,
+  MessageHeader,
+  Spinner,
+  cn,
+} from "@coordy/ui";
 import {
   Check,
   FileText,
@@ -11,7 +25,10 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { describeActivity, type ActivityIconName } from "../lib/coordy/activity";
+import {
+  describeActivity,
+  type ActivityIconName,
+} from "../lib/coordy/activity";
 
 const ICONS: Record<ActivityIconName, LucideIcon> = {
   pencil: Pencil,
@@ -38,15 +55,15 @@ function MarkerRow({
 }) {
   const Icon = ICONS[icon];
   return (
-    <span
+    <Marker
       className={cn(
         "inline-flex max-w-full items-center gap-2 text-[13px] text-muted-foreground md:text-[13px]",
         interactive && "cursor-pointer hover:text-foreground",
       )}
     >
-      <Icon className={cn("size-3.5 shrink-0 stroke-[1.5]", pending && "animate-pulse")} />
-      <span className="truncate">{title}</span>
-    </span>
+      <MarkerIcon>{pending ? <Spinner /> : <Icon />}</MarkerIcon>
+      <MarkerContent className="truncate">{title}</MarkerContent>
+    </Marker>
   );
 }
 
@@ -64,7 +81,12 @@ export function ActivityMarker({
   const busy = Boolean(pending);
   const row = (
     <div className="animate-in fade-in-0 slide-in-from-left-1 fill-mode-both duration-300">
-      <MarkerRow icon={icon} title={title} pending={busy} interactive={Boolean(detail)} />
+      <MarkerRow
+        icon={icon}
+        title={title}
+        pending={busy}
+        interactive={Boolean(detail)}
+      />
     </div>
   );
   if (!detail) return row;
@@ -82,17 +104,32 @@ export function ActivityMarker({
   );
 }
 
-export function ActivityLine({ event }: { event: { kind: string; payload: string } }) {
+export function ActivityLine({
+  event,
+}: {
+  event: { kind: string; payload: string };
+}) {
   const described = describeActivity(event);
   if (described.tone === "message") {
     return (
-      <div className="animate-in fade-in-0 fill-mode-both space-y-1 duration-300">
-        <p className="text-[13px] text-muted-foreground md:text-[13px]">{described.label}</p>
-        <p className="whitespace-pre-wrap text-[15px] leading-6 md:text-[15px]">{described.body}</p>
-      </div>
+      <Message className="animate-in fade-in-0 fill-mode-both duration-300">
+        <MessageContent>
+          <MessageHeader>{described.label}</MessageHeader>
+          <Bubble variant="ghost">
+            <BubbleContent className="whitespace-pre-wrap text-[15px] leading-6 md:text-[15px]">
+              {described.body}
+            </BubbleContent>
+          </Bubble>
+        </MessageContent>
+      </Message>
     );
   }
   return (
-    <ActivityMarker icon={described.icon} title={described.title} detail={described.detail} pending={described.pending} />
+    <ActivityMarker
+      icon={described.icon}
+      title={described.title}
+      detail={described.detail}
+      pending={described.pending}
+    />
   );
 }

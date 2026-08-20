@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/08-19-clerk-desktop-identity/prd.md", "reason": "Frozen requirements and acceptance criteria"}
+{"file": ".trellis/tasks/08-19-clerk-desktop-identity/design.md", "reason": "Approved Electron and Clerk boundaries"}
+{"file": ".trellis/tasks/08-19-clerk-desktop-identity/research/clerk-official-docs.md", "reason": "Current official Clerk integration constraints"}
+{"file": "apps/desktop/AGENTS.md", "reason": "Desktop renderer and IPC invariants"}

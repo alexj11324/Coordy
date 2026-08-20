@@ -6,6 +6,7 @@ import { AppRouter } from "./app/router";
 import { submitAsDaemon, viewAsDaemon } from "./lib/coordy/client";
 import { useSession } from "./state/session-store";
 import { applyAppearance, useThemeStore } from "./state/theme-store";
+import { AccountProvider } from "./auth/desktop-account-provider";
 
 export function App() {
   const [ready, setReady] = useState(false);
@@ -44,11 +45,13 @@ export function App() {
     );
   }
   return (
-    <QueryClientProvider client={queryClient}>
-      <HashRouter>
-        <AppRouter />
-      </HashRouter>
-    </QueryClientProvider>
+    <AccountProvider>
+      <QueryClientProvider client={queryClient}>
+        <HashRouter>
+          <AppRouter />
+        </HashRouter>
+      </QueryClientProvider>
+    </AccountProvider>
   );
 }
 

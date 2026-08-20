@@ -18,6 +18,7 @@
     { "id": "skill-detail", "outcome": "routes a representative missing Skill id to the detail component", "owner": "src/renderer/src/test/router.spec.ts" },
     { "id": "agent-create", "outcome": "routes to the agent creation component", "owner": "src/renderer/src/test/router.spec.ts" },
     { "id": "settings", "outcome": "routes to the Settings page component", "owner": "src/renderer/src/test/router.spec.ts" },
+    { "id": "online-team", "outcome": "routes to the Online Team page component", "owner": "src/renderer/src/test/router.spec.ts" },
     { "id": "principals", "outcome": "routes to the Principals page component", "owner": "src/renderer/src/test/router.spec.ts" },
     { "id": "agents", "outcome": "routes to the Agents page component", "owner": "src/renderer/src/test/router.spec.ts" },
     { "id": "agent-detail", "outcome": "routes a representative missing agent id to the detail component", "owner": "src/renderer/src/test/router.spec.ts" },
@@ -64,6 +65,10 @@
     { "id": "discoverAgents", "owner": "src/main/test/ipc-handlers.spec.ts" },
     { "id": "discoverHarnessModels", "owner": "src/main/test/ipc-handlers.spec.ts" },
     { "id": "importAgents", "owner": "src/main/test/ipc-handlers.spec.ts" },
+    { "id": "authState", "owner": "src/main/test/auth-ipc.spec.ts" },
+    { "id": "authOpen", "owner": "src/main/test/auth-ipc.spec.ts" },
+    { "id": "authSignOut", "owner": "src/main/test/auth-ipc.spec.ts" },
+    { "id": "authChanged", "owner": "src/main/test/auth-ipc.spec.ts" },
     { "id": "quit", "owner": "src/main/test/ipc-handlers.spec.ts" }
   ],
   "runtime": [
