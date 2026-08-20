@@ -35,6 +35,7 @@ vi.mock("../features/catalog-detail", () => ({
 }));
 vi.mock("../features/runtimes", () => ({ RuntimesPage: () => "route:harnesses" }));
 vi.mock("../features/settings", () => ({ SettingsPage: () => "route:settings" }));
+vi.mock("../features/online-team", () => ({ OnlineTeamPage: () => "route:online-team" }));
 vi.mock("../features/pages", () => ({
   AuthorityPage: () => "route:authority",
   ChatPage: () => "route:chat",

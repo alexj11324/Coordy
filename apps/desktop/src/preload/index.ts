@@ -22,6 +22,14 @@ const bridge: CoordyDesktopBridge = {
   discoverHarnessModels: (harness) =>
     ipcRenderer.invoke(IPC.discoverHarnessModels, harness),
   importAgents: (input) => ipcRenderer.invoke(IPC.importAgents, input),
+  authState: () => ipcRenderer.invoke(IPC.authState),
+  openAuth: (surface) => ipcRenderer.invoke(IPC.authOpen, surface),
+  signOutAuth: () => ipcRenderer.invoke(IPC.authSignOut),
+  subscribeAuth: (listener) => {
+    const handler = (_: unknown, state: unknown) => listener(state as never);
+    ipcRenderer.on(IPC.authChanged, handler);
+    return () => ipcRenderer.removeListener(IPC.authChanged, handler);
+  },
   quit: () => ipcRenderer.invoke(IPC.quit),
 };
 

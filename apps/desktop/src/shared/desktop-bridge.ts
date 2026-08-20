@@ -11,6 +11,7 @@ import type {
   ImportAgentsResult,
   TaskSplitSuggestion,
 } from "@coordy/protocol";
+import type { AuthSurface, SanitizedAuthState } from "./auth-bridge";
 
 export type DirEntry = {
   name: string;
@@ -44,5 +45,9 @@ export interface CoordyDesktopBridge {
     principal_id: string;
     ids?: string[] | null;
   }): Promise<ImportAgentsResult>;
+  authState(): Promise<SanitizedAuthState>;
+  openAuth(surface: AuthSurface): Promise<void>;
+  signOutAuth(): Promise<void>;
+  subscribeAuth(listener: (state: SanitizedAuthState) => void): () => void;
   quit(): Promise<void>;
 }

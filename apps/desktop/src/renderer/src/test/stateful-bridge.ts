@@ -11,6 +11,7 @@ import type {
   CoordyDesktopEvent,
   DirEntry,
 } from "../../../shared/desktop-bridge";
+import type { AuthSurface, SanitizedAuthState } from "../../../shared/auth-bridge";
 
 const OUTCOME_ID: Partial<Record<Command["type"], string>> = {
   CreateWorkspace: "workspace_id",
@@ -156,6 +157,21 @@ export class StatefulCoordyBridge implements CoordyDesktopBridge {
   async importAgents() {
     this.calls.push("importAgents");
     return { imported: [], skipped: [] };
+  }
+  async authState(): Promise<SanitizedAuthState> {
+    this.calls.push("authState");
+    return { status: "config-missing", identity: null, organization: null };
+  }
+  async openAuth(surface: AuthSurface) {
+    this.calls.push(`openAuth:${surface}`);
+  }
+  async signOutAuth() {
+    this.calls.push("signOutAuth");
+  }
+  subscribeAuth(listener: (state: SanitizedAuthState) => void) {
+    this.calls.push("subscribeAuth");
+    void listener;
+    return () => undefined;
   }
   async quit(): Promise<void> {
     this.calls.push("quit");

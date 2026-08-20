@@ -6,7 +6,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/verify-preload-bundles.mjs",
     "package:mac": "electron-vite build && electron-builder --config electron-builder.yml --mac dir",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",

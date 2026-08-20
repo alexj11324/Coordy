@@ -15,7 +15,8 @@ import {
   useSidebar,
 } from "@coordy/ui";
 import { useQuery } from "@tanstack/react-query";
-import { User } from "lucide-react";
+import { LogIn, LogOut, Network, User } from "lucide-react";
+import { useAccount } from "../auth/account-context";
 import { AgentAvatar, NamedAgent } from "../features/agent-avatar";
 import { viewAsDaemon } from "../lib/coordy/client";
 import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
@@ -39,12 +40,12 @@ export function avatarTone(seed: string): string {
   let hash = 0;
   for (const ch of seed) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
   const hues = [
-    "bg-sky-500 text-white",
-    "bg-violet-500 text-white",
-    "bg-amber-500 text-white",
-    "bg-emerald-500 text-white",
-    "bg-rose-500 text-white",
-    "bg-orange-500 text-white",
+    "bg-primary text-primary-foreground",
+    "bg-secondary text-secondary-foreground",
+    "bg-accent text-accent-foreground",
+    "bg-muted text-muted-foreground",
+    "bg-info text-info-foreground",
+    "bg-success text-success-foreground",
   ];
   return hues[hash % hues.length] ?? hues[0]!;
 }
@@ -54,6 +55,7 @@ export function SidebarHelp() {
   const navigate = useNavigate();
   const workspaceId = useSession((s) => s.workspaceId);
   const actor = useSession((s) => s.actor);
+  const account = useAccount();
   const principals = useQuery({
     queryKey: ["principals-shell", workspaceId],
     enabled: Boolean(workspaceId),
@@ -105,6 +107,34 @@ export function SidebarHelp() {
                   </div>
                 </div>
               </DropdownMenuLabel>
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuLabel>在线账号</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => navigate("/team")}>
+                <Network />
+                在线团队
+              </DropdownMenuItem>
+              {account.status === "signed-in" ? (
+                <>
+                  <DropdownMenuItem onClick={() => account.open("profile")}>
+                    <User />
+                    {account.identity?.name ?? "管理在线账号"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void account.signOut()}>
+                    <LogOut />
+                    退出在线账号
+                  </DropdownMenuItem>
+                </>
+              ) : (
+                <DropdownMenuItem
+                  disabled={account.status === "config-missing"}
+                  onClick={() => account.open("sign-in")}
+                >
+                  <LogIn />
+                  {account.status === "config-missing" ? "在线账号未配置" : "登录在线账号"}
+                </DropdownMenuItem>
+              )}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>

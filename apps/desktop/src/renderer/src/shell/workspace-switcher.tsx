@@ -18,7 +18,12 @@ import { Check, ChevronDown, LogOut, Plus } from "lucide-react";
 import { queryClient } from "../app/query-client";
 import { submitAsDaemon, viewAsDaemon } from "../lib/coordy/client";
 import { agentDisplayName, listableAgents } from "../lib/coordy/labels";
-import { asAgents, asPrincipals, asWorkspaces, outcomeId } from "../lib/coordy/views";
+import {
+  asAgents,
+  asPrincipals,
+  asWorkspaces,
+  outcomeId,
+} from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import type { WorkspaceView } from "@coordy/protocol";
 import { AgentAvatar } from "../features/agent-avatar";
@@ -31,7 +36,10 @@ function workspaceInitial(workspace?: WorkspaceView | null): string {
 
 export async function activateWorkspace(workspaceId: string) {
   useSession.getState().setWorkspace(workspaceId);
-  const principals = await viewAsDaemon({ type: "Principals", workspace_id: workspaceId });
+  const principals = await viewAsDaemon({
+    type: "Principals",
+    workspace_id: workspaceId,
+  });
   let principalId = asPrincipals(principals)[0]?.id;
   if (!principalId) {
     const created = await submitAsDaemon({
@@ -56,7 +64,8 @@ export function WorkspaceSwitcher() {
   const principals = useQuery({
     queryKey: ["principals-shell", workspaceId],
     enabled: Boolean(workspaceId),
-    queryFn: () => viewAsDaemon({ type: "Principals", workspace_id: workspaceId! }),
+    queryFn: () =>
+      viewAsDaemon({ type: "Principals", workspace_id: workspaceId! }),
   });
   const agents = useQuery({
     queryKey: ["agents-shell", workspaceId],
@@ -67,8 +76,14 @@ export function WorkspaceSwitcher() {
   const active = items.find((item) => item.id === workspaceId) ?? items[0];
   const people = asPrincipals(principals.data);
   const agentList = listableAgents(asAgents(agents.data));
-  const currentPerson = actor.type === "principal" ? people.find((item) => item.id === actor.id) : null;
-  const currentAgent = actor.type === "agent" ? agentList.find((item) => item.id === actor.id) : null;
+  const currentPerson =
+    actor.type === "principal"
+      ? people.find((item) => item.id === actor.id)
+      : null;
+  const currentAgent =
+    actor.type === "agent"
+      ? agentList.find((item) => item.id === actor.id)
+      : null;
   const accountName = currentAgent
     ? agentDisplayName(currentAgent)
     : currentPerson
@@ -88,8 +103,10 @@ export function WorkspaceSwitcher() {
             <div className="flex size-6 items-center justify-center rounded-full bg-foreground text-[11px] font-medium text-background">
               {workspaceInitial(active)}
             </div>
-            <span className="truncate font-medium">{active?.name ?? "coordy"}</span>
-            <ChevronDown className="ml-auto size-4 text-muted-foreground" />
+            <span className="truncate font-medium">
+              {active?.name ?? "coordy"}
+            </span>
+            <ChevronDown className="ml-auto text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent
             className="min-w-64 text-sm"
@@ -102,17 +119,25 @@ export function WorkspaceSwitcher() {
                 <AgentAvatar agent={currentAgent} className="size-9" />
               ) : (
                 <Avatar className="size-9">
-                  <AvatarFallback className={avatarTone(accountName)}>{initials(accountName)}</AvatarFallback>
+                  <AvatarFallback className={avatarTone(accountName)}>
+                    {initials(accountName)}
+                  </AvatarFallback>
                 </Avatar>
               )}
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium leading-5">{accountName}</p>
-                <p className="truncate text-sm leading-5 text-muted-foreground">{accountSubtitle}</p>
+                <p className="truncate text-sm font-medium leading-5">
+                  {accountName}
+                </p>
+                <p className="truncate text-sm leading-5 text-muted-foreground">
+                  {accountSubtitle}
+                </p>
               </div>
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuLabel className="text-sm font-medium text-muted-foreground">工作区</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-sm font-medium text-muted-foreground">
+                工作区
+              </DropdownMenuLabel>
               {items.map((workspace) => (
                 <DropdownMenuItem
                   key={workspace.id}
@@ -124,8 +149,12 @@ export function WorkspaceSwitcher() {
                   <div className="flex size-6 items-center justify-center rounded-full bg-foreground text-[11px] font-medium text-background">
                     {workspaceInitial(workspace)}
                   </div>
-                  <span className="flex-1 truncate text-sm">{workspace.name}</span>
-                  {workspace.id === active?.id ? <Check className="size-4" /> : null}
+                  <span className="flex-1 truncate text-sm">
+                    {workspace.name}
+                  </span>
+                  {workspace.id === active?.id ? (
+                    <Check className="size-4" />
+                  ) : null}
                 </DropdownMenuItem>
               ))}
               <DropdownMenuItem
@@ -156,7 +185,7 @@ export function WorkspaceSwitcher() {
                   void window.coordy.quit();
                 }}
               >
-                <LogOut className="size-4" />
+                <LogOut />
                 退出应用
               </DropdownMenuItem>
             </DropdownMenuGroup>

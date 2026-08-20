@@ -23,6 +23,7 @@ import {
 } from "../features/catalog-detail";
 import { RuntimesPage } from "../features/runtimes";
 import { SettingsPage } from "../features/settings";
+import { OnlineTeamPage } from "../features/online-team";
 import {
   AuthorityPage,
   ConflictsPage,
@@ -74,6 +75,7 @@ const FLUSH_ROUTES: CanvasRoute[] = [
   { id: "skill-detail", path: "/skills/:skillId", sample: "/skills/missing", element: <SkillDetailPage /> },
   { id: "agent-create", path: "/agents/new", sample: "/agents/new", element: <ManualCreateAgentPage /> },
   { id: "settings", path: "/settings", sample: "/settings", element: <SettingsPage /> },
+  { id: "online-team", path: "/team", sample: "/team", element: <OnlineTeamPage /> },
 ];
 
 const PADDED_ROUTES: CanvasRoute[] = [

@@ -1,6 +1,6 @@
 import type { IpcMainInvokeEvent, WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { IPC } from "../../shared/ipc-channels";
+import { IPC, PRODUCT_IPC_CHANNELS } from "../../shared/ipc-channels";
 import {
   registerIpcHandlers,
   type IpcHandlerDependencies,
@@ -59,10 +59,7 @@ describe("guarded main IPC handlers", () => {
 
   it("registers every retained invoke channel exactly once", () => {
     expect([...handlers.keys()].sort()).toEqual(
-      Object.entries(IPC)
-        .filter(([key]) => key !== "effect" && key !== "subscribe")
-        .map(([, channel]) => channel)
-        .sort(),
+      [...PRODUCT_IPC_CHANNELS].sort(),
     );
   });
 
