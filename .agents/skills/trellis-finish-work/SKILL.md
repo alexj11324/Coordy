@@ -1,6 +1,6 @@
 ---
 name: trellis-finish-work
-description: "Wrap up the current session: verify quality gate passed, remind user to commit, archive completed tasks, and record session progress to the developer journal. Use when done coding and ready to end the session."
+description: "Wrap up the current session: verify the quality gate passed and task changes are committed, archive completed tasks, and record session progress to the developer journal. Use when done coding and ready to end the session."
 ---
 
 # Finish Work

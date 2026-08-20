@@ -7,7 +7,7 @@
 
 
 
-## Session 1: Conversation-driven task decomposition
+## Session 3: Conversation-driven task decomposition
 
 **Date**: 2026-08-19
 **Task**: Conversation-driven task decomposition
@@ -35,7 +35,7 @@ Delivered and runtime-verified conversational task plans: editable previews, str
 
 ---
 
-## Session 2: Complete Multica agent runtime support
+## Session 1: Complete Multica agent runtime support
 
 **Date**: 2026-08-19
 **Task**: Complete Multica agent runtime support
@@ -50,6 +50,28 @@ Added and verified all 23 Multica agent identities plus Gemini, provider-specifi
 | Hash | Message |
 |------|---------|
 | `e9ac82b` | (see git log) |
+
+### Status
+
+[OK] **Completed**
+
+
+## Session 2: Adopt Open Core icon and autonomous Trellis workflow
+
+**Date**: 2026-08-19
+**Task**: Adopt Open Core icon and autonomous Trellis workflow
+**Branch**: `main`
+
+### Summary
+
+Replaced Coordy's canonical brand SVG with the approved pure-black Open Core mark. Updated the project-local Trellis workflow, skills, and Codex fallback so substantive work is planned, executed, and committed autonomously while genuine product decisions and inseparable ownership remain explicit questions.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8877ada` | (see git log) |
+| `6f189c8` | (see git log) |
 
 ### Status
 

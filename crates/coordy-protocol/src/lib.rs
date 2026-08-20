@@ -277,6 +277,28 @@ pub enum Command {
         name: String,
         harness: String,
     },
+    CreateConfiguredAgent {
+        workspace_id: String,
+        principal_id: String,
+        name: String,
+        harness: String,
+        #[serde(default)]
+        description: String,
+        #[serde(default)]
+        instructions: String,
+        #[serde(default)]
+        avatar: String,
+        #[serde(default)]
+        model: String,
+        #[serde(default)]
+        thinking: String,
+        #[serde(default)]
+        speed: String,
+        #[serde(default)]
+        access: String,
+        #[serde(default)]
+        tool_access: String,
+    },
     UpdateAgent {
         agent_id: String,
         #[serde(default)]
@@ -1743,10 +1765,11 @@ pub enum RpcRequest {
         principal_id: String,
         ids: Option<Vec<String>>,
     },
-    CompleteDraft {
+    SuggestTaskSplit {
         id: String,
-        kind: String,
-        prompt: String,
+        workspace_id: String,
+        task_id: String,
+        principal_id: String,
     },
 }
 
@@ -1788,16 +1811,8 @@ pub struct ImportAgentsResult {
     pub skipped: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct DraftCompletion {
-    pub kind: String,
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub instructions: String,
-    #[serde(default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskSplitSuggestion {
     pub titles: Vec<String>,
 }
 

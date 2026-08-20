@@ -661,6 +661,70 @@ fn streamed_plan_artifact_preserves_json_strings_across_arbitrary_chunk_boundari
 }
 
 #[test]
+fn streamed_plan_replacement_keeps_run_event_sequences_monotonic() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let draft = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    let content = format!(
+        "```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string(&draft).unwrap()
+    );
+    let split = content.find("\"children\"").unwrap();
+
+    for event in [
+        HarnessEvent::Message {
+            role: "assistant".into(),
+            content: content[..split].to_string(),
+        },
+        HarnessEvent::Tool {
+            name: "search".into(),
+            input: "query".into(),
+            output: "result".into(),
+            exit_code: Some(0),
+        },
+        HarnessEvent::Message {
+            role: "assistant".into(),
+            content: content[split..].to_string(),
+        },
+    ] {
+        h.kernel
+            .submit_sync(cmd(
+                daemon(),
+                Command::IngestHarnessEvent {
+                    run_id: draft.source_run_id.clone(),
+                    event,
+                },
+            ))
+            .unwrap();
+    }
+
+    let events = match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Run {
+                run_id: draft.source_run_id,
+            },
+        ))
+        .unwrap()
+    {
+        View::Run { events, .. } => events,
+        _ => panic!("run"),
+    };
+    assert!(events.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.seq)
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        events.len()
+    );
+}
+
+#[test]
 fn a_second_plan_artifact_from_the_same_run_invalidates_the_first() {
     let h = setup();
     let parent_id = issue_title(&h, "Parent");
@@ -773,6 +837,119 @@ fn a_second_plan_artifact_from_the_same_run_invalidates_the_first() {
             .unwrap()
             .next_issue_number
     );
+}
+
+#[test]
+fn malformed_artifact_in_a_later_run_does_not_clear_prior_run_invalidation() {
+    let h = setup();
+    let parent_id = issue_title(&h, "Parent");
+    let first = plan_draft(&h, TaskPlanParent::Existing { task_id: parent_id });
+    let artifact = |draft: &TaskPlanDraft| {
+        format!(
+            "```COORDY_TASK_PLAN_V1\n{}\n```",
+            serde_json::to_string(draft).unwrap()
+        )
+    };
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: first.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: artifact(&first),
+                },
+            },
+        ))
+        .unwrap();
+    let proposal = h.kernel.export_world().task_plan_proposals[0].clone();
+
+    let mut conflicting = first.clone();
+    conflicting.children[0].title = "Conflicting second design".into();
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: first.source_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: artifact(&conflicting),
+                },
+            },
+        ))
+        .unwrap();
+
+    let chat_task_id = match h
+        .kernel
+        .view_sync(q(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Query::Chat {
+                chat_id: first.chat_id.clone(),
+            },
+        ))
+        .unwrap()
+    {
+        View::Chat { chat, .. } => chat.task_id.unwrap(),
+        _ => panic!("chat"),
+    };
+    let later_run_id = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::StartRun {
+                task_id: chat_task_id,
+                source: RunSource::Acp {
+                    prompt: "Try another plan".into(),
+                },
+                agent_id: Some(h.a1.clone()),
+                chat_id: Some(first.chat_id.clone()),
+                trigger: "chat".into(),
+            },
+        ))
+        .unwrap()
+        .ids["run_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    h.kernel
+        .submit_sync(cmd(
+            daemon(),
+            Command::IngestHarnessEvent {
+                run_id: later_run_id.clone(),
+                event: HarnessEvent::Message {
+                    role: "assistant".into(),
+                    content: "```COORDY_TASK_PLAN_V1\n{bad}\n```".into(),
+                },
+            },
+        ))
+        .unwrap();
+
+    let world = h.kernel.export_world();
+    assert!(world
+        .task_plan_artifact_errors
+        .iter()
+        .any(|error| error.run_id == first.source_run_id));
+    assert!(world
+        .task_plan_artifact_errors
+        .iter()
+        .any(|error| error.run_id == later_run_id));
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal { id: h.alice },
+            Command::ApplyTaskPlan {
+                proposal_id: proposal.id,
+                expected_revision: proposal.revision,
+                idempotency_key: "prior-run-stays-invalid".into(),
+                mode: TaskPlanApplyMode::CreateOnly,
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid");
 }
 
 #[test]
@@ -5210,6 +5387,85 @@ fn agent_name_must_be_unique_in_workspace() {
         ))
         .unwrap_err();
     assert_eq!(err.code, "invalid");
+}
+
+#[test]
+fn create_configured_agent_persists_the_complete_configuration_atomically() {
+    let h = setup();
+    let before = h.kernel.export_world().agents.len();
+    let outcome = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateConfiguredAgent {
+                workspace_id: h.workspace_id.clone(),
+                principal_id: h.alice.clone(),
+                name: "  Reviewer  ".into(),
+                harness: " claude ".into(),
+                description: "Reviews changes".into(),
+                instructions: "Run tests first".into(),
+                avatar: "asset:reviewer".into(),
+                model: "sonnet".into(),
+                thinking: "high".into(),
+                speed: "fast".into(),
+                access: "workspace".into(),
+                tool_access: "full_access".into(),
+            },
+        ))
+        .unwrap();
+    let agent_id = outcome.ids["agent_id"].as_str().unwrap();
+    let world = h.kernel.export_world();
+    assert_eq!(world.agents.len(), before + 1);
+    let agent = world
+        .agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .unwrap();
+    assert_eq!(agent.name, "Reviewer");
+    assert_eq!(agent.harness, "claude");
+    assert_eq!(agent.description, "Reviews changes");
+    assert_eq!(agent.instructions, "Run tests first");
+    assert_eq!(agent.avatar, "asset:reviewer");
+    assert_eq!(agent.model, "sonnet");
+    assert_eq!(agent.thinking, "high");
+    assert_eq!(agent.speed, "fast");
+    assert_eq!(agent.access, "workspace");
+    assert_eq!(agent.tool_access, "full_access");
+}
+
+#[test]
+fn create_configured_agent_prevalidates_before_mutating_world() {
+    let h = setup();
+    let before = h.kernel.export_world();
+    let error = h
+        .kernel
+        .submit_sync(cmd(
+            Actor::Principal {
+                id: h.alice.clone(),
+            },
+            Command::CreateConfiguredAgent {
+                workspace_id: h.workspace_id,
+                principal_id: h.alice,
+                name: "Never persisted".into(),
+                harness: "claude".into(),
+                description: "description".into(),
+                instructions: "instructions".into(),
+                avatar: String::new(),
+                model: "sonnet".into(),
+                thinking: "high".into(),
+                speed: String::new(),
+                access: "owner".into(),
+                tool_access: "unsafe".into(),
+            },
+        ))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid");
+    let after = h.kernel.export_world();
+    assert_eq!(after.agents.len(), before.agents.len());
+    assert_eq!(after.audit.len(), before.audit.len());
+    assert_eq!(after.effects.len(), before.effects.len());
 }
 
 #[test]

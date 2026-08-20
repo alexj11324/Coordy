@@ -71,6 +71,11 @@ impl Kernel {
         *self.world.lock().expect("world lock") = world;
     }
 
+    pub fn can_command_agent(&self, actor: &Actor, agent_id: &str) -> bool {
+        let world = self.world.lock().expect("world lock");
+        can_command_agent(&world, actor, agent_id)
+    }
+
     fn start_prompt_on_task(
         &self,
         world: &mut World,
@@ -1266,6 +1271,84 @@ impl Kernel {
                     skill_ids: Vec::new(),
                 });
                 Self::audit(&mut world, &actor, "create_agent", &id);
+                Self::emit(&mut world, Effect::StateChanged { workspace_id });
+                Ok(Outcome::ok("agent created", json!({ "agent_id": id })))
+            }
+            Command::CreateConfiguredAgent {
+                workspace_id,
+                principal_id,
+                name,
+                harness,
+                description,
+                instructions,
+                avatar,
+                model,
+                thinking,
+                speed,
+                access,
+                tool_access,
+            } => {
+                let principal = world
+                    .principal(&principal_id)
+                    .cloned()
+                    .ok_or_else(|| CoordyError::not_found("principal"))?;
+                if principal.workspace_id != workspace_id {
+                    return Err(CoordyError::invalid("principal workspace mismatch"));
+                }
+                match &actor {
+                    Actor::Principal { id } if id == &principal_id => {}
+                    Actor::Daemon => {}
+                    _ => {
+                        return Err(CoordyError::denied(
+                            "only the principal may create their agent",
+                        ))
+                    }
+                }
+
+                // Prevalidate every fallible field before allocating an ID or
+                // changing the world. The UI uses this as one atomic command,
+                // not as separately persisted create and update operations.
+                let name = normalize_agent_name(&name)?;
+                if agent_name_taken(&world, &workspace_id, &name, None) {
+                    return Err(CoordyError::invalid(
+                        "agent name must be unique in this workspace",
+                    ));
+                }
+                let harness = harness.trim();
+                if harness.is_empty() {
+                    return Err(CoordyError::invalid("runtime is required"));
+                }
+                let access = match access.trim() {
+                    "" | "owner" => "owner".to_string(),
+                    "workspace" => "workspace".to_string(),
+                    "members" => "members".to_string(),
+                    _ => return Err(CoordyError::invalid("unknown access")),
+                };
+                let tool_access = normalize_tool_access(&tool_access)?;
+
+                let id = ids::new("ag");
+                world.agents.push(Agent {
+                    id: id.clone(),
+                    workspace_id: workspace_id.clone(),
+                    principal_id,
+                    name,
+                    harness: harness.to_string(),
+                    description,
+                    instructions,
+                    archived: false,
+                    avatar,
+                    model,
+                    thinking,
+                    speed,
+                    access,
+                    access_member_ids: Vec::new(),
+                    concurrency_limit: 6,
+                    cli_args: String::new(),
+                    tool_access,
+                    mcp_servers: Vec::new(),
+                    skill_ids: Vec::new(),
+                });
+                Self::audit(&mut world, &actor, "create_configured_agent", &id);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok("agent created", json!({ "agent_id": id })))
             }
@@ -3644,7 +3727,7 @@ fn ingest_event(
                 let chat_id = run.chat_id.clone().expect("chat run");
                 world
                     .task_plan_artifact_errors
-                    .retain(|item| item.chat_id != chat_id);
+                    .retain(|item| item.run_id != run.id);
                 world.task_plan_artifact_errors.push(TaskPlanArtifactError {
                     chat_id,
                     run_id: run.id.clone(),
@@ -3656,7 +3739,7 @@ fn ingest_event(
             if let Some(draft) = draft {
                 world
                     .task_plan_artifact_errors
-                    .retain(|item| item.chat_id != draft.chat_id);
+                    .retain(|item| item.run_id != draft.source_run_id);
                 match product::save_task_plan_from_chat_run(world, &run, draft) {
                     Ok(()) => {
                         // Prior streaming chunks may contain the opening fence
@@ -3701,7 +3784,9 @@ fn record_harness_event(
         .run_events
         .iter()
         .filter(|e| e.run_id == *run_id)
-        .count() as u32
+        .map(|event| event.seq)
+        .max()
+        .unwrap_or(0)
         + 1;
     let (kind, payload): (String, String) = match &event {
         HarnessEvent::Message { role, content } => ("message".into(), format!("{role}: {content}")),
@@ -4013,14 +4098,23 @@ fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
         };
     }
     let line_end = line_break + 1;
-    let Some(close_offset) = content[line_end..].find("```") else {
+    let Some(close) = content[line_end..]
+        .match_indices("```")
+        .find_map(|(offset, _)| {
+            let close = line_end + offset;
+            let starts_line = close == line_end || content.as_bytes()[close - 1] == b'\n';
+            let suffix = &content[close + 3..];
+            let ends_line =
+                suffix.is_empty() || suffix.starts_with('\n') || suffix.starts_with("\r\n");
+            (starts_line && ends_line).then_some(close)
+        })
+    else {
         return ParsedTaskPlanArtifact {
             draft: None,
             error: None,
             display: content.to_string(),
         };
     };
-    let close = line_end + close_offset;
     let json = content[line_end..close].trim();
     let draft = match serde_json::from_str::<coordy_protocol::TaskPlanDraft>(json) {
         Ok(draft) => draft,
@@ -4088,6 +4182,20 @@ mod task_plan_artifact_tests {
             ",\"workspace_id\":\"ws\",\"chat_id\":\"chat\",\"source_run_id\":\"run\",\"source_agent_id\":\"agent\",\"parent\":{\"mode\":\"existing\",\"task_id\":\"parent\"},\"children\":[{\"key\":\"a\",\"title\":\"A\",\"description\":\"Do A\",\"acceptance_criteria\":[\"A passes\"],\"priority\":\"medium\",\"stage\":1}]}\n```"
         );
         assert!(parse_task_plan_artifact(&combined).draft.is_some());
+    }
+
+    #[test]
+    fn backticks_inside_json_strings_do_not_close_the_artifact() {
+        let content = r#"```COORDY_TASK_PLAN_V1
+{"version":"COORDY_TASK_PLAN_V1","workspace_id":"ws","chat_id":"chat","source_run_id":"run","source_agent_id":"agent","parent":{"mode":"existing","task_id":"parent"},"children":[{"key":"a","title":"A","description":"Use ```sh in the documentation","acceptance_criteria":["The ``` example is preserved"],"priority":"medium","stage":1}]}
+```"#;
+        let parsed = parse_task_plan_artifact(content);
+        let draft = parsed.draft.expect("valid plan");
+        assert_eq!(
+            draft.children[0].description,
+            "Use ```sh in the documentation"
+        );
+        assert!(parsed.error.is_none());
     }
 
     #[test]

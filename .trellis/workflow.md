@@ -144,16 +144,17 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
 ## Phase Index
 
 ```
-Phase 1: Plan    → classify, get task-creation consent, then write planning artifacts
+Phase 1: Plan    → classify, create a task when needed, then write planning artifacts
 Phase 2: Execute → implement only after task status is in_progress
 Phase 3: Finish  → verify, update spec, commit, and wrap up
 ```
 
 ### Request Triage
 
-- Simple conversation or small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
-- Complex task: ask whether you may create a Trellis task and enter planning. If the user says no, do not do broad inline implementation; explain, clarify scope, or suggest a smaller split.
-- User approval to create a task is not approval to start implementation. Planning still happens first.
+- One-reply conversation with no file change or research: answer directly without creating a task.
+- Substantive file changes, research, or multi-step validation: create a Trellis task and plan autonomously.
+- An explicit implementation request authorizes `task.py start` and execution after planning when no unresolved user-owned decision remains.
+- Ask only for genuine product, scope, compatibility, or risk decisions that repository evidence cannot resolve; do not ask for workflow consent.
 
 ### Planning Artifacts
 
@@ -174,13 +175,14 @@ Create new children with `task.py create "<title>" --slug <name> --parent <paren
 <!-- Per-turn breadcrumb: shown when there is no active task (before Phase 1) -->
 
 [workflow-state:no_task]
-No active task. First classify the current turn and ask for task-creation consent before creating any Trellis task.
-Simple conversation / small task: ask only whether this turn should create a Trellis task. If the user says no, skip Trellis for this session.
-Complex task: ask the user if you can create a Trellis task and enter the planning phase. If the user says no, explain, clarify scope, or suggest a smaller split.
+No active task. Classify the current turn autonomously.
+One-reply conversation with no file change or research: answer directly without a Trellis task.
+Substantive file changes, research, or multi-step validation: create and plan a Trellis task without asking for process consent.
+If the user explicitly requested implementation, activate and execute after planning when no unresolved user-owned decision remains. Ask only for genuine product, scope, compatibility, or risk decisions that repository evidence cannot resolve.
 [/workflow-state:no_task]
 
 ### Phase 1: Plan
-- 1.0 Create task `[required · once]` (only after task-creation consent)
+- 1.0 Create task `[required · once]` (autonomously when triage requires a task)
 - 1.1 Requirement exploration `[required · repeatable]` (`prd.md`; complex tasks also need `design.md` + `implement.md`)
 - 1.2 Research `[optional · repeatable]`
 - 1.3 Configure context `[required · once]` — Claude Code, Cursor, OpenCode, Codex, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Grok, Kimi Code (sub-agent-dispatch platforms only; inline platforms skip)
@@ -191,7 +193,8 @@ Complex task: ask the user if you can create a Trellis task and enter the planni
 
 [workflow-state:planning]
 Load `trellis-brainstorm`; stay in planning.
-Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
+Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`.
+If the user explicitly requested implementation and no unresolved user-owned decision remains, run `task.py start` and execute without a separate approval prompt.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research manifests before start.
 [/workflow-state:planning]
@@ -204,7 +207,8 @@ Sub-agent mode: curate `implement.jsonl` and `check.jsonl` as spec/research mani
 
 [workflow-state:planning-inline]
 Load `trellis-brainstorm`; stay in planning.
-Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`; ask for review before `task.py start`.
+Lightweight: `prd.md` can be enough. Complex: finish `prd.md`, `design.md`, and `implement.md`.
+If the user explicitly requested implementation and no unresolved user-owned decision remains, run `task.py start` and execute without a separate approval prompt.
 Multi-deliverable scope: consider a parent task plus independently verifiable child tasks; dependencies must be written in child artifacts, not implied by tree position.
 Inline mode: skip jsonl curation; Phase 2 reads artifacts/specs via `trellis-before-dev`.
 [/workflow-state:planning-inline]
@@ -290,7 +294,7 @@ When a user request matches one of these intents inside an active task, route fi
 
 ### Guardrails
 
-- Task creation approval is not implementation approval; implementation waits for `task.py start` after artifact review.
+- Task creation and planning are autonomous when triage requires them. An explicit implementation request authorizes `task.py start` after artifact review when no unresolved user-owned decision remains.
 - PRD-only is valid for lightweight tasks; complex tasks need `design.md` + `implement.md`.
 - Planning must be persisted to task artifacts; checks must run before reporting completion.
 
@@ -307,11 +311,11 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <step>
 
 ## Phase 1: Plan
 
-Goal: classify the request, get task-creation consent when a task is needed, and produce the planning artifacts required before implementation.
+Goal: classify the request, create a task autonomously when needed, and produce the planning artifacts required before implementation.
 
 #### 1.0 Create task `[required · once]`
 
-Create the task directory only after task-creation consent. The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
+Create the task directory as soon as triage determines that the request needs substantive file changes, research, or multi-step validation. Do not ask for process consent. The command sets status to `planning`, writes `task.json`, creates a default `prd.md`, and auto-targets the new task when session identity is available:
 
 ```bash
 python3 ./.trellis/scripts/task.py create "<task title>" --slug <name>
@@ -452,7 +456,7 @@ If `task.py start` errors with a session-identity message (no context key from h
 | Condition | Required |
 |------|:---:|
 | `prd.md` exists | ✅ |
-| User confirms task should enter implementation | ✅ |
+| Explicit implementation request exists and no unresolved user-owned decision remains | ✅ |
 | `task.py start` has been run (status = in_progress) | ✅ |
 | `research/` has artifacts (complex tasks) | recommended |
 | `design.md` exists (complex tasks) | ✅ |
@@ -598,7 +602,7 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
    ```bash
    git status --porcelain
    ```
-   Snapshot every dirty path. If the working tree is clean, skip to 3.5.
+   Snapshot every dirty path. Before ownership classification, exclude `.trellis/tasks/` and `.trellis/workspace/` from all work-commit candidates; `task.py archive` and `add_session.py` manage and auto-commit those bookkeeping paths later. If no non-bookkeeping dirty paths remain, skip to 3.5.
 
 2. **Learn commit style** from recent history (so drafted messages blend in):
    ```bash
@@ -606,37 +610,29 @@ The AI drives a batched commit of this task's code changes so `/finish-work` can
    ```
    Note the prefix convention (`feat:` / `fix:` / `chore:` / `docs:` ...), language (中文/English), and length style.
 
-3. **Classify dirty files into two groups**:
-   - **AI-edited this session** — files you wrote/edited via Edit/Write/Bash tool calls in this session. You know what changed and why.
-   - **Unrecognized** — dirty files you did NOT touch this session (could be the user's manual edits, leftover WIP from a previous session, or unrelated work). Do NOT silently include these.
+3. **Classify dirty files by ownership**:
+   - **Task-owned** — files identified by the active task artifacts or observed task edits whose complete diff you can attribute to this task.
+   - **Unrecognized** — dirty files that are not attributable to the active task (for example, manual edits, leftover WIP, or parallel work). Never include these.
+   - **Overlapping** — files whose diff mixes task-owned and unrelated changes. These require hunk-level separation or, when separation is unsafe, a focused ownership question.
 
-4. **Draft a commit plan**. Group AI-edited files into logical commits (1 commit per coherent change unit, not 1 commit per file). Each entry: `<commit message>` + file list. List unrecognized files separately at the bottom.
+4. **Build the commit plan internally**. Group verified task-owned files into logical commits (1 commit per coherent change unit, not 1 commit per file). Derive ownership from the active task artifacts, observed edits, and full diff review. Keep unrecognized files outside every batch without asking the user to classify them.
 
-5. **Present the plan once, ask for one-shot confirmation**. Format:
+5. **Resolve overlap safely**. If a file contains both task-owned and unrelated edits, stage only clearly attributable task hunks when that can be done safely. If ownership cannot be separated with confidence, stop and ask the user exactly how to classify that overlapping file; do not stage it while waiting.
+
+6. **Verify and commit autonomously**. For each batch, run the relevant task checks, then stage only its explicit files or attributable hunks. Before committing, inspect both:
+   ```bash
+   git diff --cached --name-only
+   git diff --cached
    ```
-   Proposed commits (in order):
-     1. <message>
-        - <file>
-        - <file>
-     2. <message>
-        - <file>
+   Commit only when the staged file list and staged diff contain exclusively verified task-owned changes. Use `git commit -m "<msg>"`; do not amend or push.
 
-   Unrecognized dirty files (NOT in any commit — confirm include/exclude):
-     - <file>
-     - <file>
-
-   Reply 'ok' / '行' to execute. Reply with edits, or '我自己来' / 'manual' to abort.
-   ```
-
-6. **On confirmation**: run `git add <files>` + `git commit -m "<msg>"` for each batch in order. Do not amend. Do not push.
-
-7. **On rejection** (user replies "不行" / "我自己来" / "manual" / any pushback on the plan): stop. Do not attempt a second plan. The user will commit by hand; you skip ahead to 3.5 once they confirm.
+7. **Leave unrelated state untouched**. Unrecognized dirty files remain unstaged and uncommitted. Report them at handoff, but do not request routine commit confirmation.
 
 **Rules**:
 - No `git commit --amend` anywhere — three-stage three-commit flow (work commits → archive commit → journal commit).
 - Never push to remote in this step.
-- If the user wants different message wording but accepts the file grouping, edit the message and re-confirm once — but if they reject the grouping, exit to manual mode.
-- The batched plan is one prompt; do not prompt per commit.
+- Never use broad staging commands while unrecognized dirty files exist; stage explicit paths or attributable hunks only.
+- Ask only when overlapping ownership makes a safe focused commit impossible. Commit-message wording and ordinary task-owned grouping do not require confirmation.
 
 #### 3.5 Wrap-up reminder
 
@@ -651,7 +647,7 @@ This section is for developers who want to modify the Trellis workflow itself. A
 ### Changing what a step means
 
 Edit the corresponding step's walkthrough body in the Phase 1 / 2 / 3 sections above. Critical invariants:
-- No active task must triage first and ask for task-creation consent before creating a Trellis task.
+- No active task must be classified first: one-reply conversation can skip Trellis, while substantive work creates a task autonomously.
 - Planning must distinguish lightweight PRD-only tasks from complex tasks that require `prd.md`, `design.md`, and `implement.md` before start.
 - Every required execution path must keep the Phase 3.4 commit reminder reachable before `/trellis:finish-work`.
 

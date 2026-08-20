@@ -1,4 +1,9 @@
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import {
   Button,
   DropdownMenu,
@@ -32,15 +37,36 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ComponentProps, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { DatePickerField } from "./date-picker-field";
 import { submit, view } from "../lib/coordy/client";
 import { pickedFilesFromList } from "../lib/coordy/files";
-import { PRIORITY_ITEMS, blockerWaitMessage, hasUnresolvedBlockers, taskIdentifier } from "../lib/coordy/issues";
-import { agentDisplayName, listableAgents, runStatusLabel, TASK_STATUS_ITEMS } from "../lib/coordy/labels";
+import {
+  PRIORITY_ITEMS,
+  blockerWaitMessage,
+  hasUnresolvedBlockers,
+  taskIdentifier,
+} from "../lib/coordy/issues";
+import {
+  agentDisplayName,
+  listableAgents,
+  runStatusLabel,
+  TASK_STATUS_ITEMS,
+} from "../lib/coordy/labels";
 import { insertAgentMention, mentionsFromBody } from "../lib/coordy/mentions";
-import { startAcpOnTask, startChatTurn } from "../lib/coordy/start-task";
+import {
+  startAcpOnTask,
+  startChatTurn,
+  taskSplitRequest,
+} from "../lib/coordy/start-task";
 import {
   asAgents,
   asComments,
@@ -75,20 +101,33 @@ export function TaskDetailPage() {
   const { taskId } = useParams();
   const navigate = useNavigate();
   const workspaceId = useSession((s) => s.workspaceId);
+  const principalId = useSession((s) => s.principalId);
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const board = useQuery({
-    queryKey: ["view", { type: "Board", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Board", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Board", workspace_id: workspaceId! }),
   });
   const agents = useQuery({
-    queryKey: ["view", { type: "Agents", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Agents", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Agents", workspace_id: workspaceId! }),
   });
   const runsQuery = useQuery({
-    queryKey: ["view", { type: "Runs", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Runs", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Runs", workspace_id: workspaceId! }),
     refetchInterval: 1000,
@@ -99,22 +138,38 @@ export function TaskDetailPage() {
     queryFn: () => view({ type: "Comments", task_id: taskId! }),
   });
   const projects = useQuery({
-    queryKey: ["view", { type: "Projects", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Projects", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Projects", workspace_id: workspaceId! }),
   });
   const squads = useQuery({
-    queryKey: ["view", { type: "Squads", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Squads", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Squads", workspace_id: workspaceId! }),
   });
   const principals = useQuery({
-    queryKey: ["view", { type: "Principals", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Principals", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Principals", workspace_id: workspaceId! }),
   });
   const labelsQuery = useQuery({
-    queryKey: ["view", { type: "Labels", workspace_id: workspaceId }, workspaceId],
+    queryKey: [
+      "view",
+      { type: "Labels", workspace_id: workspaceId },
+      workspaceId,
+    ],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Labels", workspace_id: workspaceId! }),
   });
@@ -140,7 +195,9 @@ export function TaskDetailPage() {
   const people = asPrincipals(principals.data);
   const workspaceLabels = asLabels(labelsQuery.data);
   const comments = asComments(commentsQuery.data);
-  const runList = asRuns(runsQuery.data).filter((run) => run.task_id === taskId);
+  const runList = asRuns(runsQuery.data).filter(
+    (run) => run.task_id === taskId,
+  );
   const latest = taskId ? latestRunForTask(runList, taskId) : undefined;
   const details = useQueries({
     queries: runList.map((run) => ({
@@ -152,7 +209,11 @@ export function TaskDetailPage() {
   const activity = details.flatMap((item, index) => {
     const run = runList[index];
     const events = asRunDetail(item.data)?.events ?? [];
-    return events.map((event) => ({ ...event, runId: run?.id ?? "", runStatus: run?.status ?? "" }));
+    return events.map((event) => ({
+      ...event,
+      runId: run?.id ?? "",
+      runStatus: run?.status ?? "",
+    }));
   });
   const [title, setTitle] = useState(task?.title ?? "");
   const [description, setDescription] = useState(task?.description ?? "");
@@ -161,14 +222,21 @@ export function TaskDetailPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [addingSubtask, setAddingSubtask] = useState(false);
+  const [suggestedTitles, setSuggestedTitles] = useState<string[]>([]);
+  const [suggestBusy, setSuggestBusy] = useState(false);
   const [planBusy, setPlanBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
   const [blockerPick, setBlockerPick] = useState("none");
-  const repoPath = settingsQuery.data?.type === "Settings" ? settingsQuery.data.repo_path : null;
+  const repoPath =
+    settingsQuery.data?.type === "Settings"
+      ? settingsQuery.data.repo_path
+      : null;
   const workPath = task?.worktree_path || repoPath;
   const workspaceName =
-    asWorkspaces(workspaces.data).find((item) => item.id === workspaceId)?.name?.trim() || "coordy";
+    asWorkspaces(workspaces.data)
+      .find((item) => item.id === workspaceId)
+      ?.name?.trim() || "coordy";
   useTabTitle(task ? `${taskIdentifier(task)} ${task.title}` : undefined);
 
   useEffect(() => {
@@ -201,9 +269,15 @@ export function TaskDetailPage() {
   if (!taskId) return null;
   if (board.isFetched && !task) {
     return (
-      <section className={cn("flex h-full flex-col items-start gap-3 p-6", uiText)}>
-        <h1 className="text-[24px] font-semibold tracking-tight md:text-[24px]">未找到该事项</h1>
-        <p className="text-muted-foreground">该事项可能已被删除或移出当前工作区。</p>
+      <section
+        className={cn("flex h-full flex-col items-start gap-3 p-6", uiText)}
+      >
+        <h1 className="text-[24px] font-semibold tracking-tight md:text-[24px]">
+          未找到该事项
+        </h1>
+        <p className="text-muted-foreground">
+          该事项可能已被删除或移出当前工作区。
+        </p>
         <Button variant="secondary" onClick={() => navigate("/board")}>
           回到任务
         </Button>
@@ -216,25 +290,44 @@ export function TaskDetailPage() {
   const assignedAgent = agentList.find((item) => item.id === assignee);
   const agentItems = Object.fromEntries([
     ["none", "未指派智能体"],
-    ...agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)]),
+    ...agentList.map((agent) => [
+      agent.id,
+      agentDisplayName(agent, catalog.data),
+    ]),
   ]);
-  const projectItems = Object.fromEntries([["none", "无项目"], ...projectList.map((project) => [project.id, project.name])]);
-  const squadItems = Object.fromEntries([["none", "未指派小队"], ...squadList.map((squad) => [squad.id, squad.name])]);
-  const peopleItems = Object.fromEntries([["none", "未指派成员"], ...people.map((person) => [person.id, person.name])]);
+  const projectItems = Object.fromEntries([
+    ["none", "无项目"],
+    ...projectList.map((project) => [project.id, project.name]),
+  ]);
+  const squadItems = Object.fromEntries([
+    ["none", "未指派小队"],
+    ...squadList.map((squad) => [squad.id, squad.name]),
+  ]);
+  const peopleItems = Object.fromEntries([
+    ["none", "未指派成员"],
+    ...people.map((person) => [person.id, person.name]),
+  ]);
   const blockers = (task.blocker_ids ?? [])
     .map((id) => tasks.find((item) => item.id === id))
     .filter((item): item is NonNullable<typeof item> => Boolean(item));
   const blockerCandidates = tasks.filter(
-    (item) => item.id !== task.id && !(task.blocker_ids ?? []).includes(item.id),
+    (item) =>
+      item.id !== task.id && !(task.blocker_ids ?? []).includes(item.id),
   );
   const blockerItems = Object.fromEntries([
     ["none", "选择前置事项"],
-    ...blockerCandidates.map((item) => [item.id, `${taskIdentifier(item)} ${item.title}`]),
+    ...blockerCandidates.map((item) => [
+      item.id,
+      `${taskIdentifier(item)} ${item.title}`,
+    ]),
   ]);
   const waitingMessage = blockerWaitMessage(task, tasks);
   const heldByBlockers = hasUnresolvedBlockers(task);
   const persist = () => {
-    if (title.trim() !== task.title || description !== (task.description ?? "")) {
+    if (
+      title.trim() !== task.title ||
+      description !== (task.description ?? "")
+    ) {
       save.mutate();
     }
   };
@@ -253,10 +346,20 @@ export function TaskDetailPage() {
     try {
       if (mode === "comment") {
         const mentions = mentionsFromBody(text);
-        await submit({ type: "AddComment", task_id: task.id, body: text, mentions });
+        await submit({
+          type: "AddComment",
+          task_id: task.id,
+          body: text,
+          mentions,
+        });
         for (const mention of mentions) {
           if (mention.kind === "agent") {
-            await submit({ type: "StartMentionRun", task_id: task.id, agent_id: mention.id, prompt: text });
+            await submit({
+              type: "StartMentionRun",
+              task_id: task.id,
+              agent_id: mention.id,
+              prompt: text,
+            });
           }
         }
         setComposer("");
@@ -295,6 +398,9 @@ export function TaskDetailPage() {
     }
     setSubtaskTitle("");
     setAddingSubtask(false);
+    setSuggestedTitles((current) =>
+      current.filter((item) => item !== titleText),
+    );
     await refresh();
   };
 
@@ -303,8 +409,11 @@ export function TaskDetailPage() {
     setNotice(null);
     try {
       if (!workspaceId) throw new Error("工作区尚未就绪。");
-      const planningAgent = agentList.find((item) => item.id === task.assignee_agent_id) ?? agentList[0];
-      if (!planningAgent) throw new Error("请先创建一个智能体，再通过对话规划拆分。");
+      const planningAgent =
+        agentList.find((item) => item.id === task.assignee_agent_id) ??
+        agentList[0];
+      if (!planningAgent)
+        throw new Error("请先创建一个智能体，再通过对话规划拆分。");
       const created = await submit({
         type: "CreateChat",
         workspace_id: workspaceId,
@@ -313,7 +422,8 @@ export function TaskDetailPage() {
       });
       const chatId = outcomeId(created.ids, "chat_id");
       const chatView = await view({ type: "Chat", chat_id: chatId });
-      if (chatView.type !== "Chat" || !chatView.chat.task_id) throw new Error("未能创建规划对话。");
+      if (chatView.type !== "Chat" || !chatView.chat.task_id)
+        throw new Error("未能创建规划对话。");
       const prompt = [
         `请通过对话把事项 ${taskIdentifier(task)} 拆成完整、可执行并可独立验收的任务方案。`,
         `提案必须把 parent 设为 existing，task_id 为 ${task.id}。`,
@@ -322,9 +432,16 @@ export function TaskDetailPage() {
         `正文：${task.description ?? ""}`,
       ].join("\n");
       await submit({ type: "SendChatMessage", chat_id: chatId, body: prompt });
-      await startChatTurn({ chatId, taskId: chatView.chat.task_id, agentId: planningAgent.id, prompt });
+      await startChatTurn({
+        chatId,
+        taskId: chatView.chat.task_id,
+        agentId: planningAgent.id,
+        prompt,
+      });
       useLayoutStore.getState().openChatDock(chatId);
-      setNotice("已打开规划对话。方案生成后可在聊天中编辑、仅创建或确认并开始。");
+      setNotice(
+        "已打开规划对话。方案生成后可在聊天中编辑、仅创建或确认并开始。",
+      );
       await qc.invalidateQueries();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : String(error));
@@ -333,9 +450,42 @@ export function TaskDetailPage() {
     }
   };
 
+  const suggestSplit = async () => {
+    setNotice(null);
+    setSuggestedTitles([]);
+    if (!workspaceId || !principalId) {
+      setNotice("工作区尚未就绪。");
+      return;
+    }
+    if (!assignee) {
+      setNotice("请先为任务分配智能体，再生成拆分建议。");
+      return;
+    }
+    setSuggestBusy(true);
+    try {
+      const suggestion = await window.coordy.suggestTaskSplit(
+        taskSplitRequest({
+          workspaceId,
+          taskId: task.id,
+          principalId,
+        }),
+      );
+      setSuggestedTitles(suggestion.titles);
+      setNotice("已生成拆分建议，确认后再创建。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSuggestBusy(false);
+    }
+  };
+
   const startAssigned = () => {
     if (!assignee || heldByBlockers) return;
-    void startAcpOnTask(task.id, composer.trim() || description.trim() || task.title, assignee)
+    void startAcpOnTask(
+      task.id,
+      composer.trim() || description.trim() || task.title,
+      assignee,
+    )
       .then(async () => {
         setNotice("已派发给智能体，进度将写回该事项。");
         setComposer("");
@@ -358,14 +508,21 @@ export function TaskDetailPage() {
     const files = pickedFilesFromList(list);
     void (async () => {
       for (const file of files) {
-        await submit({ type: "AddAttachment", task_id: task.id, name: file.name, path: file.path });
+        await submit({
+          type: "AddAttachment",
+          task_id: task.id,
+          name: file.name,
+          path: file.path,
+        });
       }
       await refresh();
     })();
   };
 
   return (
-    <section className={cn("flex h-full min-h-0 min-w-0 bg-background", uiText)}>
+    <section
+      className={cn("flex h-full min-h-0 min-w-0 bg-background", uiText)}
+    >
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border/80 px-5">
           <nav className="flex min-w-0 items-center gap-1 text-muted-foreground">
@@ -375,7 +532,9 @@ export function TaskDetailPage() {
               任务
             </Link>
             <ChevronRight className="size-3.5 shrink-0 opacity-40" />
-            <span className="font-mono text-foreground">{taskIdentifier(task)}</span>
+            <span className="font-mono text-foreground">
+              {taskIdentifier(task)}
+            </span>
           </nav>
           <div className="flex shrink-0 items-center gap-0.5">
             <Button
@@ -395,35 +554,66 @@ export function TaskDetailPage() {
                 variant="ghost"
                 aria-label="停止"
                 onClick={() => {
-                  void submit({ type: "CancelRun", run_id: latest.id }).then(async () => {
-                    setNotice("本次运行已停止。更改指派或状态不会自动停止运行；停止须使用此按钮。");
-                    await refresh();
-                  });
+                  void submit({ type: "CancelRun", run_id: latest.id }).then(
+                    async () => {
+                      setNotice(
+                        "本次运行已停止。更改指派或状态不会自动停止运行；停止须使用此按钮。",
+                      );
+                      await refresh();
+                    },
+                  );
                 }}
               >
                 <Square />
               </Button>
             ) : null}
-            <Button type="button" size="icon-sm" variant="ghost" aria-label="复制编号" onClick={copyId}>
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="复制编号"
+              onClick={copyId}
+            >
               <Copy />
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger
-                render={<Button type="button" size="icon-sm" variant="ghost" aria-label="更多" />}
+                render={
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label="更多"
+                  />
+                }
               >
                 <MoreHorizontal />
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className={cn("min-w-44", uiText)}>
-                <DropdownMenuItem disabled={!workPath} onClick={() => workPath && window.coordy.revealFile(workPath)}>
+              <DropdownMenuContent
+                align="end"
+                className={cn("min-w-44", uiText)}
+              >
+                <DropdownMenuItem
+                  disabled={!workPath}
+                  onClick={() => workPath && window.coordy.revealFile(workPath)}
+                >
                   <FolderOpen />
                   打开目录
                 </DropdownMenuItem>
-                <DropdownMenuItem disabled={!workPath} onClick={() => workPath && window.coordy.openTerminal(workPath)}>
+                <DropdownMenuItem
+                  disabled={!workPath}
+                  onClick={() =>
+                    workPath && window.coordy.openTerminal(workPath)
+                  }
+                >
                   <Terminal />
                   打开终端
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(true)}>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setConfirmDelete(true)}
+                >
                   删除事项
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -432,15 +622,23 @@ export function TaskDetailPage() {
         </header>
         {confirmDelete ? (
           <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border/80 px-5 py-1.5">
-            <span className="text-muted-foreground">删除该事项？此操作不可恢复。</span>
-            <button type="button" className="text-muted-foreground hover:text-foreground" onClick={() => setConfirmDelete(false)}>
+            <span className="text-muted-foreground">
+              删除该事项？此操作不可恢复。
+            </span>
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground"
+              onClick={() => setConfirmDelete(false)}
+            >
               取消
             </button>
             <button
               type="button"
               className="text-destructive hover:underline"
               onClick={() => {
-                void submit({ type: "DeleteTask", task_id: task.id }).then(() => navigate("/board"));
+                void submit({ type: "DeleteTask", task_id: task.id }).then(() =>
+                  navigate("/board"),
+                );
               }}
             >
               确认删除
@@ -464,11 +662,22 @@ export function TaskDetailPage() {
               onBlur={persist}
               className={cn("mt-1 min-h-[4.5rem] px-0 py-1", bodyField)}
             />
-            {notice ? <p className={cn("mt-2 text-muted-foreground", uiText)}>{notice}</p> : null}
-            {waitingMessage ? <p className={cn("mt-2 text-destructive", uiText)}>{waitingMessage}</p> : null}
+            {notice ? (
+              <p className={cn("mt-2 text-muted-foreground", uiText)}>
+                {notice}
+              </p>
+            ) : null}
+            {waitingMessage ? (
+              <p className={cn("mt-2 text-destructive", uiText)}>
+                {waitingMessage}
+              </p>
+            ) : null}
 
             {task.task_plan_progress ? (
-              <section aria-label="计划进度" className="mt-4 rounded-lg border border-border/80 bg-muted/20 px-3 py-2.5">
+              <section
+                aria-label="计划进度"
+                className="mt-4 rounded-lg border border-border/80 bg-muted/20 px-3 py-2.5"
+              >
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
                   <span className="font-medium">计划进度</span>
                   <span className="text-xs text-muted-foreground">
@@ -497,7 +706,10 @@ export function TaskDetailPage() {
                   </div>
                 ) : null}
                 <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                  <span>{task.task_plan_progress.done}/{task.task_plan_progress.total} 已完成</span>
+                  <span>
+                    {task.task_plan_progress.done}/
+                    {task.task_plan_progress.total} 已完成
+                  </span>
                   <span>{task.task_plan_progress.running} 运行中</span>
                   <span>{task.task_plan_progress.blocked} 阻塞</span>
                   <span>{task.task_plan_progress.remaining} 待完成</span>
@@ -510,7 +722,10 @@ export function TaskDetailPage() {
                 <Link
                   key={child.id}
                   to={`/board/${child.id}`}
-                  className={cn("flex h-8 items-center gap-2 rounded-md px-1 hover:bg-muted/60", uiText)}
+                  className={cn(
+                    "flex h-8 items-center gap-2 rounded-md px-1 hover:bg-muted/60",
+                    uiText,
+                  )}
                 >
                   <StatusGlyph status={child.status} />
                   <span className="w-[5.25rem] shrink-0 font-mono text-muted-foreground">
@@ -518,6 +733,24 @@ export function TaskDetailPage() {
                   </span>
                   <span className="min-w-0 truncate">{child.title}</span>
                 </Link>
+              ))}
+              {suggestedTitles.map((item) => (
+                <div
+                  key={item}
+                  className={cn(
+                    "flex h-8 items-center justify-between gap-2 px-1",
+                    uiText,
+                  )}
+                >
+                  <span className="truncate text-muted-foreground">{item}</span>
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => void addSubtask(item)}
+                  >
+                    创建
+                  </button>
+                </div>
               ))}
               {addingSubtask ? (
                 <form
@@ -557,6 +790,14 @@ export function TaskDetailPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={suggestBusy}
+                    className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    onClick={() => void suggestSplit()}
+                  >
+                    {suggestBusy ? "正在建议…" : "建议拆分"}
+                  </button>
+                  <button
+                    type="button"
                     disabled={planBusy}
                     className="text-muted-foreground hover:text-foreground disabled:opacity-40"
                     onClick={() => void planInChat()}
@@ -570,13 +811,21 @@ export function TaskDetailPage() {
             {(task.attachments ?? []).length > 0 ? (
               <ul className="mt-4 space-y-1">
                 {(task.attachments ?? []).map((file) => (
-                  <li key={file.id} className={cn("flex items-center gap-2 px-1", uiText)}>
+                  <li
+                    key={file.id}
+                    className={cn("flex items-center gap-2 px-1", uiText)}
+                  >
                     <Paperclip className="size-3.5 text-muted-foreground" />
                     <span className="min-w-0 truncate">{file.name}</span>
                     <button
                       type="button"
                       className="ml-auto text-muted-foreground hover:text-foreground"
-                      onClick={() => void submit({ type: "RemoveAttachment", attachment_id: file.id }).then(refresh)}
+                      onClick={() =>
+                        void submit({
+                          type: "RemoveAttachment",
+                          attachment_id: file.id,
+                        }).then(refresh)
+                      }
                     >
                       删除
                     </button>
@@ -588,7 +837,9 @@ export function TaskDetailPage() {
 
           <div className="mx-auto w-full max-w-[46rem] px-8 pb-8">
             <Separator className="mb-4" />
-            <h2 className={cn("mb-3 font-medium text-foreground", uiText)}>活动</h2>
+            <h2 className={cn("mb-3 font-medium text-foreground", uiText)}>
+              活动
+            </h2>
             {comments.length === 0 && activity.length === 0 ? (
               <p className={cn("text-muted-foreground", uiText)}>
                 暂无评论或执行记录。发表评论不会改负责人；继续执行才会派发给当前负责人。
@@ -599,12 +850,15 @@ export function TaskDetailPage() {
                 <div key={comment.id}>
                   <p className={cn("text-muted-foreground", uiText)}>
                     <span className="text-foreground">
-                      {people.find((person) => person.id === comment.author_id)?.name ?? comment.author_id.slice(0, 8)}
+                      {people.find((person) => person.id === comment.author_id)
+                        ?.name ?? comment.author_id.slice(0, 8)}
                     </span>
                     {" · "}
                     评论
                   </p>
-                  <p className="mt-1 whitespace-pre-wrap text-[15px] leading-6 md:text-[15px]">{comment.body}</p>
+                  <p className="mt-1 whitespace-pre-wrap text-[15px] leading-6 md:text-[15px]">
+                    {comment.body}
+                  </p>
                 </div>
               ))}
               {activity.map((event) => (
@@ -614,9 +868,16 @@ export function TaskDetailPage() {
               ))}
               {runList.map((run) =>
                 run.status === "failed" || run.status === "cancelled" ? (
-                  <div key={`retry-${run.id}`} className={cn("flex items-center justify-between gap-2", uiText)}>
+                  <div
+                    key={`retry-${run.id}`}
+                    className={cn(
+                      "flex items-center justify-between gap-2",
+                      uiText,
+                    )}
+                  >
                     <span className="text-muted-foreground">
-                      {agentList.find((agent) => agent.id === run.agent_id)?.name ?? run.agent_id.slice(0, 8)}
+                      {agentList.find((agent) => agent.id === run.agent_id)
+                        ?.name ?? run.agent_id.slice(0, 8)}
                       · {runStatusLabel(run.status)} · {run.trigger ?? "run"}
                     </span>
                     <button
@@ -629,7 +890,11 @@ export function TaskDetailPage() {
                             await refresh();
                           })
                           .catch((error: unknown) => {
-                            setNotice(error instanceof Error ? error.message : String(error));
+                            setNotice(
+                              error instanceof Error
+                                ? error.message
+                                : String(error),
+                            );
                           });
                       }}
                     >
@@ -642,17 +907,26 @@ export function TaskDetailPage() {
           </div>
         </div>
 
-        <form className="shrink-0 px-8 pb-5 pt-1" onSubmit={(event) => void send(event)}>
+        <form
+          className="shrink-0 px-8 pb-5 pt-1"
+          onSubmit={(event) => void send(event)}
+        >
           <div className="mx-auto w-full max-w-[46rem] rounded-xl border border-border bg-background p-3 shadow-sm">
             <textarea
               rows={3}
-              placeholder={mode === "comment" ? "写评论。输入 @ 可提及智能体，不会改负责人。" : "补充指令，让当前负责人继续执行。"}
+              placeholder={
+                mode === "comment"
+                  ? "写评论。输入 @ 可提及智能体，不会改负责人。"
+                  : "补充指令，让当前负责人继续执行。"
+              }
               value={composer}
               onChange={(event) => {
                 const value = event.target.value;
                 setComposer(value);
                 const cursor = event.target.selectionStart ?? value.length;
-                setMentionOpen(mode === "comment" && value.slice(0, cursor).endsWith("@"));
+                setMentionOpen(
+                  mode === "comment" && value.slice(0, cursor).endsWith("@"),
+                );
               }}
               className={cn("min-h-[4.25rem] p-0.5", bodyField)}
             />
@@ -665,7 +939,9 @@ export function TaskDetailPage() {
                     className="text-muted-foreground hover:text-foreground"
                     onClick={() => {
                       setComposer((current) => {
-                        const trimmed = current.endsWith("@") ? current.slice(0, -1) : current;
+                        const trimmed = current.endsWith("@")
+                          ? current.slice(0, -1)
+                          : current;
                         return insertAgentMention(trimmed, agent.id);
                       });
                       setMentionOpen(false);
@@ -677,10 +953,15 @@ export function TaskDetailPage() {
               </div>
             ) : null}
             {heldByBlockers && mode === "run" ? (
-              <p className={cn("mt-1 text-muted-foreground", uiText)}>前置事项完成前不能开始执行。</p>
+              <p className={cn("mt-1 text-muted-foreground", uiText)}>
+                前置事项完成前不能开始执行。
+              </p>
             ) : null}
             <div className="mt-2 flex items-center gap-1">
-              <ModeTab active={mode === "comment"} onClick={() => setMode("comment")}>
+              <ModeTab
+                active={mode === "comment"}
+                onClick={() => setMode("comment")}
+              >
                 评论
               </ModeTab>
               <ModeTab active={mode === "run"} onClick={() => setMode("run")}>
@@ -710,8 +991,16 @@ export function TaskDetailPage() {
                   type="submit"
                   size="icon-sm"
                   variant={composer.trim() ? "default" : "ghost"}
-                  disabled={!composer.trim() || (mode === "run" && heldByBlockers)}
-                  aria-label={mode === "comment" ? "发表评论" : latest?.status === "running" ? "追加执行" : "开始执行"}
+                  disabled={
+                    !composer.trim() || (mode === "run" && heldByBlockers)
+                  }
+                  aria-label={
+                    mode === "comment"
+                      ? "发表评论"
+                      : latest?.status === "running"
+                        ? "追加执行"
+                        : "开始执行"
+                  }
                 >
                   <ArrowUp />
                 </Button>
@@ -721,22 +1010,37 @@ export function TaskDetailPage() {
         </form>
       </div>
 
-      <aside className={cn("flex w-[17.5rem] shrink-0 flex-col gap-5 overflow-auto border-l border-border/80 px-3 py-4", uiText)}>
+      <aside
+        className={cn(
+          "flex w-[17.5rem] shrink-0 flex-col gap-5 overflow-auto border-l border-border/80 px-3 py-4",
+          uiText,
+        )}
+      >
         <section>
-          <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">属性</h2>
+          <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">
+            属性
+          </h2>
           <div>
-            <PropertyRow icon={<StatusGlyph status={task.status} className="size-4" />}>
+            <PropertyRow
+              icon={<StatusGlyph status={task.status} className="size-4" />}
+            >
               <Select
                 value={task.status}
                 items={TASK_STATUS_ITEMS}
                 onValueChange={(value) => {
                   if (!value) return;
-                  void submit({ type: "SetTaskStatus", task_id: task.id, status: value }).then(refresh);
+                  void submit({
+                    type: "SetTaskStatus",
+                    task_id: task.id,
+                    status: value,
+                  }).then(refresh);
                 }}
               >
                 <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => TASK_STATUS_ITEMS[value || task.status] ?? ""}
+                    {(value: string | null) =>
+                      TASK_STATUS_ITEMS[value || task.status] ?? ""
+                    }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
@@ -751,18 +1055,28 @@ export function TaskDetailPage() {
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow icon={<PriorityGlyph priority={task.priority} className="size-4" />}>
+            <PropertyRow
+              icon={
+                <PriorityGlyph priority={task.priority} className="size-4" />
+              }
+            >
               <Select
                 value={task.priority || "none"}
                 items={PRIORITY_ITEMS}
                 onValueChange={(value) => {
                   if (!value) return;
-                  void submit({ type: "UpdateTask", task_id: task.id, priority: value }).then(refresh);
+                  void submit({
+                    type: "UpdateTask",
+                    task_id: task.id,
+                    priority: value,
+                  }).then(refresh);
                 }}
               >
                 <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => optionLabel(PRIORITY_ITEMS, value || task.priority)}
+                    {(value: string | null) =>
+                      optionLabel(PRIORITY_ITEMS, value || task.priority)
+                    }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
@@ -782,7 +1096,11 @@ export function TaskDetailPage() {
                 value={task.due_date}
                 placeholder="截止日期"
                 onChange={(due_date) => {
-                  void submit({ type: "UpdateTask", task_id: task.id, due_date }).then(refresh);
+                  void submit({
+                    type: "UpdateTask",
+                    task_id: task.id,
+                    due_date,
+                  }).then(refresh);
                 }}
               />
             </PropertyRow>
@@ -801,7 +1119,9 @@ export function TaskDetailPage() {
               >
                 <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => optionLabel(projectItems, value || task.project_id)}
+                    {(value: string | null) =>
+                      optionLabel(projectItems, value || task.project_id)
+                    }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
@@ -817,7 +1137,10 @@ export function TaskDetailPage() {
             <PropertyRow icon={<Tag />}>
               <Select
                 value={task.labels?.[0] ?? "none"}
-                items={Object.fromEntries([["none", "无标签"], ...workspaceLabels.map((label) => [label.name, label.name])])}
+                items={Object.fromEntries([
+                  ["none", "无标签"],
+                  ...workspaceLabels.map((label) => [label.name, label.name]),
+                ])}
                 onValueChange={(value) => {
                   if (!value) return;
                   void submit({
@@ -830,8 +1153,13 @@ export function TaskDetailPage() {
                 <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
                     {(value: string | null) => {
-                      const name = value && value !== "none" ? value : task.labels?.[0];
-                      return name ? name : <span className="text-muted-foreground">无标签</span>;
+                      const name =
+                        value && value !== "none" ? value : task.labels?.[0];
+                      return name ? (
+                        name
+                      ) : (
+                        <span className="text-muted-foreground">无标签</span>
+                      );
                     }}
                   </SelectValue>
                 </SelectTrigger>
@@ -860,22 +1188,36 @@ export function TaskDetailPage() {
                 onValueChange={(value) => {
                   if (!value) return;
                   if (value === "none") {
-                    void submit({ type: "AssignIssue", task_id: task.id, agent_id: "" }).then(refresh);
+                    void submit({
+                      type: "AssignIssue",
+                      task_id: task.id,
+                      agent_id: "",
+                    }).then(refresh);
                     return;
                   }
-                  void submit({ type: "AssignTask", task_id: task.id, agent_id: value }).then(refresh);
+                  void submit({
+                    type: "AssignTask",
+                    task_id: task.id,
+                    agent_id: value,
+                  }).then(refresh);
                 }}
               >
                 <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => optionLabel(agentItems, value || assignee)}
+                    {(value: string | null) =>
+                      optionLabel(agentItems, value || assignee)
+                    }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
                   <FieldItem value="none">未指派智能体</FieldItem>
                   {agentList.map((agent) => (
                     <FieldItem key={agent.id} value={agent.id}>
-                      <NamedAgent agent={agent} catalog={catalog.data} avatarClassName="size-4" />
+                      <NamedAgent
+                        agent={agent}
+                        catalog={catalog.data}
+                        avatarClassName="size-4"
+                      />
                     </FieldItem>
                   ))}
                 </SelectContent>
@@ -896,7 +1238,12 @@ export function TaskDetailPage() {
               >
                 <SelectTrigger className={fieldTrigger}>
                   <SelectValue>
-                    {(value: string | null) => optionLabel(peopleItems, value || task.assignee_principal_id)}
+                    {(value: string | null) =>
+                      optionLabel(
+                        peopleItems,
+                        value || task.assignee_principal_id,
+                      )
+                    }
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent className={uiText}>
@@ -910,39 +1257,41 @@ export function TaskDetailPage() {
               </Select>
             </PropertyRow>
             {squadList.length > 0 ? (
-            <PropertyRow icon={<Users />}>
-              <Select
-                value={task.assignee_squad_id || "none"}
-                items={squadItems}
-                onValueChange={(value) => {
-                  if (!value) return;
-                  void submit({
-                    type: "AssignIssue",
-                    task_id: task.id,
-                    squad_id: value === "none" ? "" : value,
-                  }).then(async () => {
-                    if (value !== "none" && task.status !== "backlog") {
-                      setNotice("已指派小队，并向领队启动运行。");
-                    }
-                    await refresh();
-                  });
-                }}
-              >
-                <SelectTrigger className={fieldTrigger}>
-                  <SelectValue>
-                    {(value: string | null) => optionLabel(squadItems, value || task.assignee_squad_id)}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className={uiText}>
-                  <FieldItem value="none">未指派小队</FieldItem>
-                  {squadList.map((squad) => (
-                    <FieldItem key={squad.id} value={squad.id}>
-                      {squad.name}
-                    </FieldItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </PropertyRow>
+              <PropertyRow icon={<Users />}>
+                <Select
+                  value={task.assignee_squad_id || "none"}
+                  items={squadItems}
+                  onValueChange={(value) => {
+                    if (!value) return;
+                    void submit({
+                      type: "AssignIssue",
+                      task_id: task.id,
+                      squad_id: value === "none" ? "" : value,
+                    }).then(async () => {
+                      if (value !== "none" && task.status !== "backlog") {
+                        setNotice("已指派小队，并向领队启动运行。");
+                      }
+                      await refresh();
+                    });
+                  }}
+                >
+                  <SelectTrigger className={fieldTrigger}>
+                    <SelectValue>
+                      {(value: string | null) =>
+                        optionLabel(squadItems, value || task.assignee_squad_id)
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className={uiText}>
+                    <FieldItem value="none">未指派小队</FieldItem>
+                    {squadList.map((squad) => (
+                      <FieldItem key={squad.id} value={squad.id}>
+                        {squad.name}
+                      </FieldItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </PropertyRow>
             ) : null}
           </div>
         </section>
@@ -951,27 +1300,48 @@ export function TaskDetailPage() {
           <IssuePullRequests
             taskId={taskId}
             pullRequests={task.pull_requests ?? []}
-            github={settingsQuery.data?.type === "Settings" ? settingsQuery.data.github : undefined}
+            github={
+              settingsQuery.data?.type === "Settings"
+                ? settingsQuery.data.github
+                : undefined
+            }
             onChanged={refresh}
           />
         ) : null}
 
         <section>
-          <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">前置事项</h2>
+          <h2 className="mb-1 px-1.5 font-medium text-muted-foreground">
+            前置事项
+          </h2>
           {blockers.map((blocker) => (
-            <div key={blocker.id} className="flex h-8 items-center gap-2 rounded-md px-1.5 hover:bg-muted/60">
+            <div
+              key={blocker.id}
+              className="flex h-8 items-center gap-2 rounded-md px-1.5 hover:bg-muted/60"
+            >
               <StatusGlyph status={blocker.status} className="size-4" />
-              <Link to={`/board/${blocker.id}`} className="min-w-0 flex-1 truncate">
-                <span className="font-mono text-muted-foreground">{taskIdentifier(blocker)}</span> {blocker.title}
+              <Link
+                to={`/board/${blocker.id}`}
+                className="min-w-0 flex-1 truncate"
+              >
+                <span className="font-mono text-muted-foreground">
+                  {taskIdentifier(blocker)}
+                </span>{" "}
+                {blocker.title}
               </Link>
               <button
                 type="button"
                 className="shrink-0 text-muted-foreground hover:text-foreground"
                 onClick={() => {
-                  void submit({ type: "RemoveIssueBlocker", task_id: task.id, blocker_id: blocker.id })
+                  void submit({
+                    type: "RemoveIssueBlocker",
+                    task_id: task.id,
+                    blocker_id: blocker.id,
+                  })
                     .then(refresh)
                     .catch((error: unknown) => {
-                      setNotice(error instanceof Error ? error.message : String(error));
+                      setNotice(
+                        error instanceof Error ? error.message : String(error),
+                      );
                     });
                 }}
               >
@@ -989,16 +1359,26 @@ export function TaskDetailPage() {
                   return;
                 }
                 setBlockerPick("none");
-                void submit({ type: "AddIssueBlocker", task_id: task.id, blocker_id: value })
+                void submit({
+                  type: "AddIssueBlocker",
+                  task_id: task.id,
+                  blocker_id: value,
+                })
                   .then(refresh)
                   .catch((error: unknown) => {
-                    setNotice(error instanceof Error ? error.message : String(error));
+                    setNotice(
+                      error instanceof Error ? error.message : String(error),
+                    );
                   });
               }}
             >
-              <SelectTrigger className={cn(fieldTrigger, "text-muted-foreground")}>
+              <SelectTrigger
+                className={cn(fieldTrigger, "text-muted-foreground")}
+              >
                 <SelectValue>
-                  {() => <span className="text-muted-foreground">选择前置事项</span>}
+                  {() => (
+                    <span className="text-muted-foreground">选择前置事项</span>
+                  )}
                 </SelectValue>
               </SelectTrigger>
               <SelectContent className={uiText}>
@@ -1022,16 +1402,35 @@ export function TaskDetailPage() {
   );
 }
 
-function optionLabel(items: Record<string, string>, value: string | null | undefined, empty = "none") {
+function optionLabel(
+  items: Record<string, string>,
+  value: string | null | undefined,
+  empty = "none",
+) {
   const key = !value || value === empty ? empty : value;
-  return <span className={cn("truncate", key === empty && "text-muted-foreground")}>{items[key] ?? ""}</span>;
+  return (
+    <span className={cn("truncate", key === empty && "text-muted-foreground")}>
+      {items[key] ?? ""}
+    </span>
+  );
 }
 
 function FieldItem({ className, ...props }: ComponentProps<typeof SelectItem>) {
-  return <SelectItem className={cn("text-[13px] md:text-[13px]", className)} {...props} />;
+  return (
+    <SelectItem
+      className={cn("text-[13px] md:text-[13px]", className)}
+      {...props}
+    />
+  );
 }
 
-function PropertyRow({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+function PropertyRow({
+  icon,
+  children,
+}: {
+  icon: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <div className="relative flex h-8 items-center gap-2 rounded-md px-1.5 text-[13px] md:text-[13px] hover:bg-muted/60">
       <span className="pointer-events-none relative z-10 flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
@@ -1060,7 +1459,9 @@ function ModeTab({
       onClick={onClick}
       className={cn(
         "rounded-md px-1.5 py-0.5 text-[13px] md:text-[13px] transition-colors",
-        active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground",
+        active
+          ? "font-medium text-foreground"
+          : "text-muted-foreground hover:text-foreground",
       )}
     >
       {children}

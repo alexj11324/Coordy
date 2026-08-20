@@ -120,7 +120,7 @@ export function harnessLabel(harness: string): string {
     case "kiro":
       return "Kiro CLI";
     case "antigravity":
-      return "Antigravity";
+      return "Antigravity CLI";
     case "grok":
       return "Grok Build";
     case "qoder":
@@ -202,18 +202,32 @@ export function listableAgents(agents: AgentView[]): AgentView[] {
   return agents.filter((agent) => !isPlaceholderHarness(agent.harness));
 }
 
-export function selectableRuntimes(catalog: DiscoveredAgentView[] | undefined): DiscoveredAgentView[] {
+export function selectableRuntimes(
+  catalog: DiscoveredAgentView[] | undefined,
+): DiscoveredAgentView[] {
   return (catalog ?? []).filter(runtimeIsLaunchable);
 }
 
-export function runtimeIsLaunchable(item: DiscoveredAgentView | undefined): boolean {
-  if (!item || item.launch_state === "missing") return false;
-  return (
-    item.installed ||
-    item.launch_state === "ready" ||
-    item.launch_state === "on_demand" ||
-    (item.source === "registry" && Boolean(item.command.trim()))
-  );
+export function runtimeIsLaunchable(
+  item: DiscoveredAgentView | undefined,
+): boolean {
+  return runtimeReadiness(item).launchable;
+}
+
+export function initialRuntimeId(
+  catalog: DiscoveredAgentView[] | undefined,
+  requestedId?: string | null,
+  savedId?: string | null,
+): string {
+  const selectable = selectableRuntimes(catalog);
+  for (const candidate of [requestedId, savedId]) {
+    if (!candidate) continue;
+    const match = selectable.find((item) =>
+      harnessIdsMatch(item.id, candidate),
+    );
+    if (match) return match.id;
+  }
+  return selectable[0]?.id ?? "";
 }
 
 export function pickerRuntimes(
@@ -221,7 +235,11 @@ export function pickerRuntimes(
   selectedId?: string,
 ): DiscoveredAgentView[] {
   const visible = catalog ?? [];
-  if (!selectedId || visible.some((item) => harnessIdsMatch(item.id, selectedId))) return visible;
+  if (
+    !selectedId ||
+    visible.some((item) => harnessIdsMatch(item.id, selectedId))
+  )
+    return visible;
   const extra = catalogItemForHarness(catalog, selectedId);
   return extra ? [extra, ...visible] : visible;
 }
@@ -234,14 +252,40 @@ export function osShortLabel(os?: string | null): string {
 }
 
 /** Chip / dropdown title: provider identity only. */
-export function runtimeChipLabel(item: { id: string; name: string }, os?: string | null): string {
+export function runtimeChipLabel(
+  item: { id: string; name: string },
+  os?: string | null,
+): string {
   void os;
   return item.name.trim() || harnessLabel(item.id);
 }
 
-export function runtimeSubtitle(item?: { command?: string; protocol_family?: string | null }): string {
+export function runtimeSubtitle(item?: {
+  command?: string;
+  protocol_family?: string | null;
+}): string {
   void item;
   return "";
+}
+
+export function runtimeReadinessLabel(item: {
+  installed: boolean;
+  launch_state?: string | null;
+}): "已安装" | "未安装" {
+  return runtimeReadiness(item).label;
+}
+
+export function runtimeReadiness(
+  item: { installed: boolean; launch_state?: string | null } | undefined,
+): {
+  label: "已安装" | "未安装";
+  tone: "green" | "red";
+  launchable: boolean;
+} {
+  if (item?.installed) {
+    return { label: "已安装", tone: "green", launchable: true };
+  }
+  return { label: "未安装", tone: "red", launchable: false };
 }
 
 export function healthLabel(status: string): string {
@@ -259,8 +303,10 @@ export function daemonConnectionStatus(input: {
 }): { tone: LampTone; label: string } {
   if (input.isError) return { tone: "red", label: "离线" };
   if (!input.status) return { tone: "yellow", label: "连接中" };
-  if (input.status === "ok") return { tone: "green", label: healthLabel(input.status) };
-  if (input.status === "connecting") return { tone: "yellow", label: healthLabel(input.status) };
+  if (input.status === "ok")
+    return { tone: "green", label: healthLabel(input.status) };
+  if (input.status === "connecting")
+    return { tone: "yellow", label: healthLabel(input.status) };
   return { tone: "red", label: healthLabel(input.status) };
 }
 
@@ -321,7 +367,10 @@ export function eventKindLabel(kind: string): string {
   }
 }
 
-export function formatActivity(event: { kind: string; payload: string }): { label: string; body: string } {
+export function formatActivity(event: { kind: string; payload: string }): {
+  label: string;
+  body: string;
+} {
   const described = describeActivity(event);
   if (described.tone === "message") {
     return { label: described.label, body: described.body };

@@ -30,7 +30,12 @@ export type GraphEdgeState =
   | "superseded";
 
 export type TaskPlanParent =
-  | { mode: "create"; title: string; description?: string; project_id?: string | null }
+  | {
+      mode: "create";
+      title: string;
+      description?: string;
+      project_id?: string | null;
+    }
   | { mode: "existing"; task_id: string };
 export type TaskPlanAssignee =
   | { type: "agent"; id: string }
@@ -80,9 +85,35 @@ export type Command =
   | { type: "LeaveWorkspace"; workspace_id: string }
   | { type: "CreatePrincipal"; workspace_id: string; name: string }
   | { type: "UpdatePrincipal"; principal_id: string; name: string }
-  | { type: "InvitePrincipal"; workspace_id: string; name: string; role?: string }
+  | {
+      type: "InvitePrincipal";
+      workspace_id: string;
+      name: string;
+      role?: string;
+    }
   | { type: "SetPrincipalRole"; principal_id: string; role: string }
-  | { type: "CreateAgent"; workspace_id: string; principal_id: string; name: string; harness: string }
+  | {
+      type: "CreateAgent";
+      workspace_id: string;
+      principal_id: string;
+      name: string;
+      harness: string;
+    }
+  | {
+      type: "CreateConfiguredAgent";
+      workspace_id: string;
+      principal_id: string;
+      name: string;
+      harness: string;
+      description?: string;
+      instructions?: string;
+      avatar?: string;
+      model?: string;
+      thinking?: string;
+      speed?: string;
+      access?: string;
+      tool_access?: string;
+    }
   | {
       type: "UpdateAgent";
       agent_id: string;
@@ -103,10 +134,28 @@ export type Command =
     }
   | { type: "ArchiveAgent"; agent_id: string }
   | { type: "DuplicateAgent"; agent_id: string }
-  | { type: "Grant"; workspace_id: string; grantee_id: string; resource: string; action: string }
+  | {
+      type: "Grant";
+      workspace_id: string;
+      grantee_id: string;
+      resource: string;
+      action: string;
+    }
   | { type: "RevokeGrant"; grant_id: string }
-  | { type: "Delegate"; workspace_id: string; from_actor_id: string; to_actor_id: string; resource: string; action: string }
-  | { type: "CreateTask"; workspace_id: string; title: string; description?: string }
+  | {
+      type: "Delegate";
+      workspace_id: string;
+      from_actor_id: string;
+      to_actor_id: string;
+      resource: string;
+      action: string;
+    }
+  | {
+      type: "CreateTask";
+      workspace_id: string;
+      title: string;
+      description?: string;
+    }
   | {
       type: "SaveTaskPlanProposal";
       proposal_id?: string | null;
@@ -147,7 +196,12 @@ export type Command =
   | { type: "DeleteTask"; task_id: string }
   | { type: "SubscribeTask"; task_id: string }
   | { type: "UnsubscribeTask"; task_id: string }
-  | { type: "ReorderTasks"; workspace_id: string; status: string; task_ids: string[] }
+  | {
+      type: "ReorderTasks";
+      workspace_id: string;
+      status: string;
+      task_ids: string[];
+    }
   | { type: "AddAttachment"; task_id: string; name: string; path: string }
   | { type: "RemoveAttachment"; attachment_id: string }
   | { type: "BindRepository"; workspace_id: string; path: string }
@@ -162,11 +216,23 @@ export type Command =
       authority: string;
       scope: string;
     }
-  | { type: "AppendMemory"; workspace_id: string; visibility: string; body: string; owner_actor_id?: string | null }
+  | {
+      type: "AppendMemory";
+      workspace_id: string;
+      visibility: string;
+      body: string;
+      owner_actor_id?: string | null;
+    }
   | { type: "PublishMemory"; memory_id: string }
   | { type: "ShareMemory"; memory_id: string; to_principal_id: string }
   | { type: "AcceptShare"; memory_id: string }
-  | { type: "ProposeContract"; workspace_id: string; title: string; body: string; participant_ids: string[] }
+  | {
+      type: "ProposeContract";
+      workspace_id: string;
+      title: string;
+      body: string;
+      participant_ids: string[];
+    }
   | { type: "ApproveContract"; contract_id: string }
   | {
       type: "StartRun";
@@ -192,9 +258,17 @@ export type Command =
       origin_run_id?: string | null;
       selector_path?: string | null;
     }
-  | { type: "ReaffirmDependency"; dependency_id: string; expected_generation: number }
+  | {
+      type: "ReaffirmDependency";
+      dependency_id: string;
+      expected_generation: number;
+    }
   | { type: "RemoveDependency"; dependency_id: string }
-  | { type: "SetWorkspaceConductor"; workspace_id: string; agent_id?: string | null }
+  | {
+      type: "SetWorkspaceConductor";
+      workspace_id: string;
+      agent_id?: string | null;
+    }
   | {
       type: "ValidationDecision";
       dependency_id: string;
@@ -211,7 +285,13 @@ export type Command =
   | { type: "ArchiveInbox"; item_id: string }
   | { type: "SetInboxRead"; item_id: string; read: boolean }
   | { type: "SetNotificationPrefs"; workspace_id: string; kinds: string[] }
-  | { type: "CreateProject"; workspace_id: string; name: string; icon?: string; description?: string }
+  | {
+      type: "CreateProject";
+      workspace_id: string;
+      name: string;
+      icon?: string;
+      description?: string;
+    }
   | {
       type: "UpdateProject";
       project_id: string;
@@ -226,12 +306,27 @@ export type Command =
       resource?: string | null;
     }
   | { type: "DeleteProject"; project_id: string }
-  | { type: "CreateSquad"; workspace_id: string; name: string; leader_agent_id: string }
-  | { type: "UpdateSquad"; squad_id: string; name?: string | null; leader_agent_id?: string | null }
+  | {
+      type: "CreateSquad";
+      workspace_id: string;
+      name: string;
+      leader_agent_id: string;
+    }
+  | {
+      type: "UpdateSquad";
+      squad_id: string;
+      name?: string | null;
+      leader_agent_id?: string | null;
+    }
   | { type: "SetSquadMembers"; squad_id: string; agent_ids: string[] }
   | { type: "DeleteSquad"; squad_id: string }
   | { type: "CreateSkill"; workspace_id: string; name: string; body: string }
-  | { type: "UpdateSkill"; skill_id: string; name?: string | null; body?: string | null }
+  | {
+      type: "UpdateSkill";
+      skill_id: string;
+      name?: string | null;
+      body?: string | null;
+    }
   | { type: "DeleteSkill"; skill_id: string }
   | { type: "SetAgentSkills"; agent_id: string; skill_ids: string[] }
   | {
@@ -255,26 +350,64 @@ export type Command =
   | { type: "TriggerAutomation"; automation_id: string }
   | { type: "SweepAutomations"; now_ms: number }
   | { type: "DeleteAutomation"; automation_id: string }
-  | { type: "AddComment"; task_id: string; body: string; parent_id?: string | null; mentions?: Mention[] }
+  | {
+      type: "AddComment";
+      task_id: string;
+      body: string;
+      parent_id?: string | null;
+      mentions?: Mention[];
+    }
   | { type: "ResolveComment"; comment_id: string; resolved: boolean }
   | { type: "SetCommentConclusion"; comment_id: string }
   | { type: "AddReaction"; target_id: string; emoji: string }
-  | { type: "CreateChat"; workspace_id: string; agent_id: string; project_id?: string | null }
+  | {
+      type: "CreateChat";
+      workspace_id: string;
+      agent_id: string;
+      project_id?: string | null;
+    }
   | { type: "SendChatMessage"; chat_id: string; body: string }
   | { type: "StopChat"; chat_id: string }
   | { type: "ArchiveChat"; chat_id: string }
-  | { type: "StartMentionRun"; task_id: string; agent_id: string; prompt: string }
+  | {
+      type: "StartMentionRun";
+      task_id: string;
+      agent_id: string;
+      prompt: string;
+    }
   | { type: "RetryRun"; run_id: string }
-  | { type: "SetDirectoryLock"; workspace_id: string; path: string; locked: boolean }
-  | { type: "RegisterComputer"; workspace_id: string; name: string; kind?: string; concurrency_limit?: number }
+  | {
+      type: "SetDirectoryLock";
+      workspace_id: string;
+      path: string;
+      locked: boolean;
+    }
+  | {
+      type: "RegisterComputer";
+      workspace_id: string;
+      name: string;
+      kind?: string;
+      concurrency_limit?: number;
+    }
   | { type: "CreateLabel"; workspace_id: string; name: string; color?: string }
   | { type: "DeleteLabel"; workspace_id: string; name: string }
-  | { type: "SetCustomPropertyDef"; workspace_id: string; key: string; value_type: string }
+  | {
+      type: "SetCustomPropertyDef";
+      workspace_id: string;
+      key: string;
+      value_type: string;
+    }
   | { type: "LinkPullRequest"; task_id: string; number: number; url?: string }
   | { type: "UnlinkPullRequest"; task_id: string; number: number }
   | { type: "RefreshGithub"; workspace_id: string }
   | ({ type: "SyncGithubPullRequests" } & GithubSync)
-  | { type: "SetIntegration"; workspace_id: string; kind: string; enabled: boolean; config?: string };
+  | {
+      type: "SetIntegration";
+      workspace_id: string;
+      kind: string;
+      enabled: boolean;
+      config?: string;
+    };
 
 export type RunSource =
   | { type: "Jsonl"; path: string }
@@ -287,7 +420,13 @@ export type RunSource =
 export type HarnessEvent =
   | { type: "Message"; role: string; content: string }
   | { type: "Compaction"; summary: string }
-  | { type: "Tool"; name: string; input: string; output: string; exit_code?: number | null }
+  | {
+      type: "Tool";
+      name: string;
+      input: string;
+      output: string;
+      exit_code?: number | null;
+    }
   | { type: "Patch"; diff: string };
 
 export type Query =
@@ -326,7 +465,11 @@ export type Query =
 export type AuthenticatedCommand = { actor: Actor; command: Command };
 export type AuthorizedQuery = { actor: Actor; query: Query };
 
-export type Outcome = { message: string; ids: Record<string, unknown>; blocked: boolean };
+export type Outcome = {
+  message: string;
+  ids: Record<string, unknown>;
+  blocked: boolean;
+};
 
 export type HealthView = {
   status: string;
@@ -463,7 +606,12 @@ export type CommitmentView = {
   authority: string;
   status: string;
 };
-export type PrincipalView = { id: string; workspace_id: string; name: string; role?: string };
+export type PrincipalView = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  role?: string;
+};
 export type AgentView = {
   id: string;
   workspace_id: string;
@@ -608,7 +756,11 @@ export type RunView = {
   trigger?: string;
   role?: RunRole;
 };
-export type RunRole = "executor" | "validator" | "conductor_review" | "human_approval";
+export type RunRole =
+  | "executor"
+  | "validator"
+  | "conductor_review"
+  | "human_approval";
 export type ValidationChoice = "reaffirm" | "hold" | "remove" | "replan";
 export type ReviewPacket = {
   dependency_id: string;
@@ -654,7 +806,12 @@ export type SquadView = {
   leader_agent_id: string;
   member_agent_ids?: string[];
 };
-export type SkillView = { id: string; workspace_id: string; name: string; body: string };
+export type SkillView = {
+  id: string;
+  workspace_id: string;
+  name: string;
+  body: string;
+};
 export type AutomationView = {
   id: string;
   workspace_id: string;
@@ -712,11 +869,19 @@ export type StatsView = {
   run_count: number;
   project_count: number;
 };
-export type AccountView = { principal_id: string; name: string; notify_desktop?: boolean };
-export type AgentContextView = { agent_id: string; commitments: string[]; memory: MemoryView[] };
+export type AccountView = {
+  principal_id: string;
+  name: string;
+  notify_desktop?: boolean;
+};
+export type AgentContextView = {
+  agent_id: string;
+  commitments: string[];
+  memory: MemoryView[];
+};
 
 export type View =
-  | { type: "Health" } & HealthView
+  | ({ type: "Health" } & HealthView)
   | { type: "Workspaces"; items: WorkspaceView[] }
   | { type: "Board"; tasks: TaskView[] }
   | { type: "TaskPlan"; proposal: TaskPlanProposalView }
@@ -728,7 +893,7 @@ export type View =
   | { type: "Contracts"; items: ContractView[] }
   | { type: "Dependencies"; items: DependencyView[] }
   | GraphSnapshotView
-  | { type: "GraphEvaluation" } & GraphEvaluationView
+  | ({ type: "GraphEvaluation" } & GraphEvaluationView)
   | { type: "Conflicts"; items: ConflictView[] }
   | { type: "Runs"; items: RunView[] }
   | { type: "Run"; run: RunView; events: RunEventView[] }
@@ -742,7 +907,7 @@ export type View =
       github?: GithubView;
     }
   | { type: "AgentContext"; context: AgentContextView }
-  | { type: "Workspace" } & WorkspaceView
+  | ({ type: "Workspace" } & WorkspaceView)
   | { type: "Projects"; items: ProjectView[] }
   | { type: "Squads"; items: SquadView[] }
   | { type: "Skills"; items: SkillView[] }
@@ -768,11 +933,21 @@ export type Effect =
   | { type: "Pause"; run_id: string; reason: string }
   | { type: "Replan"; run_id: string; reason: string }
   | { type: "StateChanged"; workspace_id: string }
-  | { type: "GraphDelta"; workspace_id: string; revision: number; cursor: number };
+  | {
+      type: "GraphDelta";
+      workspace_id: string;
+      revision: number;
+      cursor: number;
+    };
 
 export type CoordyError = { code: string; message: string };
 
-export type AppInfo = { version: string; os: string; cliPath?: string; hostname?: string };
+export type AppInfo = {
+  version: string;
+  os: string;
+  cliPath?: string;
+  hostname?: string;
+};
 export type InstallCliResult = { ok: boolean; message: string };
 export type DiscoveredAgentView = {
   id: string;
@@ -784,14 +959,24 @@ export type DiscoveredAgentView = {
   version?: string | null;
   protocol_family?: string | null;
 };
-export type ImportAgentsResult = { imported: string[]; skipped: string[] };
-export type DraftCompletion = {
-  kind: string;
-  name?: string;
+export type HarnessThinkingView = {
+  id: string;
+  label: string;
   description?: string;
-  instructions?: string;
-  titles?: string[];
 };
+export type HarnessModelView = {
+  id: string;
+  label: string;
+  default?: boolean;
+  thinking?: HarnessThinkingView[];
+};
+export type HarnessModelCatalog = {
+  models: HarnessModelView[];
+  model_selection_supported: boolean;
+  source: "discovered" | "runtime" | "unavailable" | string;
+};
+export type ImportAgentsResult = { imported: string[]; skipped: string[] };
+export type TaskSplitSuggestion = { titles: string[] };
 export type DetectedHarnessView = { kind: string; binary: string };
 export type SecretStatus = {
   provider: string;

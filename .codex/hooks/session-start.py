@@ -231,8 +231,9 @@ def _get_task_status(trellis_dir: Path, hook_input: dict) -> str:
     if not active.task_path:
         return (
             "Status: NO ACTIVE TASK\n"
-            "Next: Classify the current turn and ask for task-creation consent "
-            "before creating any Trellis task."
+            "Next: Classify the current turn autonomously. Answer a one-reply conversation "
+            "directly; for substantive changes, research, or multi-step validation, create and "
+            "plan a Trellis task without asking for process consent."
         )
 
     task_ref = active.task_path
@@ -279,11 +280,15 @@ def _get_task_status(trellis_dir: Path, hook_input: dict) -> str:
 
     if task_status == "planning":
         if has_design and has_implement:
-            next_action = "Review planning artifacts with the user before `task.py start`."
+            next_action = (
+                "Review the planning evidence. For an explicit implementation request, run "
+                "`task.py start` when no unresolved user-owned decision remains."
+            )
         else:
             next_action = (
-                "Lightweight task can ask for start review with PRD-only; "
-                "complex task must add design.md and implement.md before `task.py start`."
+                "A lightweight task can start with PRD-only for an explicit implementation request "
+                "when no unresolved user-owned decision remains; a complex task must add design.md "
+                "and implement.md before `task.py start`."
             )
         return (
             f"Status: PLANNING\nTask: {task_title}\nPresent: {present_line}\n"

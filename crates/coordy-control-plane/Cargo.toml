@@ -2,7 +2,7 @@
 name = "coordy-control-plane"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license-file.workspace = true
 
 [dependencies]
 coordy-protocol.workspace = true
