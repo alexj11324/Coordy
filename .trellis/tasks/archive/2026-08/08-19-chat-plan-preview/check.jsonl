@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/tasks/08-19-conversation-task-decomposition/prd.md", "reason": "Check all preview, edit, regeneration, and confirmation acceptance criteria."}
+{"file": ".trellis/tasks/08-19-conversation-task-decomposition/design.md", "reason": "Check renderer stays outside authority and contract ownership."}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Check the existing task detail and chat surfaces are consolidated."}

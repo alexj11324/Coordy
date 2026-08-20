@@ -24,6 +24,7 @@ import type {
   SquadView,
   StatsView,
   TaskView,
+  TaskPlanProposalView,
   View,
   WorkspaceView,
 } from "@coordy/protocol";
@@ -116,8 +117,13 @@ export function asChats(view: View | undefined): ChatView[] {
 
 export function asChatDetail(
   view: View | undefined,
-): { chat: ChatView; messages: ChatMessageView[] } | null {
-  return view?.type === "Chat" ? { chat: view.chat, messages: view.messages } : null;
+): { chat: ChatView; messages: ChatMessageView[]; taskPlan: TaskPlanProposalView | null; taskPlanError: string | null } | null {
+  return view?.type === "Chat" ? {
+    chat: view.chat,
+    messages: view.messages,
+    taskPlan: view.task_plan ?? null,
+    taskPlanError: view.task_plan_error ?? null,
+  } : null;
 }
 
 export function asLabels(view: View | undefined): LabelView[] {

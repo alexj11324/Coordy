@@ -181,6 +181,87 @@ fn issue_blocker_command_keeps_pascal_variant() {
 }
 
 #[test]
+fn task_plan_commands_round_trip_with_versioned_children() {
+    use coordy_protocol::{
+        Command, TaskPlanApplyMode, TaskPlanAssignee, TaskPlanChild, TaskPlanDraft, TaskPlanParent,
+        TASK_PLAN_VERSION,
+    };
+
+    let draft = TaskPlanDraft {
+        version: TASK_PLAN_VERSION.into(),
+        workspace_id: "ws".into(),
+        chat_id: "chat_1".into(),
+        source_run_id: "run_1".into(),
+        source_agent_id: "agent_1".into(),
+        parent: TaskPlanParent::Create {
+            title: "Ship release".into(),
+            description: "Parent outcome".into(),
+            project_id: Some("project_1".into()),
+        },
+        children: vec![TaskPlanChild {
+            key: "build".into(),
+            title: "Build".into(),
+            description: "Produce the build".into(),
+            acceptance_criteria: vec!["Artifact exists".into()],
+            priority: "high".into(),
+            stage: 1,
+            depends_on: vec![],
+            assignee: Some(TaskPlanAssignee::Agent {
+                id: "agent_1".into(),
+            }),
+        }],
+    };
+    let save = Command::SaveTaskPlanProposal {
+        proposal_id: None,
+        expected_revision: None,
+        draft,
+    };
+    let value = serde_json::to_value(&save).unwrap();
+    assert_eq!(value["type"], "SaveTaskPlanProposal");
+    assert_eq!(value["draft"]["version"], TASK_PLAN_VERSION);
+    assert_eq!(value["draft"]["children"][0]["assignee"]["type"], "agent");
+    assert_eq!(serde_json::from_value::<Command>(value).unwrap(), save);
+
+    let existing_parent = TaskPlanParent::Existing {
+        task_id: "task_parent".into(),
+    };
+    let value = serde_json::to_value(&existing_parent).unwrap();
+    assert_eq!(value["mode"], "existing");
+    assert_eq!(value["task_id"], "task_parent");
+    assert_eq!(
+        serde_json::from_value::<TaskPlanParent>(value).unwrap(),
+        existing_parent
+    );
+
+    let apply = Command::ApplyTaskPlan {
+        proposal_id: "plan_1".into(),
+        expected_revision: 2,
+        idempotency_key: "confirm-1".into(),
+        mode: TaskPlanApplyMode::ConfirmAndStart,
+    };
+    let value = serde_json::to_value(&apply).unwrap();
+    assert_eq!(value["type"], "ApplyTaskPlan");
+    assert_eq!(value["mode"], "confirm_and_start");
+    assert_eq!(serde_json::from_value::<Command>(value).unwrap(), apply);
+}
+
+#[test]
+fn task_plan_contract_rejects_unknown_child_fields() {
+    let error = serde_json::from_value::<coordy_protocol::TaskPlanChild>(json!({
+        "key": "build",
+        "title": "Build",
+        "description": "Produce the build",
+        "acceptance_criteria": ["Artifact exists"],
+        "priority": "high",
+        "stage": 1,
+        "depends_on": [],
+        "invented_authority": true
+    }))
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown field"));
+}
+
+#[test]
 fn reaffirm_and_remove_dependency_keep_pascal_variant() {
     let reaffirm = serde_json::to_value(coordy_protocol::Command::ReaffirmDependency {
         dependency_id: "dep_1".into(),
@@ -229,4 +310,5 @@ fn task_view_blocker_fields_default_when_omitted() {
     assert!(view.blocker_ids.is_empty());
     assert!(view.blocking_ids.is_empty());
     assert!(view.unresolved_blocker_ids.is_empty());
+    assert!(view.task_plan_progress.is_none());
 }

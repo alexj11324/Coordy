@@ -79,6 +79,42 @@ pub struct World {
     pub graph_runs: Vec<GraphRun>,
     #[serde(default)]
     pub node_attempts: Vec<NodeAttempt>,
+    #[serde(default)]
+    pub task_plan_proposals: Vec<TaskPlanProposalRecord>,
+    #[serde(default)]
+    pub task_plan_applications: Vec<TaskPlanApplication>,
+    #[serde(default)]
+    pub task_plan_auto_completed_parent_ids: Vec<String>,
+    #[serde(default)]
+    pub task_plan_artifact_errors: Vec<TaskPlanArtifactError>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskPlanArtifactError {
+    pub chat_id: String,
+    pub run_id: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskPlanProposalRecord {
+    pub id: String,
+    pub revision: u64,
+    pub created_by: String,
+    pub created_at: String,
+    pub draft: coordy_protocol::TaskPlanDraft,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TaskPlanApplication {
+    pub proposal_id: String,
+    pub proposal_revision: u64,
+    pub idempotency_key: String,
+    pub applied_by: String,
+    pub applied_at: String,
+    pub mode: coordy_protocol::TaskPlanApplyMode,
+    pub parent_task_id: String,
+    pub child_task_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -23,7 +23,7 @@ use crate::verification::{
 };
 use crate::world::{
     Agent, AuditEntry, Commitment, CompactionSnapshot, Contract, EffectRecord, Grant, InboxItem,
-    MemoryRecord, Principal, Run, RunEvent, Task, Workspace, World,
+    MemoryRecord, Principal, Run, RunEvent, Task, TaskPlanArtifactError, Workspace, World,
 };
 use crate::{ids, memory};
 
@@ -472,6 +472,13 @@ impl Kernel {
         released: &[String],
     ) {
         for task_id in released {
+            if world
+                .task_plan_applications
+                .iter()
+                .any(|application| application.child_task_ids.contains(task_id))
+            {
+                continue;
+            }
             let Some(task) = world.task(task_id).cloned() else {
                 continue;
             };
@@ -546,6 +553,13 @@ impl Kernel {
         prompt: GraphPromptKind,
     ) {
         for task_id in task_ids {
+            if world
+                .task_plan_applications
+                .iter()
+                .any(|application| application.child_task_ids.contains(task_id))
+            {
+                continue;
+            }
             let Some(task) = world.task(task_id).cloned() else {
                 continue;
             };
@@ -877,6 +891,177 @@ impl Kernel {
             "squad",
             true,
         )
+    }
+
+    fn reconcile_task_plan_scheduling(&self, world: &mut World) {
+        let applications = world
+            .task_plan_applications
+            .iter()
+            .filter(|application| {
+                application.mode == coordy_protocol::TaskPlanApplyMode::ConfirmAndStart
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for application in applications {
+            let children = application
+                .child_task_ids
+                .iter()
+                .filter_map(|task_id| world.task(task_id).cloned())
+                .filter(|task| {
+                    !task.deleted
+                        && task.parent_id.as_deref() == Some(application.parent_task_id.as_str())
+                })
+                .collect::<Vec<_>>();
+            let Some(current_stage) = children
+                .iter()
+                .filter(|task| task.status != "done")
+                .filter_map(|task| task.stage.parse::<u32>().ok())
+                .min()
+            else {
+                continue;
+            };
+            for task in &children {
+                if task
+                    .stage
+                    .parse::<u32>()
+                    .is_ok_and(|stage| stage > current_stage)
+                    && (task.status == "open"
+                        || (task.status == "blocked"
+                            && task.blocked_reason.as_deref()
+                                == Some(coordy_protocol::ISSUE_BLOCKER_REASON)))
+                {
+                    if let Some(task) = world.task_mut(&task.id) {
+                        task.status = "backlog".into();
+                        task.blocked_reason = None;
+                    }
+                }
+            }
+            let ready = children
+                .iter()
+                .filter(|task| task.stage.parse::<u32>().ok() == Some(current_stage))
+                .filter(|task| matches!(task.status.as_str(), "backlog" | "open"))
+                .filter(|task| {
+                    product::issue_blocker_ids(world, &task.id)
+                        .iter()
+                        .all(|blocker_id| {
+                            world
+                                .task(blocker_id)
+                                .is_none_or(|blocker| blocker.deleted || blocker.status == "done")
+                        })
+                })
+                .map(|task| task.id.clone())
+                .collect::<Vec<_>>();
+            let actor = if application.applied_by == "daemon" {
+                Actor::Daemon
+            } else {
+                Actor::Principal {
+                    id: application.applied_by.clone(),
+                }
+            };
+            for task_id in ready {
+                if world.runs.iter().any(|run| run.task_id == task_id) {
+                    continue;
+                }
+                if let Some(task) = world.task_mut(&task_id) {
+                    if task.status == "backlog" {
+                        task.status = "open".into();
+                        task.blocked_reason = None;
+                    }
+                }
+                let Some(task) = world.task(&task_id).cloned() else {
+                    continue;
+                };
+                let prompt = product::blocker_release_prompt(&task);
+                let started = if let Some(agent_id) = task.assignee_agent_id.clone() {
+                    self.start_prompt_on_task(
+                        world,
+                        &actor,
+                        &task_id,
+                        &agent_id,
+                        prompt,
+                        None,
+                        "task_plan",
+                        true,
+                    )
+                } else if let Some(squad_id) = task.assignee_squad_id.clone() {
+                    self.dispatch_squad_leader(world, &actor, &task_id, &squad_id)
+                } else {
+                    continue;
+                };
+                if let Err(error) = started {
+                    product::push_notice(
+                        world,
+                        &task.workspace_id,
+                        "task_plan",
+                        "计划子事项尚未能自动开始",
+                        &error.message,
+                        Some(task_id),
+                    );
+                }
+            }
+        }
+    }
+
+    fn reconcile_task_plan_parent_statuses(&self, world: &mut World) -> Vec<String> {
+        let mut parent_ids = world
+            .task_plan_applications
+            .iter()
+            .map(|application| application.parent_task_id.clone())
+            .collect::<Vec<_>>();
+        parent_ids.sort();
+        parent_ids.dedup();
+        let mut released = Vec::new();
+        for parent_id in parent_ids {
+            let all_done = product::managed_parent_children_all_done(world, &parent_id);
+            let was_auto_completed = world
+                .task_plan_auto_completed_parent_ids
+                .iter()
+                .any(|id| id == &parent_id);
+            let parent_unblocked =
+                product::reject_if_unresolved_blockers(world, &parent_id).is_ok();
+            if all_done && parent_unblocked {
+                let parent_snapshot = world.task(&parent_id).cloned();
+                let transitioned = parent_snapshot
+                    .as_ref()
+                    .is_some_and(|parent| parent.status != "done");
+                if let Some(parent) = world.task_mut(&parent_id) {
+                    if transitioned {
+                        parent.status = "done".into();
+                        parent.blocked_reason = None;
+                    }
+                }
+                if transitioned && !was_auto_completed {
+                    world
+                        .task_plan_auto_completed_parent_ids
+                        .push(parent_id.clone());
+                }
+                if transitioned {
+                    if let Some(parent) = world.task(&parent_id).cloned() {
+                        product::mark_node_succeeded(world, &parent.workspace_id, &parent_id);
+                        released
+                            .extend(product::refresh_issue_blocker_dependents(world, &parent_id));
+                        product::push_notice(
+                            world,
+                            &parent.workspace_id,
+                            "task_plan",
+                            "所有计划子事项已完成",
+                            &parent.title,
+                            Some(parent_id.clone()),
+                        );
+                    }
+                }
+            } else if was_auto_completed {
+                if let Some(parent) = world.task_mut(&parent_id) {
+                    if parent.status == "done" {
+                        parent.status = "open".into();
+                    }
+                }
+                world
+                    .task_plan_auto_completed_parent_ids
+                    .retain(|id| id != &parent_id);
+            }
+        }
+        released
     }
 
     pub fn watch(&self, cursor: Option<u64>) -> Vec<Effect> {
@@ -1538,6 +1723,7 @@ impl Kernel {
                     std::slice::from_ref(&task_id),
                     GraphPromptKind::Ready,
                 );
+                self.reconcile_task_plan_scheduling(&mut world);
                 Ok(Outcome::ok(
                     "assigned",
                     json!({ "task_id": task_id, "agent_id": agent_id }),
@@ -1678,6 +1864,14 @@ impl Kernel {
                 if product::status_needs_clear_blockers(&status) {
                     product::reject_if_unresolved_blockers(&world, &task_id)?;
                 }
+                if status == "done"
+                    && product::is_managed_task_plan_parent(&world, &task_id)
+                    && !product::managed_parent_children_all_done(&world, &task_id)
+                {
+                    return Err(CoordyError::invalid(
+                        "managed parent requires every direct child to be done",
+                    ));
+                }
                 {
                     let task = world
                         .task_mut(&task_id)
@@ -1699,7 +1893,10 @@ impl Kernel {
                     );
                 }
                 self.reconcile_graph(&mut world, &workspace_id);
+                let mut released = released;
+                released.extend(self.reconcile_task_plan_parent_statuses(&mut world));
                 self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
+                self.reconcile_task_plan_scheduling(&mut world);
                 Self::emit(&mut world, Effect::StateChanged { workspace_id });
                 Ok(Outcome::ok(
                     "status updated",
@@ -2065,6 +2262,14 @@ impl Kernel {
                     .cloned()
                     .ok_or_else(|| CoordyError::not_found("agent"))?;
                 enforce_concurrency(&world, &agent)?;
+                let run_id = ids::new("run");
+                let user_prompt_event = match &source {
+                    RunSource::Codex { prompt }
+                    | RunSource::ClaudeCode { prompt }
+                    | RunSource::OpenCode { prompt }
+                    | RunSource::Acp { prompt } => Some(prompt.clone()),
+                    RunSource::Jsonl { .. } | RunSource::Fixture { .. } => None,
+                };
                 let mut instructions = agent.instructions.clone();
                 if let Some(ws) = world.workspace(&task.workspace_id) {
                     if !ws.context.is_empty() {
@@ -2079,8 +2284,39 @@ impl Kernel {
                         instructions.push_str(&skill.body);
                     }
                 }
+                match (chat_id.as_deref(), trigger.as_str()) {
+                    (Some(chat_id), "chat") => {
+                        let chat = world
+                            .chat(chat_id)
+                            .ok_or_else(|| CoordyError::not_found("chat"))?;
+                        if !product::can_see_chat(&actor, chat) {
+                            return Err(CoordyError::denied("private chat"));
+                        }
+                        if chat.workspace_id != task.workspace_id
+                            || chat.task_id.as_deref() != Some(task.id.as_str())
+                            || chat.agent_id != agent.id
+                        {
+                            return Err(CoordyError::invalid("chat run context mismatch"));
+                        }
+                        instructions.push_str("\n\n");
+                        instructions.push_str(&task_planning_instructions(
+                            &world,
+                            &actor,
+                            &task.workspace_id,
+                            chat_id,
+                            &run_id,
+                            &agent.id,
+                        ));
+                    }
+                    (Some(_), _) => {
+                        return Err(CoordyError::invalid("chat_id is only valid for a chat run"));
+                    }
+                    (None, "chat") => {
+                        return Err(CoordyError::invalid("chat run requires chat_id"));
+                    }
+                    (None, _) => {}
+                }
                 let source = apply_agent_instructions(source, &instructions);
-                let run_id = ids::new("run");
                 let harness: String = match &source {
                     RunSource::Jsonl { .. } | RunSource::Fixture { .. } => "jsonl".into(),
                     RunSource::Codex { .. } => "codex".into(),
@@ -2095,7 +2331,7 @@ impl Kernel {
                         }
                     }
                 };
-                let prompt_event = match &source {
+                let dispatched_prompt = match &source {
                     RunSource::Codex { prompt }
                     | RunSource::ClaudeCode { prompt }
                     | RunSource::OpenCode { prompt }
@@ -2120,10 +2356,10 @@ impl Kernel {
                     retry_count: 0,
                     chat_id: chat_id.clone(),
                     trigger: trigger_label.clone(),
-                    prompt: prompt_event.clone().unwrap_or_default(),
+                    prompt: dispatched_prompt.unwrap_or_default(),
                     role: role_for_trigger(&trigger_label),
                 });
-                if let Some(prompt) = prompt_event {
+                if let Some(prompt) = user_prompt_event {
                     ingest_event(
                         &mut world,
                         &self.advisor,
@@ -2195,6 +2431,7 @@ impl Kernel {
                         run.status = "completed".into();
                     }
                 }
+                finalize_task_plan_artifact(&mut world, &run_id);
                 Ok(Outcome::ok("run completed", json!({ "run_id": run_id })))
             }
             Command::CancelRun { run_id } => {
@@ -2235,6 +2472,8 @@ impl Kernel {
                         content: "运行已停止".into(),
                     },
                 )?;
+                finalize_task_plan_artifact(&mut world, &run_id);
+                self.reconcile_task_plan_scheduling(&mut world);
                 drop(world);
                 self.ports.cancel_harness(&run_id)?;
                 Ok(Outcome::ok("run cancelled", json!({ "run_id": run_id })))
@@ -2270,6 +2509,7 @@ impl Kernel {
                     self.reconcile_graph(&mut world, &run.workspace_id);
                 }
                 self.after_harness_event(&mut world, &run_id, &event, was_active)?;
+                self.reconcile_task_plan_scheduling(&mut world);
                 Ok(Outcome::ok("ingested", json!({ "run_id": run_id })))
             }
             Command::ApplyPatch { task_id, patch } => {
@@ -2488,8 +2728,8 @@ impl Kernel {
                 let (retry_agent_id, retry_trigger) = if old.role == RunRole::ConductorReview {
                     let conductor_id = product::workspace_conductor_id(&world, &old.workspace_id)
                         .ok_or_else(|| {
-                            CoordyError::invalid("conductor review retry requires a conductor")
-                        })?;
+                        CoordyError::invalid("conductor review retry requires a conductor")
+                    })?;
                     (conductor_id, "graph_review")
                 } else {
                     (old.agent_id.clone(), "retry")
@@ -2634,6 +2874,30 @@ impl Kernel {
                     std::slice::from_ref(&issue_id),
                     GraphPromptKind::Ready,
                 );
+                let released = self.reconcile_task_plan_parent_statuses(&mut world);
+                self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
+                self.reconcile_task_plan_scheduling(&mut world);
+                Ok(outcome)
+            }
+            Command::ApplyTaskPlan {
+                proposal_id,
+                expected_revision,
+                idempotency_key,
+                mode,
+            } => {
+                let outcome = product::submit(
+                    &mut world,
+                    &actor,
+                    Command::ApplyTaskPlan {
+                        proposal_id,
+                        expected_revision,
+                        idempotency_key,
+                        mode,
+                    },
+                )?;
+                self.reconcile_task_plan_scheduling(&mut world);
+                let released = self.reconcile_task_plan_parent_statuses(&mut world);
+                self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
                 Ok(outcome)
             }
             Command::TriggerAutomation { automation_id } => {
@@ -2665,6 +2929,9 @@ impl Kernel {
                     .collect();
                 let outcome =
                     crate::product::submit(&mut world, &actor, Command::StopChat { chat_id })?;
+                for run_id in &run_ids {
+                    finalize_task_plan_artifact(&mut world, run_id);
+                }
                 drop(world);
                 for run_id in run_ids {
                     self.ports.cancel_harness(&run_id)?;
@@ -2684,8 +2951,10 @@ impl Kernel {
                     _ => None,
                 };
                 let outcome = product::submit(&mut world, &actor, other)?;
-                let released = Self::released_task_ids(&outcome);
+                let mut released = Self::released_task_ids(&outcome);
+                released.extend(self.reconcile_task_plan_parent_statuses(&mut world));
                 self.dispatch_graph_or_blocker_release(&mut world, &actor, &released);
+                self.reconcile_task_plan_scheduling(&mut world);
                 let workspace_id = outcome
                     .ids
                     .get("workspace_id")
@@ -2752,6 +3021,23 @@ impl Kernel {
                         .iter()
                         .map(|t| product::task_view(&world, t, &actor))
                         .collect(),
+                })
+            }
+            Query::TaskPlan { proposal_id } => {
+                let proposal = product::latest_task_plan(&world, &proposal_id)
+                    .ok_or_else(|| CoordyError::not_found("task plan proposal"))?;
+                require_member(&world, &actor, &proposal.draft.workspace_id)?;
+                let chat = world
+                    .chat(&proposal.draft.chat_id)
+                    .ok_or_else(|| CoordyError::not_found("chat"))?;
+                if actor
+                    .principal_id()
+                    .is_some_and(|principal_id| principal_id != chat.owner_principal_id)
+                {
+                    return Err(CoordyError::denied("private chat owner required"));
+                }
+                Ok(View::TaskPlan {
+                    proposal: Box::new(product::task_plan_view(proposal)),
                 })
             }
             Query::Commitments { workspace_id } => {
@@ -3111,6 +3397,12 @@ impl Kernel {
                 if !product::can_see_chat(&actor, &chat) {
                     return Err(CoordyError::denied("private chat"));
                 }
+                let latest_run_id = world
+                    .runs
+                    .iter()
+                    .rev()
+                    .find(|run| run.chat_id.as_deref() == Some(chat_id.as_str()))
+                    .map(|run| run.id.as_str());
                 Ok(View::Chat {
                     chat: product::chat_view(&chat),
                     messages: world
@@ -3119,6 +3411,17 @@ impl Kernel {
                         .filter(|m| m.chat_id == chat_id)
                         .map(product::chat_message_view)
                         .collect(),
+                    task_plan: product::latest_applicable_task_plan_for_chat(&world, &chat_id)
+                        .map(product::task_plan_view)
+                        .map(Box::new),
+                    task_plan_error: world
+                        .task_plan_artifact_errors
+                        .iter()
+                        .rev()
+                        .find(|error| {
+                            error.chat_id == chat_id && latest_run_id == Some(error.run_id.as_str())
+                        })
+                        .map(|error| error.message.clone()),
                 })
             }
             Query::Labels { workspace_id } => {
@@ -3393,11 +3696,97 @@ fn ingest_event(
         .run(run_id)
         .cloned()
         .ok_or_else(|| CoordyError::not_found("run"))?;
+    let event = if let HarnessEvent::Message { role, content } = event {
+        if role == "assistant" && run.chat_id.is_some() {
+            let prior_assistant = assistant_run_text(world, &run.id);
+            let candidate = format!("{prior_assistant}{content}");
+            let ParsedTaskPlanArtifact {
+                mut draft,
+                mut error,
+                mut display,
+            } = parse_task_plan_artifact(&candidate);
+            let already_has_plan = world
+                .task_plan_proposals
+                .iter()
+                .any(|proposal| proposal.draft.source_run_id == run.id);
+            if already_has_plan && candidate.contains("```COORDY_TASK_PLAN_V1") {
+                draft = None;
+                error = Some(
+                    "任务方案解析失败：每次回复只能包含一个 COORDY_TASK_PLAN_V1 代码块。".into(),
+                );
+                display = candidate.clone();
+            }
+            if draft.is_none() && error.is_none() && !prior_assistant.is_empty() {
+                // Each ACP assistant event is a stream chunk. Keep one exact
+                // cumulative message so a fence or JSON token may span any
+                // event boundary without duplicating earlier chunks.
+                remove_superseded_task_plan_chunks(world, &run.id);
+                display = candidate.clone();
+            }
+            if let Some(error) = error {
+                let chat_id = run.chat_id.clone().expect("chat run");
+                world
+                    .task_plan_artifact_errors
+                    .retain(|item| item.run_id != run.id);
+                world.task_plan_artifact_errors.push(TaskPlanArtifactError {
+                    chat_id,
+                    run_id: run.id.clone(),
+                    message: error,
+                });
+                remove_superseded_task_plan_chunks(world, &run.id);
+                display = candidate.clone();
+            }
+            if let Some(draft) = draft {
+                world
+                    .task_plan_artifact_errors
+                    .retain(|item| item.run_id != draft.source_run_id);
+                match product::save_task_plan_from_chat_run(world, &run, draft) {
+                    Ok(()) => {
+                        // Prior streaming chunks may contain the opening fence
+                        // or partial JSON. The successful parse's `display`
+                        // contains the complete conversational copy, so remove
+                        // the superseded assistant chunks before recording it.
+                        remove_superseded_task_plan_chunks(world, &run.id);
+                    }
+                    Err(error) => {
+                        let chat_id = run.chat_id.clone().expect("chat run");
+                        world.task_plan_artifact_errors.push(TaskPlanArtifactError {
+                            chat_id,
+                            run_id: run.id.clone(),
+                            message: error.message,
+                        });
+                        remove_superseded_task_plan_chunks(world, &run.id);
+                        display = candidate.clone();
+                    }
+                }
+            }
+            HarnessEvent::Message {
+                role,
+                content: display,
+            }
+        } else {
+            HarnessEvent::Message { role, content }
+        }
+    } else {
+        event
+    };
+    record_harness_event(world, advisor, &run, event)
+}
+
+fn record_harness_event(
+    world: &mut World,
+    advisor: &Arc<dyn Advisor>,
+    run: &Run,
+    event: HarnessEvent,
+) -> Result<(), CoordyError> {
+    let run_id = &run.id;
     let seq = world
         .run_events
         .iter()
-        .filter(|e| e.run_id == run_id)
-        .count() as u32
+        .filter(|e| e.run_id == *run_id)
+        .map(|event| event.seq)
+        .max()
+        .unwrap_or(0)
         + 1;
     let (kind, payload): (String, String) = match &event {
         HarnessEvent::Message { role, content } => ("message".into(), format!("{role}: {content}")),
@@ -3414,7 +3803,7 @@ fn ingest_event(
         HarnessEvent::Patch { diff } => ("patch".into(), diff.clone()),
     };
     world.run_events.push(RunEvent {
-        run_id: run_id.into(),
+        run_id: run_id.clone(),
         seq,
         kind: kind.clone(),
         payload: payload.clone(),
@@ -3422,7 +3811,7 @@ fn ingest_event(
     Kernel::emit(
         world,
         Effect::RunEvent {
-            run_id: run_id.into(),
+            run_id: run_id.clone(),
             event: RunEventView { seq, kind, payload },
         },
     );
@@ -3581,10 +3970,15 @@ fn ingest_event(
                             Some(run.task_id.clone()),
                         );
                     }
+                    finalize_task_plan_artifact(world, run_id);
                 }
             }
             if matches!(name.as_str(), "git" | "test" | "patch_apply") {
-                let paused = world.runs.iter().find(|r| r.id == run_id).cloned();
+                let paused = world
+                    .runs
+                    .iter()
+                    .find(|candidate| candidate.id == run_id.as_str())
+                    .cloned();
                 if let Some(run) = paused {
                     if world.paused_runs.contains(&run.id) {
                         let outcomes = vec![format!("{name} exit={exit_code:?} {output}")];
@@ -3610,6 +4004,358 @@ fn ingest_event(
         }
     }
     Ok(())
+}
+
+struct ParsedTaskPlanArtifact {
+    draft: Option<coordy_protocol::TaskPlanDraft>,
+    error: Option<String>,
+    display: String,
+}
+
+fn remove_superseded_task_plan_chunks(world: &mut World, run_id: &str) {
+    world.run_events.retain(|item| {
+        item.run_id != run_id || item.kind != "message" || !item.payload.starts_with("assistant: ")
+    });
+}
+
+fn assistant_run_text(world: &World, run_id: &str) -> String {
+    world
+        .run_events
+        .iter()
+        .filter(|event| event.run_id == run_id && event.kind == "message")
+        .filter_map(|event| event.payload.strip_prefix("assistant: "))
+        .collect::<String>()
+}
+
+fn finalize_task_plan_artifact(world: &mut World, run_id: &str) {
+    let Some(run) = world.run(run_id).cloned() else {
+        return;
+    };
+    let Some(chat_id) = run.chat_id else {
+        return;
+    };
+    if world
+        .task_plan_artifact_errors
+        .iter()
+        .any(|error| error.run_id == run_id)
+    {
+        return;
+    }
+    let assistant = assistant_run_text(world, run_id);
+    if assistant.contains("```COORDY_TASK_PLAN_V1") {
+        let already_has_plan = world
+            .task_plan_proposals
+            .iter()
+            .any(|proposal| proposal.draft.source_run_id == run_id);
+        world.task_plan_artifact_errors.push(TaskPlanArtifactError {
+            chat_id,
+            run_id: run_id.to_string(),
+            message: if already_has_plan {
+                "任务方案解析失败：每次回复只能包含一个 COORDY_TASK_PLAN_V1 代码块。".into()
+            } else {
+                "任务方案解析失败：COORDY_TASK_PLAN_V1 代码块不完整。".into()
+            },
+        });
+    }
+}
+
+fn parse_task_plan_artifact(content: &str) -> ParsedTaskPlanArtifact {
+    const OPEN: &str = "```COORDY_TASK_PLAN_V1";
+    let matches = content.match_indices(OPEN).collect::<Vec<_>>();
+    if matches.is_empty() {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: None,
+            display: content.to_string(),
+        };
+    }
+    if matches.len() != 1 {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: Some(
+                "任务方案解析失败：每次回复只能包含一个 COORDY_TASK_PLAN_V1 代码块。".into(),
+            ),
+            display: content.to_string(),
+        };
+    }
+    let start = matches[0].0;
+    let body_start = start + OPEN.len();
+    let Some(line_break) = content[body_start..]
+        .find('\n')
+        .map(|offset| body_start + offset)
+    else {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: None,
+            display: content.to_string(),
+        };
+    };
+    if !matches!(&content[body_start..line_break], "" | "\r") {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: Some("任务方案解析失败：代码块名称必须精确为 COORDY_TASK_PLAN_V1。".into()),
+            display: content.to_string(),
+        };
+    }
+    let line_end = line_break + 1;
+    let Some(close) = content[line_end..]
+        .match_indices("```")
+        .find_map(|(offset, _)| {
+            let close = line_end + offset;
+            let starts_line = close == line_end || content.as_bytes()[close - 1] == b'\n';
+            let suffix = &content[close + 3..];
+            let ends_line =
+                suffix.is_empty() || suffix.starts_with('\n') || suffix.starts_with("\r\n");
+            (starts_line && ends_line).then_some(close)
+        })
+    else {
+        return ParsedTaskPlanArtifact {
+            draft: None,
+            error: None,
+            display: content.to_string(),
+        };
+    };
+    let json = content[line_end..close].trim();
+    let draft = match serde_json::from_str::<coordy_protocol::TaskPlanDraft>(json) {
+        Ok(draft) => draft,
+        Err(error) => {
+            return ParsedTaskPlanArtifact {
+                draft: None,
+                error: Some(format!("任务方案解析失败：{error}")),
+                display: content.to_string(),
+            }
+        }
+    };
+    let after = close + 3;
+    let display = format!("{}{}", &content[..start], &content[after..])
+        .trim()
+        .to_string();
+    ParsedTaskPlanArtifact {
+        draft: Some(draft),
+        error: None,
+        display: if display.is_empty() {
+            "已生成任务拆分方案，请在下方检查并确认。".into()
+        } else {
+            display
+        },
+    }
+}
+
+#[cfg(test)]
+mod task_plan_artifact_tests {
+    use super::{
+        parse_task_plan_artifact, remove_superseded_task_plan_chunks, task_planning_instructions,
+    };
+    use crate::world::{Agent, RunEvent, Squad, World};
+    use coordy_protocol::{Actor, TaskPlanDraft};
+
+    #[test]
+    fn strict_artifact_is_decoded_and_hidden_from_display_copy() {
+        let content = r#"方案如下。
+```COORDY_TASK_PLAN_V1
+{"version":"COORDY_TASK_PLAN_V1","workspace_id":"ws","chat_id":"chat","source_run_id":"run","source_agent_id":"agent","parent":{"mode":"existing","task_id":"parent"},"children":[{"key":"a","title":"A","description":"Do A","acceptance_criteria":["A passes"],"priority":"medium","stage":1}]}
+```"#;
+        let parsed = parse_task_plan_artifact(content);
+        assert_eq!(parsed.draft.unwrap().children[0].key, "a");
+        assert_eq!(parsed.display, "方案如下。");
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn malformed_artifact_remains_visible_with_exact_error() {
+        let content = "```COORDY_TASK_PLAN_V1\n{bad}\n```";
+        let parsed = parse_task_plan_artifact(content);
+        assert!(parsed.draft.is_none());
+        assert_eq!(parsed.display, content);
+        assert!(parsed.error.unwrap().starts_with("任务方案解析失败："));
+    }
+
+    #[test]
+    fn incomplete_stream_chunk_waits_for_the_closing_fence() {
+        let first = "```COORDY_TASK_PLAN_V1\n{\"version\":\"COORDY_TASK_PLAN_V1\"";
+        let pending = parse_task_plan_artifact(first);
+        assert!(pending.draft.is_none());
+        assert!(pending.error.is_none());
+
+        let combined = format!(
+            "{first}{}",
+            ",\"workspace_id\":\"ws\",\"chat_id\":\"chat\",\"source_run_id\":\"run\",\"source_agent_id\":\"agent\",\"parent\":{\"mode\":\"existing\",\"task_id\":\"parent\"},\"children\":[{\"key\":\"a\",\"title\":\"A\",\"description\":\"Do A\",\"acceptance_criteria\":[\"A passes\"],\"priority\":\"medium\",\"stage\":1}]}\n```"
+        );
+        assert!(parse_task_plan_artifact(&combined).draft.is_some());
+    }
+
+    #[test]
+    fn backticks_inside_json_strings_do_not_close_the_artifact() {
+        let content = r#"```COORDY_TASK_PLAN_V1
+{"version":"COORDY_TASK_PLAN_V1","workspace_id":"ws","chat_id":"chat","source_run_id":"run","source_agent_id":"agent","parent":{"mode":"existing","task_id":"parent"},"children":[{"key":"a","title":"A","description":"Use ```sh in the documentation","acceptance_criteria":["The ``` example is preserved"],"priority":"medium","stage":1}]}
+```"#;
+        let parsed = parse_task_plan_artifact(content);
+        let draft = parsed.draft.expect("valid plan");
+        assert_eq!(
+            draft.children[0].description,
+            "Use ```sh in the documentation"
+        );
+        assert!(parsed.error.is_none());
+    }
+
+    #[test]
+    fn duplicate_or_non_exact_artifact_fences_are_rejected() {
+        let duplicate = "```COORDY_TASK_PLAN_V1\n{}\n```\n```COORDY_TASK_PLAN_V1\n{}\n```";
+        let duplicated = parse_task_plan_artifact(duplicate);
+        assert!(duplicated.draft.is_none());
+        assert!(duplicated.error.unwrap().contains("只能包含一个"));
+        assert_eq!(duplicated.display, duplicate);
+
+        let mislabeled = "```COORDY_TASK_PLAN_V1_extra\n{}\n```";
+        let parsed = parse_task_plan_artifact(mislabeled);
+        assert!(parsed.draft.is_none());
+        assert!(parsed.error.unwrap().contains("必须精确"));
+        assert_eq!(parsed.display, mislabeled);
+    }
+
+    #[test]
+    fn planning_context_is_bounded_filtered_and_contains_a_decodable_example() {
+        fn agent(id: &str, principal_id: &str, archived: bool, description: String) -> Agent {
+            Agent {
+                id: id.into(),
+                workspace_id: "ws".into(),
+                principal_id: principal_id.into(),
+                name: id.into(),
+                harness: "acp".into(),
+                description,
+                instructions: String::new(),
+                archived,
+                avatar: String::new(),
+                model: String::new(),
+                thinking: String::new(),
+                speed: String::new(),
+                access: "owner".into(),
+                access_member_ids: Vec::new(),
+                concurrency_limit: 6,
+                cli_args: String::new(),
+                tool_access: "auto".into(),
+                mcp_servers: Vec::new(),
+                skill_ids: Vec::new(),
+            }
+        }
+
+        let mut agents = (0..45)
+            .map(|index| {
+                agent(
+                    &format!("a{index:02}"),
+                    "owner",
+                    false,
+                    if index == 0 {
+                        "x".repeat(200)
+                    } else {
+                        String::new()
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        agents.push(agent("denied", "other", false, String::new()));
+        agents.push(agent("archived", "owner", true, String::new()));
+        let world = World {
+            agents,
+            squads: vec![
+                Squad {
+                    id: "allowed-squad".into(),
+                    workspace_id: "ws".into(),
+                    name: "Allowed".into(),
+                    leader_agent_id: "a00".into(),
+                    member_agent_ids: Vec::new(),
+                },
+                Squad {
+                    id: "denied-squad".into(),
+                    workspace_id: "ws".into(),
+                    name: "Denied".into(),
+                    leader_agent_id: "denied".into(),
+                    member_agent_ids: Vec::new(),
+                },
+                Squad {
+                    id: "archived-squad".into(),
+                    workspace_id: "ws".into(),
+                    name: "Archived".into(),
+                    leader_agent_id: "archived".into(),
+                    member_agent_ids: Vec::new(),
+                },
+            ],
+            ..World::default()
+        };
+        let prompt = task_planning_instructions(
+            &world,
+            &Actor::Principal { id: "owner".into() },
+            "ws",
+            "chat",
+            "run",
+            "a00",
+        );
+        let context = prompt
+            .split("# Exact run context and bounded assignee catalog\n")
+            .nth(1)
+            .unwrap()
+            .split("\n\n# Exact artifact shape example")
+            .next()
+            .unwrap();
+        let context: serde_json::Value = serde_json::from_str(context).unwrap();
+        let available_agents = context["available_agents"].as_array().unwrap();
+        assert_eq!(available_agents.len(), 40);
+        assert_eq!(available_agents[0]["id"], "a00");
+        assert_eq!(available_agents[39]["id"], "a39");
+        assert_eq!(
+            available_agents[0]["description"]
+                .as_str()
+                .unwrap()
+                .chars()
+                .count(),
+            160
+        );
+        assert_eq!(context["available_squads"].as_array().unwrap().len(), 1);
+        assert_eq!(context["available_squads"][0]["id"], "allowed-squad");
+
+        let example = prompt
+            .split("# Exact artifact shape example\n```COORDY_TASK_PLAN_V1\n")
+            .nth(1)
+            .unwrap()
+            .strip_suffix("\n```")
+            .unwrap();
+        let decoded: TaskPlanDraft = serde_json::from_str(example).unwrap();
+        assert_eq!(decoded.source_run_id, "run");
+        assert_eq!(decoded.source_agent_id, "a00");
+    }
+
+    #[test]
+    fn successful_artifact_replaces_streamed_assistant_chunks_but_keeps_activity() {
+        let mut world = World {
+            run_events: vec![
+                RunEvent {
+                    run_id: "run".into(),
+                    seq: 1,
+                    kind: "tool".into(),
+                    payload: "search".into(),
+                },
+                RunEvent {
+                    run_id: "run".into(),
+                    seq: 2,
+                    kind: "message".into(),
+                    payload: "assistant: ```COORDY_TASK_PLAN_V1\n{partial".into(),
+                },
+                RunEvent {
+                    run_id: "other".into(),
+                    seq: 1,
+                    kind: "message".into(),
+                    payload: "assistant: unrelated".into(),
+                },
+            ],
+            ..World::default()
+        };
+
+        remove_superseded_task_plan_chunks(&mut world, "run");
+
+        assert_eq!(world.run_events.len(), 2);
+        assert_eq!(world.run_events[0].kind, "tool");
+        assert_eq!(world.run_events[1].run_id, "other");
+    }
 }
 
 fn maybe_record_commitment(
@@ -3782,6 +4528,115 @@ fn enforce_concurrency(world: &World, agent: &crate::world::Agent) -> Result<(),
         )));
     }
     Ok(())
+}
+
+const BUILT_IN_TASK_PLANNING_SKILL: &str = r#"# Built-in Skill: Conversational task planning
+
+Use this skill only when the user explicitly asks to split, plan, or revise a task plan. For ordinary conversation, answer normally and do not emit a task-plan artifact.
+
+Before proposing a plan, clarify any ambiguity that would materially change the parent, deliverables, ordering, acceptance criteria, or assignees. Otherwise produce the smallest complete plan whose children are independently executable and verifiable.
+
+Plan rules:
+- Give every child a stable local key using only ASCII letters, digits, `_`, or `-` (maximum 64 characters).
+- Give every child a concrete description and at least one observable acceptance criterion.
+- Priority must be one of `urgent`, `high`, `medium`, `low`, or `none`.
+- Stage starts at 1. Tasks in the same stage may run in parallel when their dependencies are satisfied. A dependency must name another child key and may not point to a later stage. Do not create cycles, duplicates, self-dependencies, or unknown dependencies.
+- Use an assignee only when its exact stable ID appears in the available catalog below. Use `{\"type\":\"agent\",\"id\":\"...\"}` or `{\"type\":\"squad\",\"id\":\"...\"}`. Otherwise omit `assignee`.
+- A parent is either `{\"mode\":\"create\",\"title\":\"...\",\"description\":\"...\",\"project_id\":null}` or `{\"mode\":\"existing\",\"task_id\":\"...\"}`.
+
+When the plan is ready, emit exactly one fenced block named `COORDY_TASK_PLAN_V1`. The block must contain one JSON object and no unknown fields. Keep any short explanation outside the block. Copy all five provenance values from the run context exactly. Do not emit partial artifacts.
+
+Only the authenticated user's later confirmation can create or start tasks. You are proposing a reviewable plan: never say that tasks were created, assigned, dispatched, or started merely because you emitted the artifact."#;
+
+fn task_planning_instructions(
+    world: &World,
+    actor: &Actor,
+    workspace_id: &str,
+    chat_id: &str,
+    run_id: &str,
+    agent_id: &str,
+) -> String {
+    const CATALOG_LIMIT: usize = 40;
+    const DESCRIPTION_LIMIT: usize = 160;
+
+    let mut agents = world
+        .agents
+        .iter()
+        .filter(|agent| {
+            !agent.archived
+                && agent.workspace_id == workspace_id
+                && can_command_agent(world, actor, &agent.id)
+        })
+        .map(|agent| {
+            json!({
+                "id": agent.id,
+                "name": agent.name,
+                "description": agent.description.chars().take(DESCRIPTION_LIMIT).collect::<String>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    agents.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    agents.truncate(CATALOG_LIMIT);
+
+    let mut squads = world
+        .squads
+        .iter()
+        .filter(|squad| {
+            squad.workspace_id == workspace_id
+                && world.agent(&squad.leader_agent_id).is_some_and(|leader| {
+                    !leader.archived
+                        && leader.workspace_id == workspace_id
+                        && can_command_agent(world, actor, &leader.id)
+                })
+        })
+        .map(|squad| {
+            json!({
+                "id": squad.id,
+                "name": squad.name,
+                "leader_agent_id": squad.leader_agent_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    squads.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    squads.truncate(CATALOG_LIMIT);
+
+    let context = json!({
+        "version": coordy_protocol::TASK_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "chat_id": chat_id,
+        "source_run_id": run_id,
+        "source_agent_id": agent_id,
+        "available_agents": agents,
+        "available_squads": squads,
+    });
+    let example = json!({
+        "version": coordy_protocol::TASK_PLAN_VERSION,
+        "workspace_id": workspace_id,
+        "chat_id": chat_id,
+        "source_run_id": run_id,
+        "source_agent_id": agent_id,
+        "parent": {
+            "mode": "create",
+            "title": "Parent title",
+            "description": "Parent outcome",
+            "project_id": null,
+        },
+        "children": [{
+            "key": "first-step",
+            "title": "First step",
+            "description": "Produce the first deliverable",
+            "acceptance_criteria": ["The deliverable is reviewed"],
+            "priority": "high",
+            "stage": 1,
+            "depends_on": [],
+            "assignee": null,
+        }],
+    });
+    format!(
+        "{BUILT_IN_TASK_PLANNING_SKILL}\n\n# Exact run context and bounded assignee catalog\n{}\n\n# Exact artifact shape example\n```COORDY_TASK_PLAN_V1\n{}\n```",
+        serde_json::to_string_pretty(&context).expect("planning context serializes"),
+        serde_json::to_string_pretty(&example).expect("planning example serializes"),
+    )
 }
 
 fn apply_agent_instructions(source: RunSource, instructions: &str) -> RunSource {
