@@ -338,7 +338,10 @@ pub fn launch_uses_acp(kind: &str, catalog: &[DiscoveredAgentView]) -> bool {
     catalog
         .iter()
         .find(|item| item.id == kind || canonical_harness_id(&item.id) == want)
-        .map(|item| item.protocol_family == ProtocolFamily::Acp.as_str())
+        .map(|item| {
+            item.protocol_family == ProtocolFamily::Acp.as_str()
+                || item.protocol_family == ProtocolFamily::Stub.as_str()
+        })
         .unwrap_or_else(|| crate::protocol::protocol_family(kind).uses_acp())
 }
 

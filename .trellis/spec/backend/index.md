@@ -21,6 +21,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Task Plan Contract](./task-plan-contract.md) | Conversational plan proposal, revision, and atomic apply contract | Active |
 | [Coding Runtime Integrations](./runtime-integration-contracts.md) | Executable, discovery, protocol, permission, and fake-process contracts | Active |
+| [Desktop Flow Contracts](./desktop-flow-contracts.md) | Electron/daemon lifecycle, workspace-scoped mutations, and executable flow evidence | Active |
 
 ---
 

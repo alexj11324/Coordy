@@ -1,7 +1,8 @@
-import type { Outcome } from "@coordy/protocol";
+import type { Actor, AgentView, Outcome } from "@coordy/protocol";
 import { storedAgentAvatar } from "./agent-avatar";
 import { submit, view } from "./client";
 import { asAgents, isPlaceholderHarness, outcomeId } from "./views";
+import { useSession } from "../../state/session-store";
 
 export function acpRunSource(prompt: string) {
   return { type: "Acp" as const, prompt };
@@ -54,12 +55,32 @@ export async function createNamedAgent(input: {
 export async function pickAgentId(
   workspaceId: string,
   preferredId?: string | null,
+  actor?: Actor,
 ): Promise<string> {
   const agents = asAgents(
-    await view({ type: "Agents", workspace_id: workspaceId }),
+    await view({ type: "Agents", workspace_id: workspaceId }, actor),
   );
-  if (preferredId && agents.some((agent) => agent.id === preferredId))
-    return preferredId;
+  return resolveAgentId(agents, preferredId);
+}
+
+export function normalizedAgentId(
+  agents: AgentView[],
+  selectedId?: string | null,
+): string {
+  if (selectedId && agents.some((agent) => agent.id === selectedId)) {
+    return selectedId;
+  }
+  return agents[0]?.id ?? "";
+}
+
+export function resolveAgentId(
+  agents: AgentView[],
+  preferredId?: string | null,
+): string {
+  if (preferredId) {
+    if (agents.some((agent) => agent.id === preferredId)) return preferredId;
+    throw new Error("所选智能体不属于当前工作区。请重新选择。");
+  }
   const live =
     agents.find(
       (agent) =>
@@ -78,20 +99,21 @@ export async function startAcpRun(input: {
   prompt: string;
   agentId?: string | null;
 }): Promise<{ taskId: string; runId: string; agentId: string }> {
-  const agentId = await pickAgentId(input.workspaceId, input.agentId);
+  const actor = useSession.getState().actor;
+  const agentId = await pickAgentId(input.workspaceId, input.agentId, actor);
   const created = await submit({
     type: "CreateTask",
     workspace_id: input.workspaceId,
     title: input.title.trim() || "新事项",
     description: input.prompt.trim(),
-  });
+  }, actor);
   const taskId = outcomeId(created.ids, "task_id");
-  await submit({ type: "AssignTask", task_id: taskId, agent_id: agentId });
+  await submit({ type: "AssignTask", task_id: taskId, agent_id: agentId }, actor);
   const run = await submit({
     type: "StartRun",
     task_id: taskId,
     source: acpRunSource(input.prompt.trim() || input.title),
-  });
+  }, actor);
   return { taskId, runId: outcomeId(run.ids, "run_id"), agentId };
 }
 

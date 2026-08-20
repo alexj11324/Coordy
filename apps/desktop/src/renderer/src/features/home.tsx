@@ -24,12 +24,12 @@ import {
   Textarea,
 } from "@coordy/ui";
 import { Bot, FolderGit2, Play, Square } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
-import { startAcpRun } from "../lib/coordy/start-task";
+import { normalizedAgentId, startAcpRun } from "../lib/coordy/start-task";
 import { agentDisplayName, listableAgents, runStatusLabel } from "../lib/coordy/labels";
-import { asAgents, asRunDetail, asRuns } from "../lib/coordy/views";
+import { activeHomeRun, asAgents, asRunDetail, asRuns } from "../lib/coordy/views";
 import { useSession } from "../state/session-store";
 import { ActivityLine } from "./activity-marker";
 import { NamedAgent } from "./agent-avatar";
@@ -37,6 +37,8 @@ import { NamedAgent } from "./agent-avatar";
 export function HomePage() {
   const workspaceId = useSession((s) => s.workspaceId);
   const principalId = useSession((s) => s.principalId);
+  const sessionAgentId = useSession((s) => s.agentId);
+  const actorKey = sessionAgentId ? `agent:${sessionAgentId}:${principalId ?? ""}` : `principal:${principalId ?? ""}`;
   const qc = useQueryClient();
   const navigate = useNavigate();
   const settings = useQuery({
@@ -54,27 +56,29 @@ export function HomePage() {
     queryFn: () => window.coordy.discoverAgents(false),
   });
   const runs = useQuery({
-    queryKey: ["home-runs", workspaceId],
+    queryKey: ["home-runs", workspaceId, actorKey],
     enabled: Boolean(workspaceId),
     queryFn: () => view({ type: "Runs", workspace_id: workspaceId! }),
     refetchInterval: 1000,
   });
   const agentList = listableAgents(asAgents(agents.data));
-  const defaultAgent = agentList[0];
   const [agentId, setAgentId] = useState<string>("");
   const [title, setTitle] = useState("审查当前仓库");
   const [prompt, setPrompt] = useState("用中文说明你的能力，然后等待下一条指令。");
-  const [runId, setRunId] = useState<string | null>(null);
+  const [runPin, setRunPin] = useState<{ scope: string; runId: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const selectedAgentId = agentId || defaultAgent?.id || "";
+  const runScope = `${workspaceId ?? ""}|${actorKey}`;
+  const pinnedRunId = runPin?.scope === runScope ? runPin.runId : null;
+  const selectedAgentId = normalizedAgentId(agentList, agentId);
   const agentItems = useMemo(
     () => Object.fromEntries(agentList.map((agent) => [agent.id, agentDisplayName(agent, catalog.data)])),
     [agentList, catalog.data],
   );
-  const latestRun = asRuns(runs.data).at(-1);
-  const activeRunId = runId ?? latestRun?.id ?? null;
+  const runList = asRuns(runs.data);
+  const activeRun = activeHomeRun(runList, pinnedRunId);
+  const activeRunId = activeRun?.id ?? null;
   const detail = useQuery({
-    queryKey: ["home-run", activeRunId],
+    queryKey: ["home-run", workspaceId, actorKey, activeRunId],
     enabled: Boolean(activeRunId),
     queryFn: () => view({ type: "Run", run_id: activeRunId! }),
     refetchInterval: 800,
@@ -82,23 +86,44 @@ export function HomePage() {
   const events = asRunDetail(detail.data)?.events ?? [];
   const repoPath = settings.data?.type === "Settings" ? settings.data.repo_path : null;
 
+  useEffect(() => {
+    if (agentId !== selectedAgentId) setAgentId(selectedAgentId);
+  }, [agentId, selectedAgentId]);
+
+  useEffect(() => {
+    setRunPin(null);
+    setNotice(null);
+  }, [runScope]);
+
   const start = useMutation({
-    mutationFn: async () => {
-      if (!workspaceId || !principalId) throw new Error("工作区尚未就绪。");
-      return startAcpRun({
-        workspaceId,
-        principalId,
-        title,
-        prompt,
-        agentId: selectedAgentId,
+    mutationFn: async (request: {
+      scope: string;
+      workspaceId: string;
+      principalId: string;
+      title: string;
+      prompt: string;
+      agentId: string;
+    }) => {
+      const result = await startAcpRun({
+        workspaceId: request.workspaceId,
+        principalId: request.principalId,
+        title: request.title,
+        prompt: request.prompt,
+        agentId: request.agentId,
       });
+      return { ...result, scope: request.scope };
     },
     onSuccess: async (result) => {
-      setRunId(result.runId);
+      if (result.scope !== runScope) return;
+      setRunPin({ scope: result.scope, runId: result.runId });
       setNotice("已派发给智能体。回复将显示在下方。");
       await qc.invalidateQueries();
     },
-    onError: (err: unknown) => setNotice(err instanceof Error ? err.message : String(err)),
+    onError: (err: unknown, request) => {
+      if (request.scope === runScope) {
+        setNotice(err instanceof Error ? err.message : String(err));
+      }
+    },
   });
 
   return (
@@ -135,7 +160,18 @@ export function HomePage() {
               className="space-y-3"
               onSubmit={(event: FormEvent) => {
                 event.preventDefault();
-                start.mutate();
+                if (!workspaceId || !principalId) {
+                  setNotice("工作区尚未就绪。");
+                  return;
+                }
+                start.mutate({
+                  scope: runScope,
+                  workspaceId,
+                  principalId,
+                  title,
+                  prompt,
+                  agentId: selectedAgentId,
+                });
               }}
             >
               <div className="space-y-1.5">
@@ -193,7 +229,7 @@ export function HomePage() {
           <CardTitle>进度</CardTitle>
           <CardDescription>
             {activeRunId
-              ? `${runStatusLabel(asRunDetail(detail.data)?.run.status ?? latestRun?.status ?? "running")}。也可打开对应事项继续发送指令。`
+              ? `${runStatusLabel(asRunDetail(detail.data)?.run.status ?? activeRun?.status ?? "running")}。也可打开对应事项继续发送指令。`
               : "启动后，智能体回复将显示在此处。"}
           </CardDescription>
         </CardHeader>
@@ -204,19 +240,23 @@ export function HomePage() {
             events.map((event) => <ActivityLine key={event.seq} event={event} />)
           )}
         </CardContent>
-        {latestRun ? (
+        {activeRun ? (
           <CardFooter className="flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => navigate(`/board/${latestRun.task_id}`)}>
+            <Button variant="secondary" onClick={() => navigate(`/board/${activeRun.task_id}`)}>
               打开事项
             </Button>
-            {latestRun.status === "running" ? (
+            {activeRun.status === "running" ? (
               <Button
                 variant="destructive"
                 onClick={() => {
-                  void submit({ type: "CancelRun", run_id: latestRun.id }).then(async () => {
-                    setNotice("已停止。");
-                    await qc.invalidateQueries();
-                  });
+                  void submit({ type: "CancelRun", run_id: activeRun.id })
+                    .then(async () => {
+                      setNotice("已停止。");
+                      await qc.invalidateQueries();
+                    })
+                    .catch((error: unknown) => {
+                      setNotice(error instanceof Error ? error.message : String(error));
+                    });
                 }}
               >
                 <Square data-icon="inline-start" />

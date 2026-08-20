@@ -29,6 +29,7 @@ import {
 } from "../lib/coordy/nav-history";
 import { navItemActive, personalNav, workspaceNav } from "../shell/nav";
 import { shouldShowFloatingChat } from "../shell/desktop-shell";
+import { useLayoutStore } from "../state/layout-store";
 import type { TaskView } from "@coordy/protocol";
 
 function task(
@@ -206,6 +207,24 @@ describe("sidebar nav", () => {
     expect(navItemActive("/agents/new", { to: "/agents" })).toBe(true);
     expect(navItemActive("/agents/new/ai", { to: "/agents" })).toBe(true);
     expect(navItemActive("/board", { to: "/inbox" })).toBe(false);
+  });
+});
+
+describe("chat layout", () => {
+  it("keeps command-palette chat creation out of the page composer queue", () => {
+    useLayoutStore.setState({ activeChatId: "chat_existing", chatDock: "closed", pendingFocus: null });
+    useLayoutStore.getState().startNewChat();
+    expect(useLayoutStore.getState()).toMatchObject({
+      activeChatId: null,
+      chatDock: "open",
+      pendingFocus: null,
+    });
+    useLayoutStore.getState().setActiveChatId("chat_created_from_dock");
+    expect(useLayoutStore.getState().consumePendingFocus()).toBeNull();
+    expect(useLayoutStore.getState()).toMatchObject({
+      activeChatId: "chat_created_from_dock",
+      pendingFocus: null,
+    });
   });
 });
 

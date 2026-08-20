@@ -52,7 +52,7 @@ export function App() {
   );
 }
 
-async function bootstrap() {
+export async function bootstrap() {
   await viewAsDaemon({ type: "Health" });
   let workspaces = await viewAsDaemon({ type: "Workspaces" });
   let workspaceId =

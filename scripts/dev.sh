@@ -2,5 +2,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
-cargo build -p coordyd -p coordy
 pnpm --filter @coordy/desktop dev

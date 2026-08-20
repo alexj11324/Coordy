@@ -1,7 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { join } from "path";
 import { hostname } from "os";
-import { exec } from "child_process";
 import { IPC } from "../shared/ipc-channels";
 import {
   BROWSER_WINDOW_POLICY,
@@ -11,7 +10,7 @@ import {
   validateIpcSender,
 } from "./security/browser-window-policy";
 import { DaemonManager } from "./daemon/daemon-manager";
-import { cliBinaryPath } from "./daemon/daemon-binary-path";
+import { cliBinaryPath, daemonBinaryPath } from "./daemon/daemon-binary-path";
 import { createEffectPoller } from "./daemon/effect-poller";
 import { installCliBinaries } from "./install-cli";
 import { listDirectory } from "./list-directory";
@@ -20,8 +19,23 @@ import {
   discoverHarnessModels,
 } from "./model-discovery";
 import { resolvePreloadPath } from "./preload-path";
+import { createIdempotentCleanup, registerAppLifecycle } from "./app-lifecycle";
+import { openTerminalAt } from "./terminal-launch";
+import { registerIpcHandlers } from "./ipc-handlers";
 
-const daemon = new DaemonManager();
+const daemon = new DaemonManager({
+  userDataPath: () => app.getPath("userData"),
+  binaryPath: daemonBinaryPath,
+});
+let effectTimer: ReturnType<typeof setInterval> | null = null;
+let initialized = false;
+const cleanup = createIdempotentCleanup(() => {
+  if (effectTimer) {
+    clearInterval(effectTimer);
+    effectTimer = null;
+  }
+  daemon.stop();
+});
 
 if (process.platform === "linux" && process.env.ELECTRON_ENABLE_GPU !== "1") {
   app.disableHardwareAcceleration();
@@ -87,11 +101,14 @@ function createWindow() {
   }
 }
 
-function guard(event: Electron.IpcMainInvokeEvent) {
-  if (!validateIpcSender(event.sender)) {
-    throw new Error("invalid ipc sender");
-  }
-}
+registerAppLifecycle({
+  app,
+  platform: process.platform,
+  initialized: () => initialized,
+  windowCount: () => BrowserWindow.getAllWindows().length,
+  createWindow,
+  cleanup,
+});
 
 app
   .whenReady()
@@ -100,110 +117,34 @@ app
       Menu.setApplicationMenu(null);
     }
     await daemon.start();
-    ipcMain.handle(IPC.submit, (event, command) => {
-      guard(event);
-      return daemon.client!.submit(command);
-    });
-    ipcMain.handle(IPC.view, (event, query) => {
-      guard(event);
-      return daemon.client!.view(query);
-    });
-    ipcMain.handle(IPC.getAppInfo, (event) => {
-      guard(event);
-      return {
+    registerIpcHandlers({
+      ipcMain,
+      daemon,
+      validateSender: validateIpcSender,
+      getAppInfo: () => ({
         version: app.getVersion(),
         os: process.platform,
         cliPath: cliBinaryPath(),
         hostname: hostname(),
-      };
+      }),
+      chooseRepository: () =>
+        dialog.showOpenDialog({
+          properties: ["openDirectory"],
+        }),
+      revealFile: (path) => shell.showItemInFolder(path),
+      openTerminal: openTerminalAt,
+      listDirectory,
+      installCli: installCliBinaries,
+      canonicalHarnessId: canonicalModelDiscoveryHarnessId,
+      discoverHarnessModels,
+      quit: () => app.quit(),
     });
-    ipcMain.handle(IPC.chooseRepository, async (event) => {
-      guard(event);
-      const result = await dialog.showOpenDialog({
-        properties: ["openDirectory"],
-      });
-      return result.canceled ? null : result.filePaths[0];
-    });
-    ipcMain.handle(IPC.revealFile, async (event, path: string) => {
-      guard(event);
-      shell.showItemInFolder(path);
-    });
-    ipcMain.handle(IPC.openTerminal, async (event, path: string) => {
-      guard(event);
-      await openTerminalAt(path);
-    });
-    ipcMain.handle(IPC.listDirectory, (event, path: string) => {
-      guard(event);
-      if (!path || typeof path !== "string") {
-        throw new Error("invalid path");
-      }
-      return listDirectory(path);
-    });
-    ipcMain.handle(IPC.installCli, async (event) => {
-      guard(event);
-      return installCliBinaries();
-    });
-    ipcMain.handle(IPC.suggestTaskSplit, (event, input: unknown) => {
-      guard(event);
-      const request = input as {
-        workspace_id?: unknown;
-        task_id?: unknown;
-        principal_id?: unknown;
-      };
-      if (
-        !request ||
-        typeof request.workspace_id !== "string" ||
-        typeof request.task_id !== "string" ||
-        typeof request.principal_id !== "string"
-      ) {
-        throw new Error("invalid task split request");
-      }
-      return daemon.client!.suggestTaskSplit({
-        workspace_id: request.workspace_id,
-        task_id: request.task_id,
-        principal_id: request.principal_id,
-      });
-    });
-    ipcMain.handle(IPC.discoverAgents, (event, refresh?: boolean) => {
-      guard(event);
-      return daemon.client!.discoverAgents(Boolean(refresh));
-    });
-    ipcMain.handle(
-      IPC.discoverHarnessModels,
-      async (event, harness: string) => {
-        guard(event);
-        if (!harness || typeof harness !== "string")
-          throw new Error("invalid harness");
-        const runtimes = (await daemon.client!.discoverAgents(false)) as Array<{
-          id: string;
-        }>;
-        const wanted = canonicalModelDiscoveryHarnessId(harness);
-        const runtime = runtimes.find(
-          (item) => canonicalModelDiscoveryHarnessId(item.id) === wanted,
-        );
-        if (!runtime) throw new Error("unknown harness");
-        return discoverHarnessModels(runtime as never);
-      },
-    );
-    ipcMain.handle(IPC.importAgents, (event, input: unknown) => {
-      guard(event);
-      return daemon.client!.importAgents(
-        input as {
-          workspace_id: string;
-          principal_id: string;
-          ids?: string[] | null;
-        },
-      );
-    });
-    ipcMain.handle(IPC.quit, (event) => {
-      guard(event);
-      app.quit();
-    });
+    initialized = true;
     createWindow();
     const poll = createEffectPoller({
-      client: () => daemon.client,
-      disconnect: () => daemon.disconnect(),
-      reconnect: () => daemon.reconnect(),
+      client: () => daemon.effectClient,
+      disconnect: () => daemon.disconnectEffectClient(),
+      reconnect: () => daemon.reconnectEffectClient(),
       onHealth: (healthy) => {
         for (const win of BrowserWindow.getAllWindows()) {
           win.webContents.send(IPC.effect, { type: "StreamHealth", healthy });
@@ -216,36 +157,12 @@ app
         }
       },
     });
-    const timer = setInterval(() => void poll(), 400);
-    app.on("before-quit", () => {
-      clearInterval(timer);
-      daemon.stop();
-    });
+    effectTimer = setInterval(() => void poll(), 400);
   })
   .catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     console.error(error);
+    cleanup();
     dialog.showErrorBox("Coordy 无法启动", message);
     app.quit();
   });
-
-function openTerminalAt(path: string): Promise<void> {
-  const quoted = path.replace(/"/g, '\\"');
-  const command =
-    process.platform === "darwin"
-      ? `open -a Terminal "${quoted}"`
-      : process.platform === "win32"
-        ? `start cmd /K cd /d "${quoted}"`
-        : [
-            `x-terminal-emulator --working-directory="${quoted}"`,
-            `xfce4-terminal --working-directory="${quoted}"`,
-            `gnome-terminal --working-directory="${quoted}"`,
-            `xterm -e "cd \\"${quoted}\\" && exec $SHELL"`,
-          ].join(" || ");
-  return new Promise((resolve, reject) => {
-    exec(command, (error) => {
-      if (error) reject(new Error(`无法打开终端：${error.message}`));
-      else resolve();
-    });
-  });
-}

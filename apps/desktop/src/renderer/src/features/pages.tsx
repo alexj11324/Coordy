@@ -42,7 +42,7 @@ import {
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { submit, view } from "../lib/coordy/client";
-import { tasksAssignedToMe, taskIdentifier } from "../lib/coordy/issues";
+import { boardIssues, tasksAssignedToMe, taskIdentifier } from "../lib/coordy/issues";
 import { agentDisplayName, createActionLabel, emptyCreateHint, listableAgents, taskStatusLabel } from "../lib/coordy/labels";
 import { startAcpOnTask } from "../lib/coordy/start-task";
 import { useLayoutStore, type PendingFocus } from "../state/layout-store";
@@ -1037,7 +1037,7 @@ export function MyIssuesPage() {
   const principalId = useSession((s) => s.principalId);
   const agentId = useSession((s) => s.agentId);
   const navigate = useNavigate();
-  const items = tasksAssignedToMe(asTasks(board.data), { principalId, agentId });
+  const items = tasksAssignedToMe(boardIssues(asTasks(board.data)), { principalId, agentId });
   const createLabel = createActionLabel("任务");
   const openNewTask = () => {
     useLayoutStore.getState().requestNewTaskFocus();
